@@ -1,0 +1,101 @@
+{
+  "schema_version": "teecheck.demo.evidence.v1",
+  "metadata": {
+    "review_recommended": "true",
+    "backend_name": "rust"
+  },
+  "candidate": {
+    "id": "dcap-qvl-v038-verify-line578",
+    "sdk": "dcap-sgx",
+    "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+    "function": "verify",
+    "line": 578,
+    "expression": "verify_qe_identity_policy(...)",
+    "operation_kind": "attestation_verification_entry",
+    "param_index": -1,
+    "notes": [
+      "Synthetic fixture modeled after a DCAP quote-verification path."
+    ]
+  },
+  "checks": [
+    {
+      "kind": "issuer_chain_validation",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 574,
+      "expression": "verify_certificate_chain(...)",
+      "dominates_target": true,
+      "notes": [
+        "Trust anchor validation observed."
+      ]
+    },
+    {
+      "kind": "identity_signature_validation",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 578,
+      "expression": "verify_qe_identity_signature(...)",
+      "dominates_target": true,
+      "notes": [
+        "QE identity signature verification observed."
+      ]
+    },
+    {
+      "kind": "identity_policy_binding",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 714,
+      "expression": "verify_qe_identity_policy(...)",
+      "dominates_target": true,
+      "fields": [
+        "mrsigner",
+        "isvprodid",
+        "isvsvn"
+      ],
+      "notes": [
+        "Partial field binding observed; fixture intentionally omits miscselect_masked and attributes_masked."
+      ]
+    }
+  ],
+  "bindings": [],
+  "key_sites": [
+    {
+      "kind": "verification_entry",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 538,
+      "function": "verify",
+      "expression": "pub fn verify(...)"
+    },
+    {
+      "kind": "identity_parsing_site",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 566,
+      "function": "verify",
+      "expression": "parse QE identity collateral"
+    },
+    {
+      "kind": "trust_decision_site",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 645,
+      "function": "verify",
+      "expression": "return VerificationResult::Ok(...)"
+    }
+  ],
+  "code_snippets": [
+    {
+      "label": "verification_entry",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 538,
+      "code": "pub fn verify(...) { ... }"
+    },
+    {
+      "label": "policy_binding",
+      "file": "/Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038/src/verify.rs",
+      "line": 714,
+      "code": "fn verify_qe_identity_policy(...) { /* partial checks */ }"
+    }
+  ],
+  "control_flow_summary": [
+    "verify entry -> certificate chain validation -> signature validation -> policy binding -> trust decision"
+  ],
+  "data_flow_summary": [
+    "qe_identity collateral influences the final verification result."
+  ]
+}

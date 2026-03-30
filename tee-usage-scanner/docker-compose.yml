@@ -1,0 +1,25 @@
+services:
+  joern:
+    build:
+      context: .
+      dockerfile: Dockerfile.joern
+      args:
+        JOERN_VERSION: v4.0.512
+    image: tee-usage-scanner/joern:v4.0.512
+    container_name: tee-usage-scanner-joern
+    working_dir: /workspace/tee-usage-scanner
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/workspace/tee-usage-scanner
+      - ../:/workspace/TEECheck
+    command:
+      - /opt/joern-cli/joern
+      - --server
+      - --server-host
+      - 0.0.0.0
+      - --server-port
+      - "8080"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

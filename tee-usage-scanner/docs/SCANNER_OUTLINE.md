@@ -21,6 +21,7 @@ The first prototype should intentionally be narrow:
 - target: TA-side handlers and security-sensitive helper functions
 - analysis depth: intra-procedural first, selective inter-procedural summaries second
 - AI role: second-stage reviewer only
+- implementation shape: Go orchestrator plus Joern query backend
 
 ## 3. High-Level Pipeline
 
@@ -39,6 +40,7 @@ Output:
 Purpose:
 
 - create a single graph representation for later queries
+- keep code parsing, control-flow recovery, and graph traversal outside the Go scanner
 
 ### Stage B: TEE Semantic Modeling
 
@@ -105,15 +107,30 @@ Output:
 - SARIF later
 - optional markdown summaries for triage
 
+## 3.1 Current Runnable Demo
+
+Because Joern is not installed on this machine yet, the current runnable demo uses fixture evidence packages that mirror the shape of planned Joern output.
+
+This allows us to implement and validate:
+
+- CLI flow
+- rule loading
+- evidence loading
+- finding generation
+- review bundle generation
+
+The next step is to replace fixture inputs with real Joern-generated evidence without changing the rule engine or report format.
+
 ## 4. Core Components
 
 ### 4.1 `frontend`
 
 Responsibilities:
 
-- invoke Joern
+- invoke Joern from Go
 - manage import workspace
 - cache graph artifacts
+- normalize Joern outputs into evidence packages
 
 ### 4.2 `tee_model`
 
@@ -154,6 +171,7 @@ Responsibilities:
 - review only uncertain or context-heavy cases
 - classify finding status
 - produce short reasoning
+- current iteration emits markdown review bundles instead of calling a live model
 
 ### 4.7 `reporter`
 
@@ -203,6 +221,7 @@ The first MVP should likely implement only a handful of rules:
 4. Missing command authorization checks
 5. Missing freshness, nonce, or rollback validation
 6. Insecure fallback after failed TEE operation
+7. Missing attestation identity verification or policy binding
 
 ## 8. Implementation Milestones
 
@@ -235,5 +254,5 @@ The first MVP should likely implement only a handful of rules:
 1. Finalize the MVP target codebase.
 2. Write `tee_model` data files for one TEE SDK.
 3. Define the exact evidence JSON format.
-4. Implement the first candidate query.
-5. Implement one end-to-end rule.
+4. Implement the first candidate query in Joern.
+5. Replace fixture evidence with real graph-derived evidence.

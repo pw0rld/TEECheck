@@ -1,0 +1,97 @@
+{
+  "rule_id": "ATTESTATION.QE_IDENTITY.MISSING_BINDING_OR_VERIFICATION",
+  "title": "Missing attestation identity verification or policy binding",
+  "description": "Quote verification code should not trust qe_identity, tcb_info, or related collateral unless certificate chain validation, signature validation, and identity-policy binding all hold on the path that reaches the trust decision.",
+  "scope": "dcap-sgx, dcap-tdx, quote-verifier",
+  "trigger_kinds": [
+    "attestation_verification_entry",
+    "collateral_parse",
+    "identity_material_use"
+  ],
+  "target_symbols": [
+    "verify",
+    "verify_with_root_ca",
+    "verify_qe_identity_signature",
+    "verify_qe_identity_policy",
+    "verify_certificate_chain",
+    "qe_identity",
+    "tcb_info",
+    "qe_report",
+    "mrsigner",
+    "isvprodid",
+    "isvsvn",
+    "miscselect",
+    "attributes"
+  ],
+  "required_checks": [
+    {
+      "kind": "issuer_chain_validation",
+      "must_dominate": true,
+      "evidence_examples": [
+        "verify_certificate_chain",
+        "extract_certs + trust_anchor_validation"
+      ]
+    },
+    {
+      "kind": "identity_signature_validation",
+      "must_dominate": true,
+      "evidence_examples": [
+        "verify_signature(qe_identity_bytes, qe_identity_signature)",
+        "webcrypto_signature_verification"
+      ]
+    },
+    {
+      "kind": "identity_policy_binding",
+      "must_dominate": true,
+      "required_fields": [
+        "mrsigner",
+        "isvprodid",
+        "isvsvn",
+        "miscselect_masked",
+        "attributes_masked"
+      ]
+    }
+  ],
+  "recommended_checks": [
+    {
+      "kind": "debug_attribute_validation",
+      "why": "A production verifier should reject debug-mode QE or enclave reports when the trust model requires production mode."
+    },
+    {
+      "kind": "leaf_end_entity_validation",
+      "why": "Certificate-chain validation should also reject CA certificates used as end-entity signing certificates."
+    },
+    {
+      "kind": "component_wise_tcb_comparison",
+      "why": "TCB component arrays should be compared element-by-element instead of with lexicographic string ordering."
+    },
+    {
+      "kind": "backend_parity_validation",
+      "why": "Rust, JS, Go, Python, and FFI bindings should enforce the same attestation obligations."
+    }
+  ],
+  "evidence_requirements": [
+    "verification_entry",
+    "identity_parsing_site",
+    "certificate_chain_validation_site",
+    "identity_signature_validation_site",
+    "policy_binding_checks_found",
+    "policy_binding_checks_missing",
+    "trust_decision_site",
+    "backend_name",
+    "relevant_code_snippets"
+  ],
+  "confidence_strategy": {
+    "high": "A trust-bearing result is reachable and one required obligation is absent on the same path.",
+    "medium": "Relevant helpers exist, but identity fields are consumed in a way that suggests incomplete binding.",
+    "needs_review": "Checks are split across helpers, files, or language boundaries and the static proof is incomplete."
+  },
+  "llm_review_questions": [
+    "Is untrusted identity material parsed before it is authenticated?",
+    "Does the trust decision depend on identity fields without proof of signature validation?",
+    "Are mrsigner, isvprodid, isvsvn, miscselect, and attributes all enforced?",
+    "Is one backend or binding weaker than another?"
+  ],
+  "severity": "critical",
+  "llm_review_required": true
+}

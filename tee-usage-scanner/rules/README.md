@@ -1,11 +1,14 @@
 # Rules
 
-This directory will contain the rule catalog for TEE usage obligations.
+This directory contains machine-readable TEE usage rules.
 
-Planned contents:
+Each rule file describes:
 
-- rule metadata
-- trigger definitions
-- required checks
-- required bindings
-- severity and confidence metadata
+- the trigger operation kinds
+- the required checks
+- the severity
+- whether a failed static proof should emit an LLM review bundle
+
+The first demo rule is `param_types_required.json`.
+
+Design templates for future rule families live under `rules/templates/`.

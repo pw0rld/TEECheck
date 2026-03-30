@@ -1,0 +1,26 @@
+FROM eclipse-temurin:21-jre-jammy
+
+ARG JOERN_VERSION=v4.0.512
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash \
+      ca-certificates \
+      curl \
+      unzip \
+      python3 \
+      git && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+
+RUN curl -fsSL "https://github.com/joernio/joern/releases/download/${JOERN_VERSION}/joern-cli.zip" -o /tmp/joern-cli.zip && \
+    unzip /tmp/joern-cli.zip -d /opt && \
+    rm -f /tmp/joern-cli.zip && \
+    ln -s /opt/joern-cli/joern /usr/local/bin/joern
+
+WORKDIR /workspace/tee-usage-scanner
+
+EXPOSE 8080
+
+CMD ["joern", "--server", "--server-host", "0.0.0.0", "--server-port", "8080"]

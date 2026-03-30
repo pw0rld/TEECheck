@@ -1,0 +1,47 @@
+{
+  "schema_version": "teecheck.evidence.v1",
+  "metadata": {
+    "fixture_name": "ambiguous_indirect_validation",
+    "review_recommended": "true"
+  },
+  "candidate": {
+    "id": "ambiguous-indirect-validation",
+    "sdk": "optee",
+    "file": "samples/optee_ta/positive/ta.c",
+    "function": "handle_parse_request",
+    "line": 33,
+    "expression": "params[0].memref.buffer",
+    "operation_kind": "memref_use",
+    "param_index": 0,
+    "notes": [
+      "a param_types-looking check exists but Joern has not yet proven that it dominates this helper path"
+    ]
+  },
+  "checks": [
+    {
+      "kind": "param_types_check",
+      "file": "samples/optee_ta/positive/ta.c",
+      "line": 12,
+      "expression": "validate_param_types(param_types);",
+      "dominates_target": false,
+      "notes": [
+        "wrapper validation not proven to dominate helper sink"
+      ]
+    }
+  ],
+  "bindings": [],
+  "code_snippets": [
+    {
+      "label": "helper-sensitive-operation",
+      "file": "samples/optee_ta/positive/ta.c",
+      "line": 33,
+      "code": "return parse_header(params[0].memref.buffer, params[0].memref.size);"
+    }
+  ],
+  "control_flow_summary": [
+    "entry -> wrapper validation -> helper call -> memref read"
+  ],
+  "data_flow_summary": [
+    "params[0].memref.buffer is forwarded into a helper without a proven dominating validation edge"
+  ]
+}

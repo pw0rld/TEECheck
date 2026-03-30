@@ -1,0 +1,40 @@
+{
+  "source_path": "/tmp/project",
+  "nodes": [
+    {
+      "id": "1",
+      "type": "file",
+      "name": "verify.js",
+      "path": "src/verify.js"
+    },
+    {
+      "id": "2",
+      "type": "function",
+      "name": "verifyQeIdentityPolicy",
+      "file": "src/verify.js"
+    },
+    {
+      "id": "3",
+      "type": "function",
+      "name": "sessionCheck",
+      "file": "src/session.js"
+    }
+  ],
+  "edges": [
+    {
+      "source": "1",
+      "target": "2",
+      "type": "contains"
+    },
+    {
+      "source": "2",
+      "target": "3",
+      "type": "calls"
+    },
+    {
+      "source": "1",
+      "target": "3",
+      "type": "imports"
+    }
+  ]
+}

@@ -1,1 +1,0 @@
-"""TEE usage scanner prototype."""
