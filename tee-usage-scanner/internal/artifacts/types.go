@@ -183,3 +183,15 @@ type VerificationMemo struct {
 	Contradictions []string `json:"contradictions,omitempty"`
 	Notes          []string `json:"notes,omitempty"`
 }
+
+type ReviewRecord struct {
+	SchemaVersion string   `json:"schema_version"`
+	CaseID        string   `json:"case_id"`
+	FindingID     string   `json:"finding_id"`
+	Verdict       string   `json:"verdict"`
+	Severity      string   `json:"severity"`
+	Tags          []string `json:"tags,omitempty"`
+	Notes         string   `json:"notes,omitempty"`
+	ReviewerID    string   `json:"reviewer_id,omitempty"`
+	ReviewedAt    string   `json:"reviewed_at"`
+}

@@ -53,6 +53,14 @@ func ArbiterFindingsPath(runDir string) string {
 	return filepath.Join(runDir, "07_arbiter", "findings.json")
 }
 
+func ReviewDir(runDir string) string {
+	return filepath.Join(runDir, "08_review")
+}
+
+func ReviewRecordsPath(runDir string) string {
+	return filepath.Join(runDir, "08_review", "review_records.jsonl")
+}
+
 func LoadManifest(runDir string) (artifacts.Manifest, error) {
 	var manifest artifacts.Manifest
 	if err := ReadJSON(ManifestPath(runDir), &manifest); err != nil {
