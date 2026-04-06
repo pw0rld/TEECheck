@@ -18,6 +18,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/pipeline"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomap"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
@@ -75,6 +76,12 @@ func main() {
 			err = feedback.RunWithBus(cfg, os.Stdout, bus)
 		} else {
 			err = feedback.Run(cfg, os.Stdout)
+		}
+	case "run":
+		var runPath string
+		runPath, err = pipeline.Run(cfg)
+		if err == nil {
+			fmt.Printf("\nPipeline completed. Results at %s\n", runPath)
 		}
 	default:
 		err = fmt.Errorf("unsupported command: %s", cfg.Command)
