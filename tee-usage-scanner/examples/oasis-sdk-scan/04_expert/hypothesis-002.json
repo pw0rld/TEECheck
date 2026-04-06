@@ -1,0 +1,69 @@
+{
+  "schema_version": "teecheck.hypothesis.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:002",
+  "agent_id": "scanner-001",
+  "title": "Runtime entry boundary candidate in error derive macro lacks visible boundary enforcement context",
+  "summary": "The reviewed snippet is a procedural macro definition in `runtime-sdk-macros/src/error_derive.rs` for deriving SDK error metadata. Although the case is tagged as a high-priority runtime-entry boundary candidate, the visible code only parses enum attributes and variants for error generation and does not itself show runtime ingress handling, caller identity propagation, or authorization checks. Based on the bounded evidence, there is no direct proof of a vulnerability, but the expected boundary obligations are not demonstrably satisfied in this file.",
+  "suspected_issue": "Potential missing trust-boundary revalidation and caller/authorization binding at a runtime-facing execution boundary, or a mismatch between the selected boundary candidate and the actual role of this macro file. The snippet shows code-generation support for errors, not explicit boundary validation or secure failure handling logic.",
+  "missing_obligations": [
+    "Trust-boundary revalidation is not visible in the provided macro code.",
+    "Authorization and caller binding are not visible in the provided macro code.",
+    "Secure failure behavior at the runtime entry boundary is not demonstrated in the provided snippet."
+  ],
+  "supporting_facts": [
+    "The case is explicitly marked as a boundary candidate: `runtime_entry (ingress) | runtime-facing execution entry boundary`.",
+    "Expected obligations include `trust-boundary revalidation`, `authorization and caller binding`, and `secure failure behavior`.",
+    "The reviewed file is `runtime-sdk-macros/src/error_derive.rs`, which appears to implement a derive macro using `darling`, `syn`, and `quote`.",
+    "The snippet defines `struct Error` with parsed fields like `ident`, `data`, and `module_name`, indicating metadata parsing rather than request ingress validation.",
+    "No caller identity, authorization decision, attestation, boundary check, or fail-closed runtime entry logic is visible in the provided lines.",
+    "Open question states: `Is there surrounding context that changes the actual trust boundary?`, indicating uncertainty about whether this file is the true boundary implementation."
+  ],
+  "knowledge_hints": [
+    {
+      "title": "Authorization And Caller Binding",
+      "path": "knowledge/wiki/patterns/authorization-caller-binding.md",
+      "tags": [
+        "wiki",
+        "patterns",
+        "authorization",
+        "caller",
+        "binding",
+        "md",
+        "key"
+      ],
+      "reason": "title/path match: authorization and caller binding; body match: authorization and caller binding; title/path match: authorization; tag match: authorization; body match: authorization; title/path match: caller; tag match: caller; body match: caller; title/path match: binding; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Trust Boundary Revalidation",
+      "path": "knowledge/wiki/obligations/trust-boundary-revalidation.md",
+      "tags": [
+        "wiki",
+        "obligations",
+        "trust",
+        "boundary",
+        "revalidation",
+        "md",
+        "caller",
+        "binding",
+        "key"
+      ],
+      "reason": "title/path match: boundary; tag match: boundary; body match: boundary; title/path match: revalidation; tag match: revalidation; body match: revalidation; body match: bridge; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Knowledge Layer",
+      "path": "knowledge/README.md",
+      "tags": [
+        "readme",
+        "md",
+        "attestation",
+        "authorization",
+        "boundary",
+        "caller",
+        "binding"
+      ],
+      "reason": "tag match: boundary; body match: boundary; body match: tee; body match: revalidation; tag match: authorization; body match: authorization; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    }
+  ],
+  "confidence": "medium",
+  "needs_verification": true
+}

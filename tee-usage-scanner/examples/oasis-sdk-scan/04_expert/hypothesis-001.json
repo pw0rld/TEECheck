@@ -1,0 +1,69 @@
+{
+  "schema_version": "teecheck.hypothesis.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:001",
+  "agent_id": "scanner-001",
+  "title": "Potential boundary-obligation gap at ROFL runtime entry test app",
+  "summary": "The provided snippet shows a runtime-facing application entry implementation in `tests/runtimes/components-rofl/src/main.rs` via `impl App for TestApp`. This appears to be a trust-boundary ingress candidate because it defines the application identity used for registration and runtime interaction. In the visible code, there is no evidence of explicit trust-boundary revalidation, caller authorization/binding, or secure failure handling. However, the snippet is very limited and may rely on framework-enforced checks in `rofl_app_core::prelude::*` or elsewhere.",
+  "suspected_issue": "A runtime entry boundary may be implemented without visible revalidation of untrusted runtime inputs, caller binding/authorization checks, or explicit secure failure behavior. If these obligations are not enforced by the surrounding framework, the entry point could accept or act on runtime-facing context based only on a static app identifier.",
+  "missing_obligations": [
+    "Trust-boundary revalidation at the runtime-facing ingress is not visible in the snippet.",
+    "Authorization and caller binding are not visible for requests or registrations crossing the runtime boundary.",
+    "Secure failure behavior for invalid or unauthorized boundary inputs is not shown."
+  ],
+  "supporting_facts": [
+    "The case is explicitly marked as a `boundary` candidate with hotspot kind `runtime_entry` and high priority.",
+    "The target file is `tests/runtimes/components-rofl/src/main.rs`, suggesting code exercised at a runtime-facing execution entry boundary.",
+    "The snippet shows `impl App for TestApp`, which is an application integration point likely reached from framework/runtime-managed execution.",
+    "`fn id() -\u003e AppId` returns a fixed identifier from `components_ronl::EXAMPLE_APP_ID`, and the comment notes this is used to simplify tests rather than demonstrating dynamic validation.",
+    "No explicit checks for caller identity, authorization, attestation, or rejection paths are visible in the provided lines.",
+    "Open question in the case pack asks whether surrounding context changes the actual trust boundary, indicating the visible snippet may be incomplete."
+  ],
+  "knowledge_hints": [
+    {
+      "title": "Authorization And Caller Binding",
+      "path": "knowledge/wiki/patterns/authorization-caller-binding.md",
+      "tags": [
+        "wiki",
+        "patterns",
+        "authorization",
+        "caller",
+        "binding",
+        "md",
+        "key"
+      ],
+      "reason": "title/path match: authorization and caller binding; body match: authorization and caller binding; title/path match: authorization; tag match: authorization; body match: authorization; title/path match: caller; tag match: caller; body match: caller; title/path match: binding; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Trust Boundary Revalidation",
+      "path": "knowledge/wiki/obligations/trust-boundary-revalidation.md",
+      "tags": [
+        "wiki",
+        "obligations",
+        "trust",
+        "boundary",
+        "revalidation",
+        "md",
+        "caller",
+        "binding",
+        "key"
+      ],
+      "reason": "title/path match: boundary; tag match: boundary; body match: boundary; title/path match: revalidation; tag match: revalidation; body match: revalidation; body match: bridge; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Knowledge Layer",
+      "path": "knowledge/README.md",
+      "tags": [
+        "readme",
+        "md",
+        "attestation",
+        "authorization",
+        "boundary",
+        "caller",
+        "binding"
+      ],
+      "reason": "tag match: boundary; body match: boundary; body match: tee; body match: revalidation; tag match: authorization; body match: authorization; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    }
+  ],
+  "confidence": "medium",
+  "needs_verification": true
+}

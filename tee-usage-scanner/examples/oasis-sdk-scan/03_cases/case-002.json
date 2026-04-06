@@ -1,0 +1,85 @@
+{
+  "schema_version": "teecheck.case_pack.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:002",
+  "hotspot_id": "hotspot-002",
+  "focus": "tee",
+  "category": "boundary",
+  "priority": "high",
+  "target_files": [
+    "runtime-sdk-macros/src/error_derive.rs"
+  ],
+  "why_selected": [
+    "boundary candidate: runtime_entry (ingress)",
+    "runtime-facing execution entry boundary"
+  ],
+  "tool_facts": [
+    "boundary runtime_entry (ingress)",
+    "framework hints: oasis-rofl, runtime-sdk, sgx, web3"
+  ],
+  "graph_facts": [
+    "hotspot kind: runtime_entry",
+    "priority: high"
+  ],
+  "snippets": [
+    {
+      "path": "runtime-sdk-macros/src/error_derive.rs",
+      "start_line": 1,
+      "end_line": 18,
+      "content": "use darling::{util::Flag, FromDeriveInput, FromField, FromVariant};\nuse proc_macro2::TokenStream;\nuse quote::{format_ident, quote, quote_spanned};\nuse syn::{DeriveInput, Ident, Index, Member, Path};\n\nuse crate::generators::{self as gen, CodedVariant};\n\n#[derive(FromDeriveInput)]\n#[darling(supports(enum_any), attributes(sdk_error))]\nstruct Error {\n    ident: Ident,\n\n    data: darling::ast::Data\u003cErrorVariant, darling::util::Ignored\u003e,\n\n    /// The path to a const set to the module name.\n    module_name: Option\u003csyn::Path\u003e,\n\n    /// Whether to sequentially autonumber the error codes."
+    }
+  ],
+  "expected_obligations": [
+    "trust-boundary revalidation",
+    "authorization and caller binding",
+    "secure failure behavior"
+  ],
+  "open_questions": [
+    "Is there surrounding context that changes the actual trust boundary?"
+  ],
+  "knowledge_hints": [
+    {
+      "title": "Authorization And Caller Binding",
+      "path": "knowledge/wiki/patterns/authorization-caller-binding.md",
+      "tags": [
+        "wiki",
+        "patterns",
+        "authorization",
+        "caller",
+        "binding",
+        "md",
+        "key"
+      ],
+      "reason": "title/path match: authorization and caller binding; body match: authorization and caller binding; title/path match: authorization; tag match: authorization; body match: authorization; title/path match: caller; tag match: caller; body match: caller; title/path match: binding; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Trust Boundary Revalidation",
+      "path": "knowledge/wiki/obligations/trust-boundary-revalidation.md",
+      "tags": [
+        "wiki",
+        "obligations",
+        "trust",
+        "boundary",
+        "revalidation",
+        "md",
+        "caller",
+        "binding",
+        "key"
+      ],
+      "reason": "title/path match: boundary; tag match: boundary; body match: boundary; title/path match: revalidation; tag match: revalidation; body match: revalidation; body match: bridge; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Knowledge Layer",
+      "path": "knowledge/README.md",
+      "tags": [
+        "readme",
+        "md",
+        "attestation",
+        "authorization",
+        "boundary",
+        "caller",
+        "binding"
+      ],
+      "reason": "tag match: boundary; body match: boundary; body match: tee; body match: revalidation; tag match: authorization; body match: authorization; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "schema_version": "teecheck.case_pack.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:004",
+  "hotspot_id": "hotspot-004",
+  "focus": "tee",
+  "category": "boundary",
+  "priority": "high",
+  "target_files": [
+    "runtime-sdk-macros/src/module_derive/module.rs"
+  ],
+  "why_selected": [
+    "boundary candidate: runtime_entry (ingress)",
+    "runtime-facing execution entry boundary"
+  ],
+  "tool_facts": [
+    "boundary runtime_entry (ingress)",
+    "framework hints: oasis-rofl, runtime-sdk, sgx, web3"
+  ],
+  "graph_facts": [
+    "hotspot kind: runtime_entry",
+    "priority: high"
+  ],
+  "snippets": [
+    {
+      "path": "runtime-sdk-macros/src/module_derive/module.rs",
+      "start_line": 1,
+      "end_line": 18,
+      "content": "use proc_macro2::TokenStream;\nuse quote::quote;\n\n/// Deriver for the `Module` trait.\npub struct DeriveModule {\n    /// Items specifying the module configuration.\n    module_cfg: Vec\u003csyn::ImplItem\u003e,\n}\n\nimpl DeriveModule {\n    pub fn new() -\u003e Box\u003cSelf\u003e {\n        Box::new(Self { module_cfg: vec![] })\n    }\n}\n\nimpl super::Deriver for DeriveModule {\n    fn preprocess(\u0026mut self, item: syn::ImplItem) -\u003e Option\u003csyn::ImplItem\u003e {\n        match item {"
+    }
+  ],
+  "expected_obligations": [
+    "trust-boundary revalidation",
+    "authorization and caller binding",
+    "secure failure behavior"
+  ],
+  "open_questions": [
+    "Is there surrounding context that changes the actual trust boundary?"
+  ],
+  "knowledge_hints": [
+    {
+      "title": "Authorization And Caller Binding",
+      "path": "knowledge/wiki/patterns/authorization-caller-binding.md",
+      "tags": [
+        "wiki",
+        "patterns",
+        "authorization",
+        "caller",
+        "binding",
+        "md",
+        "key"
+      ],
+      "reason": "title/path match: authorization and caller binding; body match: authorization and caller binding; title/path match: authorization; tag match: authorization; body match: authorization; title/path match: caller; tag match: caller; body match: caller; title/path match: binding; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Trust Boundary Revalidation",
+      "path": "knowledge/wiki/obligations/trust-boundary-revalidation.md",
+      "tags": [
+        "wiki",
+        "obligations",
+        "trust",
+        "boundary",
+        "revalidation",
+        "md",
+        "caller",
+        "binding",
+        "key"
+      ],
+      "reason": "title/path match: boundary; tag match: boundary; body match: boundary; title/path match: revalidation; tag match: revalidation; body match: revalidation; body match: bridge; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Knowledge Layer",
+      "path": "knowledge/README.md",
+      "tags": [
+        "readme",
+        "md",
+        "attestation",
+        "authorization",
+        "boundary",
+        "caller",
+        "binding"
+      ],
+      "reason": "tag match: boundary; body match: boundary; body match: tee; body match: revalidation; tag match: authorization; body match: authorization; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    }
+  ]
+}

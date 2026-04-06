@@ -1,0 +1,6 @@
+{
+  "schema_version": "teecheck.verification_memo.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:002",
+  "agent_id": "reviewer-001",
+  "status": "inconclusive"
+}
