@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -526,14 +527,35 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
-	if err := fs.Parse(args); err != nil {
+	// Extract target (non-flag arg) before parsing so it can appear anywhere
+	var flagArgs []string
+	var target string
+	for i := 0; i < len(args); i++ {
+		if !strings.HasPrefix(args[i], "-") && target == "" {
+			// Check it's not a value for the previous flag
+			if i > 0 && strings.HasPrefix(args[i-1], "-") && !strings.Contains(args[i-1], "=") {
+				flagArgs = append(flagArgs, args[i])
+			} else {
+				target = args[i]
+			}
+		} else {
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	if err := fs.Parse(flagArgs); err != nil {
 		return Config{}, err
 	}
-	remaining := fs.Args()
-	if len(remaining) == 0 {
+	// Also check remaining args after flag parse
+	if target == "" {
+		remaining := fs.Args()
+		if len(remaining) > 0 {
+			target = remaining[0]
+		}
+	}
+	if target == "" {
 		return Config{}, fmt.Errorf("run requires a target (URL or local path)")
 	}
-	cfg.Target = remaining[0]
+	cfg.Target = target
 	if cfg.Mode == "llm" {
 		cfg.ExpertMode = "llm"
 		cfg.ChallengeMode = "llm"
