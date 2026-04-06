@@ -65,6 +65,34 @@ func CuratorDir(runDir string) string {
 	return filepath.Join(runDir, "09_curator")
 }
 
+func GraphDir(runDir string) string {
+	return filepath.Join(runDir, "02_graph")
+}
+
+func GraphPath(runDir string) string {
+	return filepath.Join(runDir, "02_graph", "graph.json")
+}
+
+func ScannerDir(runDir string) string {
+	return filepath.Join(runDir, "06_scanner")
+}
+
+func ReviewerDir(runDir string) string {
+	return filepath.Join(runDir, "07_reviewer")
+}
+
+func AuditorDir(runDir string) string {
+	return filepath.Join(runDir, "08_auditor")
+}
+
+func AuditorPacketsDir(runDir string) string {
+	return filepath.Join(runDir, "08_auditor", "packets")
+}
+
+func AuditorFindingsPath(runDir string) string {
+	return filepath.Join(runDir, "08_auditor", "findings.json")
+}
+
 func LoadManifest(runDir string) (artifacts.Manifest, error) {
 	var manifest artifacts.Manifest
 	if err := ReadJSON(ManifestPath(runDir), &manifest); err != nil {
