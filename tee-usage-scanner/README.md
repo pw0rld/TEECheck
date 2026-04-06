@@ -1,155 +1,286 @@
-# TEECheck Harness
+# TEECheck
 
-`TEECheck` is being rebuilt as a collaborative harness-engineering project for
-AI-assisted TEE security research.
+A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
+security research. TEECheck uses AI agents to collaboratively analyze codebases
+for security issues in trusted execution environments.
 
-This branch intentionally starts with the smallest useful collaborative
-harness:
-
-- one design document
-- one minimal Go runtime
-- one file-based run layout
-- one knowledge layer with curated wiki pages
-- one end-to-end collaborative path from structure graph to arbiter packet
-
-The system target is a multi-agent review harness, not a one-shot scanner.
-
-Current architectural direction:
-
-- case-driven collaborative agents
-- file-based artifact flow
-- accumulated knowledge wiki instead of plain chunk-RAG
-- human review as a required stage
-
-## Current Focus
-
-The current branch is focused on:
-
-- run orchestration
-- artifact contracts
-- agent role definitions
-- replayable run directories
-- human review as a first-class stage
-
-The main design document is:
-
-- `docs/MULTI_AGENT_HARNESS.md`
-- `docs/ARCHITECTURE_RESERVATIONS.md`
-
-## Preferred Collaborative CLI
-
-The new preferred path is the collaborative harness flow:
-
-1. initialize or reuse the knowledge layer
-2. preprocess the repository into a project profile
-3. map repository structure into hotspots
-4. build bounded `case_pack` artifacts
-5. let `expert`, `challenge`, `verifier`, and `arbiter` collaborate on each case
-6. hand the resulting review packets to a human reviewer
-
-One-shot collaborative run:
+## Quick Start
 
 ```bash
-go run ./cmd/teecheck knowledge-init \
-  --knowledge-root ./knowledge
+# Build
+cd tee-usage-scanner
+go build -o teecheck ./cmd/teecheck/
 
-go run ./cmd/teecheck collab-run \
-  --repo-url https://github.com/oasisprotocol/oasis-sdk \
-  --local-path /abs/path/to/oasis-sdk \
-  --commit 8a7f4414d4dd5fdc0ec24aef1db44cf7118dfb76 \
-  --graph-json /abs/path/to/graph.json \
-  --knowledge-root ./knowledge \
-  --focus runtime \
-  --run-id oasis-sdk-collab-001 \
-  --max-hotspots 12 \
-  --max-cases 12
+# Scan a repository (heuristic mode - no LLM needed)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --focus tee
+
+# Scan a local path
+./teecheck run /path/to/repo --focus tee --max-cases 4
+
+# Scan with LLM mode (much higher quality analysis)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+  --llm-base-url http://your-api:8080/v1 \
+  --llm-api-key sk-your-key \
+  --llm-model your-model \
+  --focus tee --max-cases 4
 ```
 
-This executes:
+## How It Works
 
-`knowledge-init -> init-run -> preprocess -> mapper -> cases -> expert -> challenge -> verifier -> arbiter`
+TEECheck uses a 3-agent pipeline:
 
-Key collaborative outputs:
-
-```text
-runs/oasis-sdk-collab-001/
-├── 01_profile/project_profile.json
-├── 01_repo_map/repo_map.json
-├── 02_hotspots/hotspot_index.json
-├── 03_cases/
-├── 04_expert/
-├── 05_challenger/
-├── 06_verifier/
-└── 07_arbiter/
-    ├── packets/
-    └── findings.json
+```
+teecheck run <url-or-path>
+    |
+    v
++-- Scanner Agent --+
+|  Clone repo        |
+|  Generate code     |
+|  graph (auto)      |
+|  Run static checks |
+|  Identify hotspots |
+|  Generate security |
+|  hypotheses        |
++--------+-----------+
+         |
+         v  (Reviewer can query Scanner for more evidence)
++-- Reviewer Agent -+
+|  Challenge each    |
+|  hypothesis        |
+|  Verify evidence   |
+|  Ask Scanner for   |
+|  additional code   |
+|  searches          |
++--------+-----------+
+         |
+         v  (Auditor can query Scanner or Reviewer)
++-- Auditor Agent --+
+|  Synthesize all    |
+|  evidence          |
+|  Final judgment    |
+|  Generate review   |
+|  packets           |
++--------+-----------+
+         |
+         v
+    Final Report
 ```
 
-The repository-level knowledge layer lives outside runs:
+### Two Modes
 
-```text
+**Heuristic mode** (default): Fast, no LLM needed. Uses pattern matching and
+heuristic rules. Good for quick scans.
+
+**LLM mode** (`--mode llm`): Much higher quality. Each agent uses an
+OpenAI-compatible LLM to reason about security properties. Agents can query each
+other through a message bus for additional context. Produces detailed review
+packets with executive summaries, risk assessments, and recommended follow-ups.
+
+## Commands
+
+### `teecheck run` (main command)
+
+Runs the full 3-agent pipeline on a repository.
+
+```bash
+teecheck run <url-or-path> [flags]
+```
+
+**Arguments:**
+- `<url-or-path>` - GitHub URL (auto-clones) or local directory path
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `heuristic` | Agent mode: `heuristic` or `llm` |
+| `--focus` | `tee` | Audit focus: `tee`, `runtime`, `attestation` |
+| `--max-cases` | `12` | Maximum case packs to generate |
+| `--max-hotspots` | `12` | Maximum hotspots to identify |
+| `--max-dialog-rounds` | `3` | Max inter-agent dialog rounds (LLM mode) |
+| `--run-id` | auto | Stable run identifier |
+| `--output-dir` | `runs` | Output directory for run artifacts |
+| `--knowledge-root` | `knowledge` | Knowledge wiki root directory |
+| `--static-tools` | `auto` | Static tools: `auto`, `none`, or `grep,semgrep` |
+| `--llm-base-url` | env | OpenAI-compatible API base URL |
+| `--llm-api-key` | env | API key |
+| `--llm-model` | env | Model name |
+| `--llm-temperature` | `0.2` | Sampling temperature |
+
+**Environment variables** (alternative to flags):
+- `TEECHECK_LLM_BASE_URL`
+- `TEECHECK_LLM_API_KEY`
+- `TEECHECK_LLM_MODEL`
+
+### `teecheck review` (optional, interactive)
+
+Interactive human review of findings.
+
+```bash
+teecheck review --run-dir runs/<run-id>
+```
+
+Walks through each finding interactively:
+- Display review packet summary
+- Prompt for verdict: confirm / dismiss / inconclusive / skip
+- Prompt for severity override, tags, notes
+- Save review records to `08_review/`
+
+### `teecheck curator` (optional, knowledge writeback)
+
+Archives review outcomes and updates the knowledge wiki.
+
+```bash
+# Heuristic
+teecheck curator --run-dir runs/<run-id> --knowledge-root knowledge
+
+# LLM (generates richer wiki content)
+teecheck curator --run-dir runs/<run-id> --mode llm \
+  --llm-base-url ... --llm-api-key ... --llm-model ...
+```
+
+### Legacy commands
+
+The original fine-grained commands still work:
+
+```bash
+teecheck collab-run ...    # 6-stage serial pipeline
+teecheck knowledge-init    # Initialize knowledge directories
+teecheck preprocess ...    # Project profiling only
+teecheck mapper ...        # Repo mapping only
+teecheck expert ...        # Hypothesis generation only
+teecheck challenge ...     # Hypothesis challenging only
+teecheck verifier ...      # Evidence verification only
+teecheck arbiter ...       # Final arbitration only
+```
+
+## Output Structure
+
+```
+runs/<run-id>/
+├── 00_manifest.json                   # Run metadata
+├── 01_profile/project_profile.json    # Languages, frameworks, paths
+├── 02_graph/graph.json                # Auto-generated code structure graph
+├── 03_repo_map/repo_map.json          # Module boundaries, trust surfaces
+├── 04_hotspots/hotspot_index.json     # Ranked security hotspots
+├── 05_cases/case-NNN.json             # Bounded review cases
+├── 04_expert/hypothesis-NNN.json      # Security hypotheses
+├── 05_challenger/challenge-NNN.json   # Challenger objections
+├── 06_verifier/verify-NNN.json        # Verification memos
+├── 07_arbiter/
+│   ├── findings.json                  # Final findings
+│   └── packets/review-NNN.md          # Human-readable review packets
+├── 08_review/                         # (optional) Human review records
+└── 09_curator/                        # (optional) Knowledge updates
+```
+
+## Code Graph Generation
+
+TEECheck auto-generates a code structure graph using pluggable adapters:
+
+| Adapter | Status | What it does |
+|---------|--------|-------------|
+| **regex** | Implemented | Regex-based extraction of functions/structs/classes across Rust, Go, TypeScript, Python, Solidity |
+| **semgrep** | Stub (runs if installed) | Pattern-based precise extraction |
+| **codeql** | Stub | Data flow analysis, call graph extraction |
+| **joern** | Stub | CPG-based cross-procedure analysis |
+
+In LLM mode, the Scanner agent can decide which tools to use based on the project profile.
+
+## Static Check Framework
+
+Pluggable static analysis with the same adapter pattern:
+
+| Adapter | Status | What it does |
+|---------|--------|-------------|
+| **grep** | Implemented | Keyword search across files |
+| **semgrep** | Implemented | Rule-based pattern matching |
+| **codeql** | Stub | Deep data flow queries |
+| **joern** | Stub | CPG queries |
+
+## Knowledge Layer
+
+TEECheck accumulates knowledge across runs:
+
+```
 knowledge/
-├── raw/
-├── wiki/
-└── learned/
+├── raw/               # Source materials (CVEs, papers, SDK docs)
+├── wiki/              # Curated security obligation pages
+│   ├── obligations/   # Trust boundary, attestation, etc.
+│   └── patterns/      # Authorization, caller binding, etc.
+└── learned/           # Review outcomes
+    ├── true-positive/
+    ├── false-positive/
+    └── review-memory/
 ```
 
-## Sample Test Data
+This is intentionally **not** chunk-RAG. Knowledge is curated into stable wiki
+pages that agents query during analysis.
 
-The repository includes a tiny synthetic graph and source tree so the harness
-can be exercised without external dependencies:
+## Inter-Agent Communication
 
-- `testdata/sample_graph.json`
-- `testdata/sample_repo/`
+In LLM mode, agents communicate through a message bus:
 
-The automated test covers:
+- **Reviewer** can ask **Scanner** to search for specific code patterns
+- **Auditor** can ask **Reviewer** or **Scanner** for clarification
+- Dialog rounds are capped (default 3) to control cost
+- All dialogs are persisted as JSONL for auditability
 
-`knowledge-init -> init-run -> preprocess -> mapper -> cases -> expert -> challenge -> verifier -> arbiter`
+## Architecture
 
-## Harness Layout
-
-```text
-tee-usage-scanner/
-├── cmd/
-├── docs/
-├── knowledge/
-└── internal/
+```
+internal/
+├── repofetch/       # Git clone / local path detection
+├── scanner/         # Code graph generation (GraphAdapter framework)
+│   ├── regex/       # Regex-based extractor
+│   ├── semgrep/     # Semgrep adapter
+│   ├── codeql/      # CodeQL stub
+│   └── joern/       # Joern stub
+├── pipeline/        # 3-agent orchestrator (teecheck run)
+├── preprocessor/    # Project profiling
+├── mapper/          # Repo structure mapping
+├── hotspots/        # Hotspot identification
+├── cases/           # Case pack generation
+├── expert/          # Hypothesis generation
+├── challenger/      # Hypothesis challenging
+├── verifier/        # Evidence verification
+├── arbiter/         # Final arbitration
+├── staticcheck/     # Static analysis framework
+│   ├── grep/        # Grep adapter
+│   ├── semgrep/     # Semgrep adapter
+│   ├── codeql/      # CodeQL stub
+│   └── joern/       # Joern stub
+├── agentbus/        # Inter-agent message bus
+├── llm/             # OpenAI-compatible LLM client
+├── review/          # Interactive human review
+├── feedback/        # Knowledge writeback (curator)
+├── knowledge/       # Wiki and learned knowledge
+├── artifacts/       # JSON type definitions
+├── runfs/           # Run directory helpers
+└── config/          # CLI argument parsing
 ```
 
-## Near-Term Build Order
+## Development
 
-1. stabilize artifact structs and schemas
-2. turn repo structure into `project_profile` and `repo_map`
-3. build the first `hotspot_index`
-4. generate bounded `case_pack` artifacts
-5. let `expert` and `challenge` collaborate over each case
-6. use `verifier` to strengthen or weaken the evidence
-7. let `arbiter` produce human-facing review packets
-8. keep expanding `knowledge/wiki` from reviewed cases
+```bash
+# Run all tests
+go test ./...
 
-## Current State
+# Run with race detector
+go test -race ./...
 
-The collaborative harness is now the only supported flow in this branch.
+# Build binary
+go build -o teecheck ./cmd/teecheck/
 
-Implemented today:
+# Run live LLM test (requires API key)
+TEECHECK_LLM_BASE_URL=http://your-api/v1 \
+TEECHECK_LLM_API_KEY=sk-your-key \
+TEECHECK_LLM_MODEL=your-model \
+go test ./internal/llm/ -v -run TestLiveLLMDataSource
+```
 
-- `knowledge-init`
-- `collab-run`
-- `init-run`
-- `preprocess`
-- `mapper`
-- `map`
-- `hotspots`
-- `cases`
-- `expert`
-- `challenge`
-- `verifier`
-- `arbiter`
+## Design Documents
 
-Still intentionally simple:
-
-- `expert`, `challenge`, and `verifier` are heuristic, not yet model-backed
-- knowledge lookup is wiki-first and metadata-based
-- human review and feedback writeback will be rebuilt on top of the new case
-  protocol next
-- it is the intended insertion point for stronger static checks later
+- `docs/MULTI_AGENT_HARNESS.md` — Overall harness design
+- `docs/ARCHITECTURE_RESERVATIONS.md` — Architectural constraints and sequencing
+- `docs/superpowers/specs/` — Feature design specs
+- `docs/superpowers/plans/` — Implementation plans
