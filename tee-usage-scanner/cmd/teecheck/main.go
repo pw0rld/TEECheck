@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/arbiter"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
@@ -14,6 +16,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/feedback"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/hotspots"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomap"
@@ -66,6 +69,13 @@ func main() {
 		err = review.Run(cfg)
 	case "feedback":
 		err = feedback.Run(cfg, os.Stdout)
+	case "curator":
+		if strings.EqualFold(cfg.CuratorMode, "llm") {
+			bus := buildCuratorBus(cfg)
+			err = feedback.RunWithBus(cfg, os.Stdout, bus)
+		} else {
+			err = feedback.Run(cfg, os.Stdout)
+		}
 	default:
 		err = fmt.Errorf("unsupported command: %s", cfg.Command)
 	}
@@ -74,4 +84,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func buildCuratorBus(cfg config.Config) *agentbus.Bus {
+	client := llm.NewClient(cfg)
+	maxRounds := cfg.MaxDialogRounds
+	if maxRounds <= 0 {
+		maxRounds = 3
+	}
+	bus := agentbus.New(maxRounds)
+	bus.Register("expert-001", agentbus.NewLLMHandler(client,
+		"You are the Expert Agent. Another agent asks about your analysis. Return JSON with: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	bus.Register("arbiter-001", agentbus.NewLLMHandler(client,
+		"You are the Arbiter Agent. Another agent asks about your judgment. Return JSON with: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	return bus
 }
