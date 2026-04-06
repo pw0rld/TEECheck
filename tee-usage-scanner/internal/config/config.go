@@ -36,6 +36,8 @@ type Config struct {
 	ArbiterMode     string
 	CuratorMode     string
 	MaxDialogRounds int
+	Target string
+	Mode   string
 }
 
 func Parse(args []string) (Config, error) {
@@ -70,6 +72,8 @@ func Parse(args []string) (Config, error) {
 		return parseArbiter(args[1:])
 	case "curator":
 		return parseCurator(args[1:])
+	case "run":
+		return parseRun(args[1:])
 	case "review":
 		return parseReview(args[1:])
 	case "feedback":
@@ -488,8 +492,63 @@ func parseFeedback(args []string) (Config, error) {
 	return cfg, nil
 }
 
+func parseRun(args []string) (Config, error) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	cfg := Config{
+		Command:         "run",
+		Focus:           "tee",
+		OutputDir:       filepath.Clean("runs"),
+		KnowledgeRoot:   filepath.Clean("knowledge"),
+		MaxHotspots:     12,
+		MaxCases:        12,
+		MaxDialogRounds: 3,
+		Mode:            "heuristic",
+		StaticTools:     "auto",
+		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Agent mode: heuristic or llm")
+	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
+	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
+	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root")
+	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum case packs")
+	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum hotspots")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum dialog rounds")
+	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		return Config{}, fmt.Errorf("run requires a target (URL or local path)")
+	}
+	cfg.Target = remaining[0]
+	if cfg.Mode == "llm" {
+		cfg.ExpertMode = "llm"
+		cfg.ChallengeMode = "llm"
+		cfg.VerifierMode = "llm"
+		cfg.ArbiterMode = "llm"
+		cfg.CuratorMode = "llm"
+		if err := validateProviderConfig(cfg, "run"); err != nil {
+			return Config{}, err
+		}
+	}
+	return cfg, nil
+}
+
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--mode heuristic|llm] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--mode heuristic|llm] [--focus NAME] [--max-cases N] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--mode heuristic|llm] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateLLMIfNeeded(cfg Config, context string) error {
