@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    { "id": "file-verify", "kind": "file", "path": "src/verify.rs", "language": "rust", "name": "verify.rs" },
+    { "id": "file-state", "kind": "file", "path": "src/state.rs", "language": "rust", "name": "state.rs" },
+    { "id": "file-tx", "kind": "file", "path": "rofl-appd/src/routes/tx.rs", "language": "rust", "name": "tx.rs" },
+    { "id": "file-api", "kind": "file", "path": "bindings/api.ts", "language": "typescript", "name": "api.ts" },
+    { "id": "sym-verify-policy", "kind": "function", "name": "verify_qe_identity_policy", "path": "src/verify.rs", "language": "rust" },
+    { "id": "sym-verify-quote", "kind": "function", "name": "verify_quote", "path": "src/verify.rs", "language": "rust" },
+    { "id": "sym-state", "kind": "function", "name": "apply_state_transition", "path": "src/state.rs", "language": "rust" },
+    { "id": "sym-submit", "kind": "function", "name": "sign_and_submit", "path": "rofl-appd/src/routes/tx.rs", "language": "rust" },
+    { "id": "sym-api-submit", "kind": "function", "name": "submitTx", "path": "bindings/api.ts", "language": "typescript" }
+  ],
+  "edges": [
+    { "source": "file-verify", "target": "sym-verify-policy", "kind": "defines" },
+    { "source": "file-verify", "target": "sym-verify-quote", "kind": "defines" },
+    { "source": "file-state", "target": "sym-state", "kind": "defines" },
+    { "source": "file-tx", "target": "sym-submit", "kind": "defines" },
+    { "source": "file-api", "target": "sym-api-submit", "kind": "defines" },
+    { "source": "sym-verify-quote", "target": "sym-verify-policy", "kind": "calls" },
+    { "source": "sym-submit", "target": "sym-verify-quote", "kind": "calls" },
+    { "source": "sym-api-submit", "target": "sym-submit", "kind": "calls" },
+    { "source": "sym-state", "target": "sym-verify-quote", "kind": "depends_on" }
+  ]
+}
