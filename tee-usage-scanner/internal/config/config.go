@@ -32,7 +32,10 @@ type Config struct {
 	LLMModel      string
 	LLMTimeoutSec int
 	LLMTemp       float64
-	StaticTools   string
+	StaticTools     string
+	ArbiterMode     string
+	CuratorMode     string
+	MaxDialogRounds int
 }
 
 func Parse(args []string) (Config, error) {
@@ -83,9 +86,12 @@ func parseCollabRun(args []string) (Config, error) {
 		KnowledgeRoot: filepath.Clean("knowledge"),
 		MaxHotspots:   12,
 		MaxCases:      12,
-		ExpertMode:    "heuristic",
-		ChallengeMode: "heuristic",
-		VerifierMode:  "heuristic",
+		ExpertMode:      "heuristic",
+		ChallengeMode:   "heuristic",
+		VerifierMode:    "heuristic",
+		ArbiterMode:     "heuristic",
+		CuratorMode:     "heuristic",
+		MaxDialogRounds: 3,
 		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
@@ -107,6 +113,9 @@ func parseCollabRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.ExpertMode, "expert-mode", cfg.ExpertMode, "Expert mode: heuristic or llm")
 	fs.StringVar(&cfg.ChallengeMode, "challenge-mode", cfg.ChallengeMode, "Challenger mode: heuristic or llm")
 	fs.StringVar(&cfg.VerifierMode, "verifier-mode", cfg.VerifierMode, "Verifier mode: heuristic or llm")
+	fs.StringVar(&cfg.ArbiterMode, "arbiter-mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
+	fs.StringVar(&cfg.CuratorMode, "curator-mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, currently openai-compatible")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL")
 	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
@@ -372,18 +381,35 @@ func parseVerifier(args []string) (Config, error) {
 func parseArbiter(args []string) (Config, error) {
 	fs := flag.NewFlagSet("arbiter", flag.ContinueOnError)
 	cfg := Config{
-		Command:     "arbiter",
-		AgentID:     "arbiter-001",
-		MaxFindings: 0,
+		Command:       "arbiter",
+		AgentID:       "arbiter-001",
+		ArbiterMode:   "heuristic",
+		MaxFindings:   0,
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable arbiter agent identifier")
+	fs.StringVar(&cfg.ArbiterMode, "mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
 	fs.IntVar(&cfg.MaxFindings, "max-findings", cfg.MaxFindings, "Maximum number of findings to emit; 0 means all")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, currently openai-compatible")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the arbiter agent")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("arbiter requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.ArbiterMode, cfg, "arbiter"); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
