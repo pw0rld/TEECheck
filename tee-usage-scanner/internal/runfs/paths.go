@@ -61,6 +61,10 @@ func ReviewRecordsPath(runDir string) string {
 	return filepath.Join(runDir, "08_review", "review_records.jsonl")
 }
 
+func CuratorDir(runDir string) string {
+	return filepath.Join(runDir, "09_curator")
+}
+
 func LoadManifest(runDir string) (artifacts.Manifest, error) {
 	var manifest artifacts.Manifest
 	if err := ReadJSON(ManifestPath(runDir), &manifest); err != nil {

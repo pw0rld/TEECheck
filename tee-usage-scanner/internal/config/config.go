@@ -68,6 +68,8 @@ func Parse(args []string) (Config, error) {
 		return parseVerifier(args[1:])
 	case "arbiter":
 		return parseArbiter(args[1:])
+	case "curator":
+		return parseCurator(args[1:])
 	case "review":
 		return parseReview(args[1:])
 	case "feedback":
@@ -414,6 +416,44 @@ func parseArbiter(args []string) (Config, error) {
 	return cfg, nil
 }
 
+func parseCurator(args []string) (Config, error) {
+	fs := flag.NewFlagSet("curator", flag.ContinueOnError)
+	cfg := Config{
+		Command:         "curator",
+		AgentID:         "curator-001",
+		CuratorMode:     "heuristic",
+		KnowledgeRoot:   filepath.Clean("knowledge"),
+		MaxDialogRounds: 3,
+		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable curator agent identifier")
+	fs.StringVar(&cfg.CuratorMode, "mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("curator requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.CuratorMode, cfg, "curator"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
 func parseReview(args []string) (Config, error) {
 	fs := flag.NewFlagSet("review", flag.ContinueOnError)
 	cfg := Config{
@@ -449,11 +489,15 @@ func parseFeedback(args []string) (Config, error) {
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--mode heuristic|llm] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateLLMIfNeeded(cfg Config, context string) error {
-	if normalizeMode(cfg.ExpertMode) != "llm" && normalizeMode(cfg.ChallengeMode) != "llm" && normalizeMode(cfg.VerifierMode) != "llm" {
+	if normalizeMode(cfg.ExpertMode) != "llm" &&
+		normalizeMode(cfg.ChallengeMode) != "llm" &&
+		normalizeMode(cfg.VerifierMode) != "llm" &&
+		normalizeMode(cfg.ArbiterMode) != "llm" &&
+		normalizeMode(cfg.CuratorMode) != "llm" {
 		return nil
 	}
 	return validateProviderConfig(cfg, context)
