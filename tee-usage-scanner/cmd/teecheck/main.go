@@ -11,11 +11,13 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/collabrun"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/feedback"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/hotspots"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomap"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
@@ -60,6 +62,10 @@ func main() {
 		err = verifier.Run(cfg)
 	case "arbiter":
 		err = arbiter.Run(cfg)
+	case "review":
+		err = review.Run(cfg)
+	case "feedback":
+		err = feedback.Run(cfg, os.Stdout)
 	default:
 		err = fmt.Errorf("unsupported command: %s", cfg.Command)
 	}
