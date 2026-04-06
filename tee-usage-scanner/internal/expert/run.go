@@ -27,10 +27,7 @@ func Run(cfg config.Config) error {
 
 	var client llm.Client
 	if strings.EqualFold(cfg.ExpertMode, "llm") {
-		client, err = llm.NewClient(cfg)
-		if err != nil {
-			return fmt.Errorf("build llm client: %w", err)
-		}
+		client = llm.NewClient(cfg)
 	}
 	toolAdapter := tools.NewLocalAdapter()
 
