@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner"
@@ -90,6 +92,11 @@ func Run(cfg config.Config) (string, error) {
 
 	if err := cases.Run(stageCfg); err != nil {
 		return "", fmt.Errorf("cases: %w", err)
+	}
+
+	// Enrich case packs with Repomix compressed code context
+	if repomix.Available() {
+		enrichCasesWithRepomix(runDir, fetch.LocalPath)
 	}
 
 	stageCfg.AgentID = "scanner-001"
@@ -196,4 +203,49 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func enrichCasesWithRepomix(runDir, repoRoot string) {
+	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
+	if err != nil || len(casePaths) == 0 {
+		return
+	}
+
+	for _, casePath := range casePaths {
+		var pack artifacts.CasePack
+		if err := runfs.ReadJSON(casePath, &pack); err != nil {
+			continue
+		}
+		if len(pack.TargetFiles) == 0 {
+			continue
+		}
+
+		result, err := repomix.Pack(context.Background(), repomix.PackRequest{
+			RepoRoot:    repoRoot,
+			TargetFiles: pack.TargetFiles,
+			Compress:    true,
+		})
+		if err != nil {
+			fmt.Printf("Warning: repomix failed for %s: %v\n", pack.CaseID, err)
+			continue
+		}
+
+		// Add repomix content as snippets
+		for path, content := range result.Files {
+			if content == "" {
+				continue
+			}
+			pack.Snippets = append(pack.Snippets, artifacts.PromptSnippet{
+				Path:      path,
+				StartLine: 1,
+				EndLine:   strings.Count(content, "\n") + 1,
+				Content:   content,
+			})
+		}
+
+		if err := runfs.WriteJSON(casePath, pack); err != nil {
+			fmt.Printf("Warning: failed to update case %s: %v\n", pack.CaseID, err)
+		}
+	}
+	fmt.Printf("Enriched %d case pack(s) with Repomix compressed code context\n", len(casePaths))
 }
