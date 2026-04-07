@@ -86,17 +86,23 @@ func Run(cfg config.Config) (string, error) {
 	fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
 
 	stageCfg.GraphJSONPath = graphPath
-	if err := mapper.Run(stageCfg); err != nil {
-		return "", fmt.Errorf("mapper: %w", err)
-	}
 
-	if err := cases.Run(stageCfg); err != nil {
-		return "", fmt.Errorf("cases: %w", err)
-	}
-
-	// Enrich case packs with Repomix compressed code context
-	if repomix.Available() {
-		enrichCasesWithRepomix(runDir, fetch.LocalPath)
+	if strings.EqualFold(cfg.Mode, "llm") && repomix.Available() {
+		// LLM mode: use LLM to identify hotspots from code content
+		if err := runLLMHotspotPipeline(stageCfg, fetch.LocalPath, runDir); err != nil {
+			return "", fmt.Errorf("llm hotspot pipeline: %w", err)
+		}
+	} else {
+		// Heuristic mode: use hardcoded rules
+		if err := mapper.Run(stageCfg); err != nil {
+			return "", fmt.Errorf("mapper: %w", err)
+		}
+		if err := cases.Run(stageCfg); err != nil {
+			return "", fmt.Errorf("cases: %w", err)
+		}
+		if repomix.Available() {
+			enrichCasesWithRepomix(runDir, fetch.LocalPath)
+		}
 	}
 
 	stageCfg.AgentID = "scanner-001"
@@ -203,6 +209,164 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func runLLMHotspotPipeline(cfg config.Config, repoRoot, runDir string) error {
+	// Step 1: Use Repomix to compress the whole repo
+	fmt.Println("Compressing codebase with Repomix for LLM analysis...")
+	packResult, err := repomix.Pack(context.Background(), repomix.PackRequest{
+		RepoRoot: repoRoot,
+		Compress: true,
+	})
+	if err != nil {
+		return fmt.Errorf("repomix pack: %w", err)
+	}
+	codeContext := repomix.FormatForPrompt(packResult, 60000) // ~60k chars ≈ ~15k tokens
+	fmt.Printf("Compressed %d files for LLM analysis\n", len(packResult.Files))
+
+	// Step 2: Load project profile
+	var profile artifacts.ProjectProfile
+	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
+		return fmt.Errorf("load profile: %w", err)
+	}
+
+	// Step 3: LLM identifies hotspots
+	client := llm.NewClient(cfg)
+	hotspots, err := scanner.IdentifyHotspotsLLM(context.Background(), client, scanner.LLMHotspotRequest{
+		RepoRoot:       repoRoot,
+		CodeContext:    codeContext,
+		Focus:          cfg.Focus,
+		MaxHotspots:    cfg.MaxHotspots,
+		ProjectProfile: profile,
+	}, cfg.LLMTemp)
+	if err != nil {
+		return fmt.Errorf("llm hotspot identification: %w", err)
+	}
+	fmt.Printf("LLM identified %d security hotspots\n", len(hotspots))
+
+	// Step 4: Write hotspot index
+	manifest, err := runfs.LoadManifest(runDir)
+	if err != nil {
+		return fmt.Errorf("load manifest: %w", err)
+	}
+	hotspotIndex := artifacts.HotspotIndex{
+		SchemaVersion: "teecheck.hotspot_index.v1",
+		RunID:         manifest.RunID,
+		Hotspots:      hotspots,
+	}
+	if err := runfs.WriteJSON(runfs.HotspotIndexPath(runDir), hotspotIndex); err != nil {
+		return fmt.Errorf("write hotspot index: %w", err)
+	}
+	fmt.Printf("Hotspot index written to %s\n", runfs.HotspotIndexPath(runDir))
+
+	// Step 5: Also write a minimal repo_map so downstream stages don't fail
+	repoMap := artifacts.RepoMap{
+		SchemaVersion: "teecheck.repo_map.v1",
+		Repo: artifacts.RepoRef{
+			URL:    manifest.RepoURL,
+			Commit: manifest.Commit,
+			Focus:  manifest.Focus,
+		},
+		Notes: []string{"repo_map generated as stub; hotspots were identified by LLM"},
+	}
+	if err := runfs.WriteJSON(runfs.RepoMapPath(runDir), repoMap); err != nil {
+		return fmt.Errorf("write repo_map: %w", err)
+	}
+
+	// Step 6: Generate case packs from LLM hotspots
+	limit := cfg.MaxCases
+	if limit <= 0 || limit > len(hotspots) {
+		limit = len(hotspots)
+	}
+	repoName := sanitizeSlug(filepath.Base(repoRoot))
+	commit := manifest.Commit
+	if len(commit) > 7 {
+		commit = commit[:7]
+	}
+
+	for idx, hs := range hotspots[:limit] {
+		pack := artifacts.CasePack{
+			SchemaVersion:       "teecheck.case_pack.v1",
+			CaseID:              fmt.Sprintf("%s@%s:%s:%s:%03d", repoName, commit, cfg.Focus, hs.Kind, idx+1),
+			HotspotID:           hs.HotspotID,
+			Focus:               cfg.Focus,
+			Category:            hs.Kind,
+			Priority:            hs.Priority,
+			TargetFiles:         hs.Paths,
+			TargetSymbols:       hs.Symbols,
+			WhySelected:         hs.WhySelected,
+			GraphFacts:          []string{fmt.Sprintf("LLM-identified hotspot: %s (priority: %s)", hs.Kind, hs.Priority)},
+			ExpectedObligations: obligationsForKind(hs.Kind),
+			OpenQuestions:       []string{"Does surrounding context mitigate this concern?"},
+		}
+
+		// Enrich with Repomix content for target files
+		if len(hs.Paths) > 0 {
+			targetPack, err := repomix.Pack(context.Background(), repomix.PackRequest{
+				RepoRoot:    repoRoot,
+				TargetFiles: hs.Paths,
+				Compress:    true,
+			})
+			if err == nil {
+				for filePath, content := range targetPack.Files {
+					if content != "" {
+						pack.Snippets = append(pack.Snippets, artifacts.PromptSnippet{
+							Path:      filePath,
+							StartLine: 1,
+							EndLine:   strings.Count(content, "\n") + 1,
+							Content:   content,
+						})
+					}
+				}
+			}
+		}
+
+		casePath := filepath.Join(runfs.CasePacksDir(runDir), fmt.Sprintf("case-%03d.json", idx+1))
+		if err := runfs.WriteJSON(casePath, pack); err != nil {
+			return fmt.Errorf("write case pack: %w", err)
+		}
+	}
+	fmt.Printf("Wrote %d case pack(s) to %s\n", limit, runfs.CasePacksDir(runDir))
+
+	return nil
+}
+
+func obligationsForKind(kind string) []string {
+	lower := strings.ToLower(kind)
+	switch {
+	case strings.Contains(lower, "inject") || strings.Contains(lower, "xss") || strings.Contains(lower, "sqli"):
+		return []string{"input validation and sanitization", "output encoding", "parameterized queries"}
+	case strings.Contains(lower, "auth"):
+		return []string{"authentication verification", "session management", "credential protection"}
+	case strings.Contains(lower, "access") || strings.Contains(lower, "idor") || strings.Contains(lower, "privilege"):
+		return []string{"authorization checks", "object-level access control", "principle of least privilege"}
+	case strings.Contains(lower, "key") || strings.Contains(lower, "crypto") || strings.Contains(lower, "secret"):
+		return []string{"key and secret handling", "secure key storage", "proper algorithm selection"}
+	case strings.Contains(lower, "exposure") || strings.Contains(lower, "leak") || strings.Contains(lower, "sensitive"):
+		return []string{"sensitive data protection", "secure logging", "data classification"}
+	case strings.Contains(lower, "config") || strings.Contains(lower, "cors") || strings.Contains(lower, "csp"):
+		return []string{"security configuration", "secure defaults", "header hardening"}
+	case strings.Contains(lower, "depend") || strings.Contains(lower, "supply"):
+		return []string{"dependency verification", "version pinning", "vulnerability scanning"}
+	case strings.Contains(lower, "boundary") || strings.Contains(lower, "tee") || strings.Contains(lower, "attest"):
+		return []string{"trust-boundary revalidation", "attestation verification", "caller binding"}
+	case strings.Contains(lower, "state") || strings.Contains(lower, "race") || strings.Contains(lower, "replay"):
+		return []string{"state integrity", "concurrency safety", "replay resistance"}
+	case strings.Contains(lower, "error") || strings.Contains(lower, "fail"):
+		return []string{"secure error handling", "fail-closed behavior", "information leak prevention"}
+	default:
+		return []string{"security best practices", "defense in depth"}
+	}
+}
+
+func sanitizeSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "@", "-", ".", "-", "_", "-", " ", "-")
+	value = replacer.Replace(value)
+	for strings.Contains(value, "--") {
+		value = strings.ReplaceAll(value, "--", "-")
+	}
+	return strings.Trim(value, "-")
 }
 
 func enrichCasesWithRepomix(runDir, repoRoot string) {
