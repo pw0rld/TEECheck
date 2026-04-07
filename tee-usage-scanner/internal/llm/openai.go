@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -38,6 +39,8 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		"model":       c.model,
 		"messages":    buildMessages(req.SystemPrompt, req.Messages),
 		"temperature": req.Temperature,
+		"stream":      true,
+		"max_tokens":  16384,
 	}
 	if body["temperature"] == 0.0 {
 		body["temperature"] = c.temperature
@@ -60,30 +63,44 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		return GenerateResponse{}, fmt.Errorf("llm request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("read llm response: %w", err)
-	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
 		return GenerateResponse{}, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	// Read SSE stream and accumulate content
+	var content strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) > 0 {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
 	}
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return GenerateResponse{}, fmt.Errorf("parse llm response: %w", err)
-	}
-	if len(parsed.Choices) == 0 {
-		return GenerateResponse{}, fmt.Errorf("llm response contained no choices")
-	}
+
+	text := content.String()
 	return GenerateResponse{
-		Text: parsed.Choices[0].Message.Content,
-		Raw:  string(respBody),
+		Text: text,
+		Raw:  text,
 	}, nil
 }
 

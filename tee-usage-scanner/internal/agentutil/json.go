@@ -50,8 +50,62 @@ func UnmarshalJSONObject[T any](text string, out *T) error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal([]byte(obj), out); err != nil {
+	// Try direct parse first
+	if err := json.Unmarshal([]byte(obj), out); err == nil {
+		return nil
+	}
+	// Fix raw newlines inside JSON string values and retry
+	fixed := fixRawNewlinesInJSON(obj)
+	if err := json.Unmarshal([]byte(fixed), out); err != nil {
 		return fmt.Errorf("parse json object: %w", err)
 	}
 	return nil
+}
+
+// fixRawNewlinesInJSON replaces unescaped newlines inside JSON string values
+// with \\n so json.Unmarshal can parse them.
+func fixRawNewlinesInJSON(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				out.WriteByte(ch)
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				out.WriteByte(ch)
+				continue
+			}
+			if ch == '"' {
+				inString = false
+				out.WriteByte(ch)
+				continue
+			}
+			if ch == '\n' {
+				out.WriteString("\\n")
+				continue
+			}
+			if ch == '\r' {
+				out.WriteString("\\r")
+				continue
+			}
+			if ch == '\t' {
+				out.WriteString("\\t")
+				continue
+			}
+			out.WriteByte(ch)
+			continue
+		}
+		if ch == '"' {
+			inString = true
+		}
+		out.WriteByte(ch)
+	}
+	return out.String()
 }
