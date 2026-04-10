@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 )
@@ -23,27 +21,26 @@ type OpenAIClient struct {
 }
 
 func NewOpenAIClient(cfg config.Config) *OpenAIClient {
+	cfg = cfg.WithLLMProviderDefaults()
 	return &OpenAIClient{
-		baseURL: strings.TrimRight(cfg.LLMBaseURL, "/"),
-		apiKey:  cfg.LLMAPIKey,
-		model:   cfg.LLMModel,
-		httpClient: &http.Client{
-			Timeout: time.Duration(cfg.LLMTimeoutSec) * time.Second,
-		},
+		baseURL:     strings.TrimRight(cfg.LLMBaseURL, "/"),
+		apiKey:      cfg.LLMAPIKey,
+		model:       cfg.LLMModel,
+		httpClient:  newHTTPClient(cfg.LLMTimeoutSec),
 		temperature: cfg.LLMTemp,
 	}
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
-	body := map[string]any{
-		"model":       c.model,
-		"messages":    buildMessages(req.SystemPrompt, req.Messages),
-		"temperature": req.Temperature,
-		"stream":      true,
-		"max_tokens":  16384,
+	body := openAIChatRequest{
+		Model:       c.model,
+		Messages:    buildMessages(req.SystemPrompt, req.Messages),
+		Temperature: req.Temperature,
+		Stream:      false,
+		MaxTokens:   16384,
 	}
-	if body["temperature"] == 0.0 {
-		body["temperature"] = c.temperature
+	if body.Temperature == 0.0 {
+		body.Temperature = c.temperature
 	}
 
 	payload, err := json.Marshal(body)
@@ -56,6 +53,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		return GenerateResponse{}, fmt.Errorf("build llm request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -64,44 +62,146 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return GenerateResponse{}, fmt.Errorf("read llm response: %w", err)
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
 		return GenerateResponse{}, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	// Read SSE stream and accumulate content
+	text, err := parseOpenAIResponse(resp.Header.Get("Content-Type"), respBody)
+	if err != nil {
+		return GenerateResponse{}, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
+	}
+
+	return GenerateResponse{
+		Text: text,
+		Raw:  string(respBody),
+	}, nil
+}
+
+type openAIChatRequest struct {
+	Model          string                `json:"model"`
+	Messages       []map[string]string   `json:"messages"`
+	Temperature    float64               `json:"temperature"`
+	Stream         bool                  `json:"stream"`
+	MaxTokens      int                   `json:"max_tokens,omitempty"`
+	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+}
+
+type openAIResponseFormat struct {
+	Type string `json:"type"`
+}
+
+type openAIChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content any `json:"content"`
+		} `json:"message"`
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		Text string `json:"text"`
+	} `json:"choices"`
+}
+
+func parseOpenAIResponse(contentType string, body []byte) (string, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return "", fmt.Errorf("empty response body")
+	}
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") || strings.HasPrefix(trimmed, "data:") {
+		return parseOpenAIStream(trimmed)
+	}
+
+	var parsed openAIChatResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("decode json response: %w", err)
+	}
+	text := extractOpenAIText(parsed)
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("no text content found in response")
+	}
+	return text, nil
+}
+
+func parseOpenAIStream(raw string) (string, error) {
 	var content strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
 		}
 
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
+		var chunk openAIChatResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
-		if len(chunk.Choices) > 0 {
-			content.WriteString(chunk.Choices[0].Delta.Content)
+		content.WriteString(extractOpenAIText(chunk))
+	}
+	if content.Len() == 0 {
+		return "", fmt.Errorf("no text content found in stream response")
+	}
+	return content.String(), nil
+}
+
+func extractOpenAIText(resp openAIChatResponse) string {
+	for _, choice := range resp.Choices {
+		if text := normalizeOpenAIContent(choice.Message.Content); text != "" {
+			return text
+		}
+		if strings.TrimSpace(choice.Text) != "" {
+			return choice.Text
+		}
+		if strings.TrimSpace(choice.Delta.Content) != "" {
+			return choice.Delta.Content
 		}
 	}
+	return ""
+}
 
-	text := content.String()
-	return GenerateResponse{
-		Text: text,
-		Raw:  text,
-	}, nil
+func normalizeOpenAIContent(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []any:
+		var parts []string
+		for _, item := range typed {
+			switch entry := item.(type) {
+			case map[string]any:
+				if text, ok := entry["text"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+					continue
+				}
+				if text, ok := entry["content"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, "")
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok {
+			return text
+		}
+		if text, ok := typed["content"].(string); ok {
+			return text
+		}
+	}
+	return ""
+}
+
+func truncateForError(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
 }
 
 func buildMessages(systemPrompt string, messages []Message) []map[string]string {

@@ -2,39 +2,27 @@ package agentbus_test
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
 
+type stubClient struct {
+	resp llm.GenerateResponse
+	err  error
+}
+
+func (s stubClient) Generate(context.Context, llm.GenerateRequest) (llm.GenerateResponse, error) {
+	return s.resp, s.err
+}
+
 func TestNewLLMHandler(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{
-					"content": `{"answer":"The check is missing because verify_qe_identity_policy skips timestamp","facts":["verify.rs:42 no nonce"]}`,
-				}},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	client := llm.NewOpenAIClient(config.Config{
-		LLMBaseURL:    srv.URL,
-		LLMAPIKey:     "test-key",
-		LLMModel:      "test-model",
-		LLMTimeoutSec: 5,
-		LLMTemp:       0.2,
-	})
-
-	handler := agentbus.NewLLMHandler(client, "You are the Expert Agent.", 0.2)
+	handler := agentbus.NewLLMHandler(stubClient{
+		resp: llm.GenerateResponse{
+			Text: `{"answer":"The check is missing because verify_qe_identity_policy skips timestamp","facts":["verify.rs:42 no nonce"]}`,
+		},
+	}, "You are the Expert Agent.", 0.2)
 	resp, err := handler(context.Background(), agentbus.Query{
 		QueryID:   "q-001",
 		FromAgent: "verifier-001",

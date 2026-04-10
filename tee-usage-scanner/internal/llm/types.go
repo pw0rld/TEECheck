@@ -11,6 +11,7 @@ type GenerateRequest struct {
 	SystemPrompt string
 	Messages     []Message
 	Temperature  float64
+	JSONMode     bool
 }
 
 type GenerateResponse struct {

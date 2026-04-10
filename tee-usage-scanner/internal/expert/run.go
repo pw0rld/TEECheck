@@ -101,6 +101,7 @@ Snippets:
 			{Role: "user", Content: user},
 		},
 		Temperature: temperature,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return artifacts.Hypothesis{}, err

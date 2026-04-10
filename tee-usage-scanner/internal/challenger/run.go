@@ -110,18 +110,19 @@ Snippets:
 			{Role: "user", Content: user},
 		},
 		Temperature: temperature,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return artifacts.Challenge{}, err
 	}
 
 	var parsed struct {
-		ExploitNarrative string   `json:"exploit_narrative"`
-		CounterArguments []string `json:"counter_arguments"`
+		ExploitNarrative   string   `json:"exploit_narrative"`
+		CounterArguments   []string `json:"counter_arguments"`
 		RemainingQuestions []string `json:"remaining_questions"`
-		SuggestedChecks  []string `json:"suggested_checks"`
-		Exploitability   string   `json:"exploitability"`
-		ReviewerStance   string   `json:"reviewer_stance"`
+		SuggestedChecks    []string `json:"suggested_checks"`
+		Exploitability     string   `json:"exploitability"`
+		ReviewerStance     string   `json:"reviewer_stance"`
 	}
 	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
 		return artifacts.Challenge{}, fmt.Errorf("parse challenger json: %w | raw=%s", err, truncate(resp.Text, 400))

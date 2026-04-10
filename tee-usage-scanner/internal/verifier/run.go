@@ -279,6 +279,7 @@ Static check findings (%d total):
 			SystemPrompt: systemPrompt,
 			Messages:     messages,
 			Temperature:  temperature,
+			JSONMode:     true,
 		})
 		if err != nil {
 			return artifacts.VerificationMemo{}, fmt.Errorf("llm generate: %w", err)

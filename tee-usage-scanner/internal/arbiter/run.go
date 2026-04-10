@@ -272,6 +272,7 @@ Knowledge hints:
 			SystemPrompt: systemPrompt,
 			Messages:     messages,
 			Temperature:  temperature,
+			JSONMode:     true,
 		})
 		if err != nil {
 			return artifacts.FindingItem{}, "", fmt.Errorf("llm generate: %w", err)

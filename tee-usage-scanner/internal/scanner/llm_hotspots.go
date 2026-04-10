@@ -11,10 +11,10 @@ import (
 )
 
 type LLMHotspotRequest struct {
-	RepoRoot      string
-	CodeContext   string // Repomix compressed output
-	Focus         string
-	MaxHotspots   int
+	RepoRoot       string
+	CodeContext    string // Repomix compressed output
+	Focus          string
+	MaxHotspots    int
 	ProjectProfile artifacts.ProjectProfile
 }
 
@@ -84,6 +84,7 @@ Codebase (compressed):
 			{Role: "user", Content: userMsg},
 		},
 		Temperature: temperature,
+		JSONMode:    true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm hotspot identification: %w", err)

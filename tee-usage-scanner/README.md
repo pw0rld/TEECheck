@@ -23,6 +23,13 @@ go build -o teecheck ./cmd/teecheck/
   --llm-api-key sk-your-key \
   --llm-model your-model \
   --focus tee --max-cases 4
+
+# Scan with the built-in GLM preset (z.ai)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+  --llm-provider glm \
+  --llm-api-key your-zai-key \
+  --llm-model glm-4.7 \
+  --focus tee --max-cases 4
 ```
 
 ## How It Works
@@ -72,9 +79,13 @@ teecheck run <url-or-path>
 heuristic rules. Good for quick scans.
 
 **LLM mode** (`--mode llm`): Much higher quality. Each agent uses an
-OpenAI-compatible LLM to reason about security properties. Agents can query each
-other through a message bus for additional context. Produces detailed review
-packets with executive summaries, risk assessments, and recommended follow-ups.
+LLM providers to reason about security properties. Built-in presets now include
+`openai` and `glm` (`docs.z.ai`). The `glm` preset uses the Anthropic-compatible
+`https://api.z.ai/api/anthropic` endpoint by default, while custom
+OpenAI-compatible endpoints still work via `--llm-provider openai --llm-base-url ...`.
+Agents can query each other through a message bus for additional context.
+Produces detailed review packets with executive summaries, risk assessments, and
+recommended follow-ups.
 
 ## Commands
 
@@ -101,7 +112,8 @@ teecheck run <url-or-path> [flags]
 | `--output-dir` | `runs` | Output directory for run artifacts |
 | `--knowledge-root` | `knowledge` | Knowledge wiki root directory |
 | `--static-tools` | `auto` | Static tools: `auto`, `none`, or `grep,semgrep` |
-| `--llm-base-url` | env | OpenAI-compatible API base URL |
+| `--llm-provider` | `openai` | Provider preset: `openai` or `glm` |
+| `--llm-base-url` | env | Provider base URL; `glm` fills Anthropic-compatible defaults automatically |
 | `--llm-api-key` | env | API key |
 | `--llm-model` | env | Model name |
 | `--llm-temperature` | `0.2` | Sampling temperature |
@@ -110,6 +122,10 @@ teecheck run <url-or-path> [flags]
 - `TEECHECK_LLM_BASE_URL`
 - `TEECHECK_LLM_API_KEY`
 - `TEECHECK_LLM_MODEL`
+
+Provider presets:
+- `openai`: generic OpenAI-compatible mode. Bring your own `--llm-base-url` if needed.
+- `glm`: uses `https://api.z.ai/api/anthropic` by default and falls back to model `glm-4.7` when `--llm-model` is omitted.
 
 ### `teecheck review` (optional, interactive)
 

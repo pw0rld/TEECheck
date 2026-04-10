@@ -21,6 +21,7 @@ func NewLLMHandler(client llm.Client, systemPrompt string, temperature float64) 
 				{Role: "user", Content: userMsg},
 			},
 			Temperature: temperature,
+			JSONMode:    true,
 		})
 		if err != nil {
 			return Response{}, fmt.Errorf("llm generate: %w", err)

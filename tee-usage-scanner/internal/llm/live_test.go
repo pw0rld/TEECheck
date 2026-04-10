@@ -14,29 +14,40 @@ import (
 )
 
 func TestLiveLLMDataSource(t *testing.T) {
-	apiKey := os.Getenv("TEECHECK_LLM_API_KEY")
-	if apiKey == "" {
-		t.Skip("TEECHECK_LLM_API_KEY not set, skipping live LLM test")
-	}
-	baseURL := os.Getenv("TEECHECK_LLM_BASE_URL")
-	if baseURL == "" {
-		t.Skip("TEECHECK_LLM_BASE_URL not set, skipping live LLM test")
-	}
-	model := os.Getenv("TEECHECK_LLM_MODEL")
-	if model == "" {
-		t.Skip("TEECHECK_LLM_MODEL not set, skipping live LLM test")
-	}
-
-	client := llm.NewOpenAIClient(config.Config{
-		LLMBaseURL:    baseURL,
-		LLMAPIKey:     apiKey,
-		LLMModel:      model,
-		LLMTimeoutSec: 30,
+	runLiveLLMDataSourceTest(t, config.Config{
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    os.Getenv("TEECHECK_LLM_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      os.Getenv("TEECHECK_LLM_MODEL"),
+		LLMTimeoutSec: 60,
 		LLMTemp:       0.1,
 	})
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func TestLiveGLMDataSource(t *testing.T) {
+	runLiveLLMDataSourceTest(t, config.Config{
+		LLMProvider:   "glm",
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_GLM_BASE_URL", "GLM_BASE_URL", "ZAI_BASE_URL", "TEECHECK_LLM_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_GLM_API_KEY", "GLM_API_KEY", "ZAI_API_KEY", "TEECHECK_LLM_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_GLM_MODEL", "GLM_MODEL", "ZAI_MODEL", "TEECHECK_LLM_MODEL"),
+		LLMTimeoutSec: 60,
+		LLMTemp:       0.1,
+	})
+}
+
+func runLiveLLMDataSourceTest(t *testing.T, cfg config.Config) {
+	t.Helper()
+
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.LLMAPIKey == "" {
+		t.Skipf("%s API key not set, skipping live LLM test", strings.ToUpper(cfg.LLMProvider))
+	}
+
+	client := llm.NewClient(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.LLMTimeoutSec)*time.Second)
 	defer cancel()
+
+	t.Logf("provider=%s base_url=%s model=%s", cfg.LLMProvider, cfg.LLMBaseURL, cfg.LLMModel)
 
 	t.Run("BasicConnectivity", func(t *testing.T) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{
@@ -62,6 +73,7 @@ func TestLiveLLMDataSource(t *testing.T) {
 				{Role: "user", Content: `Return a JSON object with fields: answer (string), facts (array of strings). Topic: "why is code review important?"`},
 			},
 			Temperature: 0.0,
+			JSONMode:    true,
 		})
 		if err != nil {
 			t.Fatalf("LLM request failed: %v", err)
@@ -99,6 +111,7 @@ Why do you suspect the attestation check is incomplete?
 Additional context: The function verify_qe_identity_policy in verify.rs does not appear to validate a timestamp or nonce.`},
 			},
 			Temperature: 0.2,
+			JSONMode:    true,
 		})
 		if err != nil {
 			t.Fatalf("LLM request failed: %v", err)
@@ -122,4 +135,13 @@ Additional context: The function verify_qe_identity_policy in verify.rs does not
 		}
 		t.Logf("Agent query OK, answer length: %d chars, facts: %d", len(parsed.Answer), len(parsed.Facts))
 	})
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

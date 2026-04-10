@@ -292,6 +292,7 @@ Existing wiki pages:
 			SystemPrompt: systemPrompt,
 			Messages:     messages,
 			Temperature:  temperature,
+			JSONMode:     true,
 		})
 		if err != nil {
 			return curatorResult{}, fmt.Errorf("llm generate: %w", err)
