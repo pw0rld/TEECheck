@@ -1,215 +1,302 @@
-# TEE Usage Scanner
+# TEECheck
 
-Prototype project for a TEE usage vulnerability scanner.
+A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
+security research. TEECheck uses AI agents to collaboratively analyze codebases
+for security issues in trusted execution environments.
 
-The current goal is to validate a scanning workflow that combines:
-
-- Go as the scanner orchestration layer
-- Joern as the program graph backend
-- A rule-driven detector for TEE usage obligations
-- Compact evidence packages extracted from program analysis
-- An LLM as a second-stage reviewer for ambiguous findings
-
-This repository starts with planning and project scaffolding so we can iterate toward an MVP without mixing it into the existing codebases in this workspace.
-
-The repository now contains two exploratory tracks:
-
-- `Joern + rules`, which treats program analysis as structured evidence
-- `GitNexus + AI`, which treats the repository graph as compressed audit context
-
-The GitNexus track now includes:
-
-- a remote Orb-backed graph export path
-- a Go knowledge-pack generator
-- a Codex/LLM audit prompt template
-- a repository-local TEE audit skill draft
-
-## Current Status
-
-Active prototype stage.
-
-The most important design document is:
-
-- `docs/SCANNER_OUTLINE.md`
-- `docs/GITNEXUS_MVP.md`
-
-## Initial Scope
-
-- Language: C/C++
-- TEE focus: OP-TEE / GlobalPlatform style APIs
-- Scan target: trusted application (TA) code first
-- Detection style: missing validation, missing binding, missing state checks, insecure fallback
-
-## Planned Architecture
-
-1. Use Joern to build a code property graph from TA code.
-2. Run TEE-specific graph queries to emit evidence packages.
-3. Evaluate those packages with deterministic rules in Go.
-4. Generate LLM review bundles for uncertain cases.
-5. Emit structured findings and reports.
-
-## Repository Layout
-
-```text
-tee-usage-scanner/
-├── cmd/
-├── docs/
-├── fixtures/
-├── internal/
-├── prompts/
-├── rules/
-├── samples/
-├── skills/
-└── scripts/
-```
-
-## Local Demo Usage
-
-### GitNexus Knowledge Pack
-
-The simplest GitNexus-inspired MVP can either ingest an existing graph export or trigger a remote export on Orb first.
-
-For a local fixture:
+## Quick Start
 
 ```bash
-go run ./cmd/tee-usage-scanner kgpack \
-  --graph-json fixtures/gitnexus/sample_graph.json \
-  --focus tee \
-  --report reports/knowledge-pack.json \
-  --prompt reports/knowledge-pack.md
+# Build
+cd tee-usage-scanner
+go build -o teecheck ./cmd/teecheck/
+
+# Scan a repository (heuristic mode - no LLM needed)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --focus tee
+
+# Scan a local path
+./teecheck run /path/to/repo --focus tee --max-cases 4
+
+# Scan with LLM mode (much higher quality analysis)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+  --llm-base-url http://your-api:8080/v1 \
+  --llm-api-key sk-your-key \
+  --llm-model your-model \
+  --focus tee --max-cases 4
+
+# Scan with the built-in GLM preset (z.ai)
+./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+  --llm-provider glm \
+  --llm-api-key your-zai-key \
+  --llm-model glm-4.7 \
+  --focus tee --max-cases 4
 ```
 
-This command assumes you already have a GitNexus graph export JSON file. It does not yet talk to a live GitNexus service. Instead, it compresses the graph into an AI-friendly knowledge pack for manual or LLM-assisted review.
+## How It Works
 
-For the Orb-backed one-command path:
+TEECheck uses a 3-agent pipeline:
+
+```
+teecheck run <url-or-path>
+    |
+    v
++-- Scanner Agent --+
+|  Clone repo        |
+|  Generate code     |
+|  graph (auto)      |
+|  Run static checks |
+|  Identify hotspots |
+|  Generate security |
+|  hypotheses        |
++--------+-----------+
+         |
+         v  (Reviewer can query Scanner for more evidence)
++-- Reviewer Agent -+
+|  Challenge each    |
+|  hypothesis        |
+|  Verify evidence   |
+|  Ask Scanner for   |
+|  additional code   |
+|  searches          |
++--------+-----------+
+         |
+         v  (Auditor can query Scanner or Reviewer)
++-- Auditor Agent --+
+|  Synthesize all    |
+|  evidence          |
+|  Final judgment    |
+|  Generate review   |
+|  packets           |
++--------+-----------+
+         |
+         v
+    Final Report
+```
+
+### Two Modes
+
+**Heuristic mode** (default): Fast, no LLM needed. Uses pattern matching and
+heuristic rules. Good for quick scans.
+
+**LLM mode** (`--mode llm`): Much higher quality. Each agent uses an
+LLM providers to reason about security properties. Built-in presets now include
+`openai` and `glm` (`docs.z.ai`). The `glm` preset uses the Anthropic-compatible
+`https://api.z.ai/api/anthropic` endpoint by default, while custom
+OpenAI-compatible endpoints still work via `--llm-provider openai --llm-base-url ...`.
+Agents can query each other through a message bus for additional context.
+Produces detailed review packets with executive summaries, risk assessments, and
+recommended follow-ups.
+
+## Commands
+
+### `teecheck run` (main command)
+
+Runs the full 3-agent pipeline on a repository.
 
 ```bash
-go run ./cmd/tee-usage-scanner kgpack \
-  --src /Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038 \
-  --gitnexus-ssh-target orb-vscode \
-  --graph-json reports/dcap-qvl-gitnexus-graph.json \
-  --focus tee \
-  --report reports/dcap-qvl-knowledge-pack.json \
-  --prompt reports/dcap-qvl-knowledge-pack.md
+teecheck run <url-or-path> [flags]
 ```
 
-This command first runs `scripts/gitnexus/export_graph.mjs` on the remote Orb host through SSH, writes the graph export into the shared workspace, and then turns that export into a knowledge pack locally.
+**Arguments:**
+- `<url-or-path>` - GitHub URL (auto-clones) or local directory path
 
-To hand the result to Codex or another LLM, pair:
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `heuristic` | Agent mode: `heuristic` or `llm` |
+| `--focus` | `tee` | Audit focus: `tee`, `runtime`, `attestation` |
+| `--max-cases` | `12` | Maximum case packs to generate |
+| `--max-hotspots` | `12` | Maximum hotspots to identify |
+| `--max-dialog-rounds` | `3` | Max inter-agent dialog rounds (LLM mode) |
+| `--run-id` | auto | Stable run identifier |
+| `--output-dir` | `runs` | Output directory for run artifacts |
+| `--knowledge-root` | `knowledge` | Knowledge wiki root directory |
+| `--static-tools` | `auto` | Static tools: `auto`, `none`, or `grep,semgrep` |
+| `--llm-provider` | `openai` | Provider preset: `openai` or `glm` |
+| `--llm-base-url` | env | Provider base URL; `glm` fills Anthropic-compatible defaults automatically |
+| `--llm-api-key` | env | API key |
+| `--llm-model` | env | Model name |
+| `--llm-temperature` | `0.2` | Sampling temperature |
 
-- `reports/knowledge-pack.md`
-- `reports/knowledge-pack.json`
-- `prompts/gitnexus_tee_audit_prompt.md`
-- `skills/tee-usage-audit/SKILL.md`
+**Environment variables** (alternative to flags):
+- `TEECHECK_LLM_BASE_URL`
+- `TEECHECK_LLM_API_KEY`
+- `TEECHECK_LLM_MODEL`
 
-The fixture-backed path is still useful for quick rule iteration:
+Provider presets:
+- `openai`: generic OpenAI-compatible mode. Bring your own `--llm-base-url` if needed.
+- `glm`: uses `https://api.z.ai/api/anthropic` by default and falls back to model `glm-4.7` when `--llm-model` is omitted.
+
+### `teecheck review` (optional, interactive)
+
+Interactive human review of findings.
 
 ```bash
-go run ./cmd/tee-usage-scanner scan \
-  --fixture-dir fixtures/optee_param_types \
-  --report reports/findings.json \
-  --review-dir reports/reviews
+teecheck review --run-dir runs/<run-id>
 ```
 
-This reads prebuilt evidence packages, evaluates the first TEE rule, and emits a report plus optional LLM review bundles.
+Walks through each finding interactively:
+- Display review packet summary
+- Prompt for verdict: confirm / dismiss / inconclusive / skip
+- Prompt for severity override, tags, notes
+- Save review records to `08_review/`
 
-The attestation rule template can also be exercised through fixtures without touching the live Joern extractor yet:
+### `teecheck curator` (optional, knowledge writeback)
+
+Archives review outcomes and updates the knowledge wiki.
 
 ```bash
-go run ./cmd/tee-usage-scanner scan \
-  --fixture-dir fixtures/attestation_qe_identity \
-  --rule-dir rules/templates \
-  --report reports/attestation-template.json \
-  --review-dir reports/reviews-attestation-template
+# Heuristic
+teecheck curator --run-dir runs/<run-id> --knowledge-root knowledge
+
+# LLM (generates richer wiki content)
+teecheck curator --run-dir runs/<run-id> --mode llm \
+  --llm-base-url ... --llm-api-key ... --llm-model ...
 ```
 
-This path is useful for iterating on SGX/DCAP-style obligation rules before we refine the live Joern extractor.
+### Legacy commands
 
-The live Joern-backed path now works against the OrbStack container we started from:
+The original fine-grained commands still work:
 
 ```bash
-go run ./cmd/tee-usage-scanner scan \
-  --src /Users/pw0rld/Desktop/TEENET/TEECheck/tee-usage-scanner/samples/optee_ta/positive \
-  --joern-ssh-target orb-vscode \
-  --report reports/joern-positive.json \
-  --review-dir reports/reviews-joern-positive
+teecheck collab-run ...    # 6-stage serial pipeline
+teecheck knowledge-init    # Initialize knowledge directories
+teecheck preprocess ...    # Project profiling only
+teecheck mapper ...        # Repo mapping only
+teecheck expert ...        # Hypothesis generation only
+teecheck challenge ...     # Hypothesis challenging only
+teecheck verifier ...      # Evidence verification only
+teecheck arbiter ...       # Final arbitration only
 ```
 
-For the negative sample:
+## Output Structure
+
+```
+runs/<run-id>/
+├── 00_manifest.json                   # Run metadata
+├── 01_profile/project_profile.json    # Languages, frameworks, paths
+├── 02_graph/graph.json                # Auto-generated code structure graph
+├── 03_repo_map/repo_map.json          # Module boundaries, trust surfaces
+├── 04_hotspots/hotspot_index.json     # Ranked security hotspots
+├── 05_cases/case-NNN.json             # Bounded review cases
+├── 04_expert/hypothesis-NNN.json      # Security hypotheses
+├── 05_challenger/challenge-NNN.json   # Challenger objections
+├── 06_verifier/verify-NNN.json        # Verification memos
+├── 07_arbiter/
+│   ├── findings.json                  # Final findings
+│   └── packets/review-NNN.md          # Human-readable review packets
+├── 08_review/                         # (optional) Human review records
+└── 09_curator/                        # (optional) Knowledge updates
+```
+
+## Code Graph Generation
+
+TEECheck auto-generates a code structure graph using pluggable adapters:
+
+| Adapter | Status | What it does |
+|---------|--------|-------------|
+| **regex** | Implemented | Regex-based extraction of functions/structs/classes across Rust, Go, TypeScript, Python, Solidity |
+| **semgrep** | Stub (runs if installed) | Pattern-based precise extraction |
+| **codeql** | Stub | Data flow analysis, call graph extraction |
+| **joern** | Stub | CPG-based cross-procedure analysis |
+
+In LLM mode, the Scanner agent can decide which tools to use based on the project profile.
+
+## Static Check Framework
+
+Pluggable static analysis with the same adapter pattern:
+
+| Adapter | Status | What it does |
+|---------|--------|-------------|
+| **grep** | Implemented | Keyword search across files |
+| **semgrep** | Implemented | Rule-based pattern matching |
+| **codeql** | Stub | Deep data flow queries |
+| **joern** | Stub | CPG queries |
+
+## Knowledge Layer
+
+TEECheck accumulates knowledge across runs:
+
+```
+knowledge/
+├── raw/               # Source materials (CVEs, papers, SDK docs)
+├── wiki/              # Curated security obligation pages
+│   ├── obligations/   # Trust boundary, attestation, etc.
+│   └── patterns/      # Authorization, caller binding, etc.
+└── learned/           # Review outcomes
+    ├── true-positive/
+    ├── false-positive/
+    └── review-memory/
+```
+
+This is intentionally **not** chunk-RAG. Knowledge is curated into stable wiki
+pages that agents query during analysis.
+
+## Inter-Agent Communication
+
+In LLM mode, agents communicate through a message bus:
+
+- **Reviewer** can ask **Scanner** to search for specific code patterns
+- **Auditor** can ask **Reviewer** or **Scanner** for clarification
+- Dialog rounds are capped (default 3) to control cost
+- All dialogs are persisted as JSONL for auditability
+
+## Architecture
+
+```
+internal/
+├── repofetch/       # Git clone / local path detection
+├── scanner/         # Code graph generation (GraphAdapter framework)
+│   ├── regex/       # Regex-based extractor
+│   ├── semgrep/     # Semgrep adapter
+│   ├── codeql/      # CodeQL stub
+│   └── joern/       # Joern stub
+├── pipeline/        # 3-agent orchestrator (teecheck run)
+├── preprocessor/    # Project profiling
+├── mapper/          # Repo structure mapping
+├── hotspots/        # Hotspot identification
+├── cases/           # Case pack generation
+├── expert/          # Hypothesis generation
+├── challenger/      # Hypothesis challenging
+├── verifier/        # Evidence verification
+├── arbiter/         # Final arbitration
+├── staticcheck/     # Static analysis framework
+│   ├── grep/        # Grep adapter
+│   ├── semgrep/     # Semgrep adapter
+│   ├── codeql/      # CodeQL stub
+│   └── joern/       # Joern stub
+├── agentbus/        # Inter-agent message bus
+├── llm/             # OpenAI-compatible LLM client
+├── review/          # Interactive human review
+├── feedback/        # Knowledge writeback (curator)
+├── knowledge/       # Wiki and learned knowledge
+├── artifacts/       # JSON type definitions
+├── runfs/           # Run directory helpers
+└── config/          # CLI argument parsing
+```
+
+## Development
 
 ```bash
-go run ./cmd/tee-usage-scanner scan \
-  --src /Users/pw0rld/Desktop/TEENET/TEECheck/tee-usage-scanner/samples/optee_ta/negative \
-  --joern-ssh-target orb-vscode \
-  --report reports/joern-negative.json \
-  --review-dir reports/reviews-joern-negative
+# Run all tests
+go test ./...
+
+# Run with race detector
+go test -race ./...
+
+# Build binary
+go build -o teecheck ./cmd/teecheck/
+
+# Run live LLM test (requires API key)
+TEECHECK_LLM_BASE_URL=http://your-api/v1 \
+TEECHECK_LLM_API_KEY=sk-your-key \
+TEECHECK_LLM_MODEL=your-model \
+go test ./internal/llm/ -v -run TestLiveLLMDataSource
 ```
 
-These commands use:
+## Design Documents
 
-- the Joern server endpoint at `http://127.0.0.1:8080/query-sync`
-- the OrbStack SSH target `orb-vscode`
-- the container workspace mount `/workspace/tee-usage-scanner`
-
-There is now also a live attestation extraction path for quote-verifier style projects. For example:
-
-```bash
-go run ./cmd/tee-usage-scanner scan \
-  --src /Users/pw0rld/Desktop/TEENET/TEECheck/dcap-qvl-v038 \
-  --joern-ssh-target orb-vscode \
-  --joern-workspace /workspace/TEECheck \
-  --rule-dir rules/templates \
-  --report reports/dcap-qvl-live-attestation.json \
-  --review-dir reports/reviews-dcap-qvl-live-attestation
-```
-
-On the current `dcap-qvl-v038` sample, this emits one live attestation evidence package and zero findings, which matches the current rule template because the JavaScript verifier path does contain all required policy-binding fields.
-
-## Joern Status
-
-The repository now has a working Joern server integration for two evidence families. It currently supports:
-
-- importing a source tree through the Joern server
-- extracting `memref.buffer` candidates
-- extracting same-method `param_types` and `memref.size` checks
-- extracting quote-verifier attestation candidates with issuer-chain, signature, policy-binding, and trust-decision sites
-- emitting real evidence packages into the Go rule engine
-
-The current limitations are:
-
-- the extractor is intentionally narrow and only covers the first rule
-- the attestation extractor currently matches the JavaScript binding path in `dcap-qvl`; Rust-first extraction still needs dedicated support
-- helper functions are marked `needs_review` instead of being treated as definite findings
-- multi-file projects still rely on basename-based file resolution
-- the script stubs under `scripts/joern/` are not yet the source of truth; the live query is built in `internal/joern/client.go`
-
-## Current Demo Rule
-
-The first end-to-end rule is:
-
-- `TEE.PARAM_TYPES.MISSING_BEFORE_MEMREF_USE`
-
-It flags TA code that uses `params[i].memref` without a dominating `param_types` validation.
-
-The repository also now contains an attestation rule template for SGX/DCAP-style quote verification:
-
-- `rules/templates/attestation_qe_identity_template.json`
-
-That template introduces field-level obligations such as masked `miscselect` and `attributes` enforcement.
-
-The live extractor can already populate this template shape for quote-verifier style JavaScript code, including:
-
-- `verification_entry`
-- `identity_parsing_site`
-- `certificate_chain_validation_site`
-- `identity_signature_validation_site`
-- `policy_binding_site`
-- `trust_decision_site`
-
-## Next Implementation Targets
-
-1. Move the live Joern query out of Go and into versioned scripts under `scripts/joern/`.
-2. Replace same-method heuristics with stronger control-flow reasoning.
-3. Add a second rule for bounds validation.
-4. Add a real LLM backend behind the review bundle generator.
-5. Improve the TEE-specific hotspot ranking and trust-boundary hints in the knowledge pack.
+- `docs/MULTI_AGENT_HARNESS.md` — Overall harness design
+- `docs/ARCHITECTURE_RESERVATIONS.md` — Architectural constraints and sequencing
+- `docs/superpowers/specs/` — Feature design specs
+- `docs/superpowers/plans/` — Implementation plans

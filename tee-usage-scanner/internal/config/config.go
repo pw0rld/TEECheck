@@ -3,26 +3,42 @@ package config
 import (
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
-	Command           string
-	FixtureDir        string
-	ReportPath        string
-	ReviewDir         string
-	RuleDir           string
-	SourcePath        string
-	GraphJSONPath     string
-	PromptPath        string
-	FocusArea         string
-	GitNexusSSHTarget string
-	GitNexusScript    string
-	GitNexusRoot      string
-	JoernBin          string
-	JoernEndpoint     string
-	JoernSSHTarget    string
-	JoernWorkspace    string
+	Command         string
+	RunID           string
+	RunDir          string
+	RepoURL         string
+	LocalPath       string
+	Commit          string
+	Focus           string
+	OutputDir       string
+	KnowledgeRoot   string
+	GraphJSONPath   string
+	MaxHotspots     int
+	MaxCases        int
+	MaxFindings     int
+	AgentID         string
+	ExpertMode      string
+	ChallengeMode   string
+	VerifierMode    string
+	LLMProvider     string
+	LLMBaseURL      string
+	LLMAPIKey       string
+	LLMModel        string
+	LLMTimeoutSec   int
+	LLMTemp         float64
+	StaticTools     string
+	ArbiterMode     string
+	CuratorMode     string
+	MaxDialogRounds int
+	Target          string
+	Mode            string
 }
 
 func Parse(args []string) (Config, error) {
@@ -31,77 +47,611 @@ func Parse(args []string) (Config, error) {
 	}
 
 	switch args[0] {
-	case "scan":
-		return parseScan(args[1:])
-	case "kgpack":
-		return parseKGPack(args[1:])
+	case "collab-run":
+		return parseCollabRun(args[1:])
+	case "knowledge-init":
+		return parseKnowledgeInit(args[1:])
+	case "init-run":
+		return parseInitRun(args[1:])
+	case "preprocess":
+		return parsePreprocess(args[1:])
+	case "mapper":
+		return parseMapper(args[1:])
+	case "map":
+		return parseMap(args[1:])
+	case "hotspots":
+		return parseHotspots(args[1:])
+	case "cases":
+		return parseCases(args[1:])
+	case "expert":
+		return parseExpert(args[1:])
+	case "challenge":
+		return parseChallenge(args[1:])
+	case "verifier":
+		return parseVerifier(args[1:])
+	case "arbiter":
+		return parseArbiter(args[1:])
+	case "curator":
+		return parseCurator(args[1:])
+	case "run":
+		return parseRun(args[1:])
+	case "review":
+		return parseReview(args[1:])
+	case "feedback":
+		return parseFeedback(args[1:])
 	default:
 		return Config{}, usageError(fmt.Sprintf("unknown subcommand: %s", args[0]))
 	}
 }
 
-func parseScan(args []string) (Config, error) {
-	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+func parseCollabRun(args []string) (Config, error) {
+	fs := flag.NewFlagSet("collab-run", flag.ContinueOnError)
 	cfg := Config{
-		Command:        "scan",
-		FixtureDir:     filepath.Clean("fixtures/optee_param_types"),
-		ReportPath:     filepath.Clean("reports/findings.json"),
-		ReviewDir:      filepath.Clean("reports/reviews"),
-		RuleDir:        filepath.Clean("rules"),
-		JoernBin:       "joern",
-		JoernEndpoint:  "http://127.0.0.1:8080/query-sync",
-		JoernSSHTarget: "",
-		JoernWorkspace: "/workspace/tee-usage-scanner",
+		Command:         "collab-run",
+		Focus:           "tee",
+		OutputDir:       filepath.Clean("runs"),
+		KnowledgeRoot:   filepath.Clean("knowledge"),
+		MaxHotspots:     12,
+		MaxCases:        12,
+		ExpertMode:      "heuristic",
+		ChallengeMode:   "heuristic",
+		VerifierMode:    "heuristic",
+		ArbiterMode:     "heuristic",
+		CuratorMode:     "heuristic",
+		MaxDialogRounds: 3,
+		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		StaticTools:     "auto",
 	}
-
-	fs.StringVar(&cfg.FixtureDir, "fixture-dir", cfg.FixtureDir, "Directory containing evidence package JSON fixtures")
-	fs.StringVar(&cfg.ReportPath, "report", cfg.ReportPath, "Path to write the scanner report JSON")
-	fs.StringVar(&cfg.ReviewDir, "review-dir", cfg.ReviewDir, "Directory to write review bundles for ambiguous findings")
-	fs.StringVar(&cfg.RuleDir, "rule-dir", cfg.RuleDir, "Directory containing rule definition JSON files")
-	fs.StringVar(&cfg.SourcePath, "src", "", "Source tree to scan with Joern once the backend is available")
-	fs.StringVar(&cfg.JoernBin, "joern-bin", cfg.JoernBin, "Path to the joern executable")
-	fs.StringVar(&cfg.JoernEndpoint, "joern-endpoint", cfg.JoernEndpoint, "Joern server query-sync endpoint")
-	fs.StringVar(&cfg.JoernSSHTarget, "joern-ssh-target", cfg.JoernSSHTarget, "Optional SSH target used to reach a remote Joern server, for example orb-vscode")
-	fs.StringVar(&cfg.JoernWorkspace, "joern-workspace", cfg.JoernWorkspace, "Source root as mounted inside the Joern container or remote host")
-
+	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier; autogenerated when omitted")
+	fs.StringVar(&cfg.RepoURL, "repo-url", "", "Repository URL associated with the run")
+	fs.StringVar(&cfg.LocalPath, "local-path", "", "Local repository checkout path")
+	fs.StringVar(&cfg.Commit, "commit", "", "Repository commit or revision under review")
+	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area such as tee, runtime, attestation, or rofl")
+	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Root directory where run folders are created")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory containing raw/wiki/learned")
+	fs.StringVar(&cfg.GraphJSONPath, "graph-json", "", "Path to a GitNexus-style graph export JSON file")
+	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum number of hotspots to emit")
+	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum number of case packs to emit")
+	fs.StringVar(&cfg.ExpertMode, "expert-mode", cfg.ExpertMode, "Expert mode: heuristic or llm")
+	fs.StringVar(&cfg.ChallengeMode, "challenge-mode", cfg.ChallengeMode, "Challenger mode: heuristic or llm")
+	fs.StringVar(&cfg.VerifierMode, "verifier-mode", cfg.VerifierMode, "Verifier mode: heuristic or llm")
+	fs.StringVar(&cfg.ArbiterMode, "arbiter-mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
+	fs.StringVar(&cfg.CuratorMode, "curator-mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for LLM-backed agents")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for LLM-backed agents")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for LLM-backed agents")
+	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools to enable: auto, none, or comma-separated names (grep,semgrep)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RepoURL == "" {
+		return Config{}, fmt.Errorf("collab-run requires --repo-url")
+	}
+	if cfg.LocalPath == "" {
+		return Config{}, fmt.Errorf("collab-run requires --local-path")
+	}
+	if cfg.Commit == "" {
+		return Config{}, fmt.Errorf("collab-run requires --commit")
+	}
+	if cfg.GraphJSONPath == "" {
+		return Config{}, fmt.Errorf("collab-run requires --graph-json")
+	}
+	if err := validateLLMIfNeeded(cfg, "collab-run"); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
-func parseKGPack(args []string) (Config, error) {
-	fs := flag.NewFlagSet("kgpack", flag.ContinueOnError)
+func parseKnowledgeInit(args []string) (Config, error) {
+	fs := flag.NewFlagSet("knowledge-init", flag.ContinueOnError)
 	cfg := Config{
-		Command:           "kgpack",
-		ReportPath:        filepath.Clean("reports/knowledge-pack.json"),
-		PromptPath:        filepath.Clean("reports/knowledge-pack.md"),
-		FocusArea:         "tee",
-		GitNexusSSHTarget: "",
-		GitNexusScript:    filepath.Clean("scripts/gitnexus/export_graph.mjs"),
-		GitNexusRoot:      "",
+		Command:       "knowledge-init",
+		KnowledgeRoot: filepath.Clean("knowledge"),
 	}
-
-	fs.StringVar(&cfg.GraphJSONPath, "graph-json", "", "Path to a GitNexus graph export JSON file; when omitted, kgpack can create one if --src and --gitnexus-ssh-target are provided")
-	fs.StringVar(&cfg.SourcePath, "src", "", "Optional source tree associated with the graph export")
-	fs.StringVar(&cfg.ReportPath, "report", cfg.ReportPath, "Path to write the knowledge pack JSON")
-	fs.StringVar(&cfg.PromptPath, "prompt", cfg.PromptPath, "Path to write the markdown prompt pack")
-	fs.StringVar(&cfg.FocusArea, "focus", cfg.FocusArea, "Audit focus for heuristic compression, for example tee")
-	fs.StringVar(&cfg.GitNexusSSHTarget, "gitnexus-ssh-target", cfg.GitNexusSSHTarget, "Optional SSH target for a remote GitNexus host, for example orb-vscode")
-	fs.StringVar(&cfg.GitNexusScript, "gitnexus-script", cfg.GitNexusScript, "Path to the GitNexus export helper script visible from the remote host")
-	fs.StringVar(&cfg.GitNexusRoot, "gitnexus-root", cfg.GitNexusRoot, "Optional remote GitNexus repository root passed through to the export helper")
-
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory containing raw/wiki/learned")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	if cfg.GraphJSONPath == "" && (cfg.SourcePath == "" || cfg.GitNexusSSHTarget == "") {
-		return Config{}, fmt.Errorf("kgpack requires --graph-json, or both --src and --gitnexus-ssh-target")
-	}
+	return cfg, nil
+}
 
+func parseInitRun(args []string) (Config, error) {
+	fs := flag.NewFlagSet("init-run", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "init-run",
+		Focus:         "tee",
+		OutputDir:     filepath.Clean("runs"),
+		KnowledgeRoot: filepath.Clean("knowledge"),
+	}
+	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier; autogenerated when omitted")
+	fs.StringVar(&cfg.RepoURL, "repo-url", "", "Repository URL associated with the run")
+	fs.StringVar(&cfg.LocalPath, "local-path", "", "Local repository checkout path")
+	fs.StringVar(&cfg.Commit, "commit", "", "Repository commit or revision under review")
+	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area such as tee, runtime, attestation, or rofl")
+	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Root directory where run folders are created")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory containing raw/wiki/learned")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepoURL == "" {
+		return Config{}, fmt.Errorf("init-run requires --repo-url")
+	}
+	if cfg.LocalPath == "" {
+		return Config{}, fmt.Errorf("init-run requires --local-path")
+	}
+	if cfg.Commit == "" {
+		return Config{}, fmt.Errorf("init-run requires --commit")
+	}
+	return cfg, nil
+}
+
+func parsePreprocess(args []string) (Config, error) {
+	fs := flag.NewFlagSet("preprocess", flag.ContinueOnError)
+	cfg := Config{Command: "preprocess"}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("preprocess requires --run-dir")
+	}
+	return cfg, nil
+}
+
+func parseMapper(args []string) (Config, error) {
+	fs := flag.NewFlagSet("mapper", flag.ContinueOnError)
+	cfg := Config{
+		Command:     "mapper",
+		MaxHotspots: 12,
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.GraphJSONPath, "graph-json", "", "Path to a GitNexus-style graph export JSON file")
+	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum number of hotspots to emit")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("mapper requires --run-dir")
+	}
+	if cfg.GraphJSONPath == "" {
+		return Config{}, fmt.Errorf("mapper requires --graph-json")
+	}
+	return cfg, nil
+}
+
+func parseMap(args []string) (Config, error) {
+	fs := flag.NewFlagSet("map", flag.ContinueOnError)
+	cfg := Config{Command: "map"}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.GraphJSONPath, "graph-json", "", "Path to a GitNexus-style graph export JSON file")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("map requires --run-dir")
+	}
+	if cfg.GraphJSONPath == "" {
+		return Config{}, fmt.Errorf("map requires --graph-json")
+	}
+	return cfg, nil
+}
+
+func parseHotspots(args []string) (Config, error) {
+	fs := flag.NewFlagSet("hotspots", flag.ContinueOnError)
+	cfg := Config{
+		Command:     "hotspots",
+		MaxHotspots: 12,
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum number of hotspots to emit")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("hotspots requires --run-dir")
+	}
+	return cfg, nil
+}
+
+func parseCases(args []string) (Config, error) {
+	fs := flag.NewFlagSet("cases", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "cases",
+		MaxCases:      12,
+		KnowledgeRoot: filepath.Clean("knowledge"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory containing raw/wiki/learned")
+	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum number of case packs to emit")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("cases requires --run-dir")
+	}
+	return cfg, nil
+}
+
+func parseExpert(args []string) (Config, error) {
+	fs := flag.NewFlagSet("expert", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "expert",
+		AgentID:       "expert-001",
+		ExpertMode:    "heuristic",
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable expert agent identifier")
+	fs.StringVar(&cfg.ExpertMode, "mode", cfg.ExpertMode, "Expert mode: heuristic or llm")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the expert agent")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the expert agent")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the expert agent")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("expert requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.ExpertMode, cfg, "expert"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseChallenge(args []string) (Config, error) {
+	fs := flag.NewFlagSet("challenge", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "challenge",
+		AgentID:       "challenger-001",
+		ChallengeMode: "heuristic",
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable challenger agent identifier")
+	fs.StringVar(&cfg.ChallengeMode, "mode", cfg.ChallengeMode, "Challenger mode: heuristic or llm")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the challenger agent")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the challenger agent")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the challenger agent")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("challenge requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.ChallengeMode, cfg, "challenge"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseVerifier(args []string) (Config, error) {
+	fs := flag.NewFlagSet("verifier", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "verifier",
+		AgentID:       "verifier-001",
+		VerifierMode:  "heuristic",
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		StaticTools:   "auto",
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable verifier agent identifier")
+	fs.StringVar(&cfg.VerifierMode, "mode", cfg.VerifierMode, "Verifier mode: heuristic or llm")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the verifier agent")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the verifier agent")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the verifier agent")
+	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools to enable: auto, none, or comma-separated names")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("verifier requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.VerifierMode, cfg, "verifier"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseArbiter(args []string) (Config, error) {
+	fs := flag.NewFlagSet("arbiter", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "arbiter",
+		AgentID:       "arbiter-001",
+		ArbiterMode:   "heuristic",
+		MaxFindings:   0,
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable arbiter agent identifier")
+	fs.StringVar(&cfg.ArbiterMode, "mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
+	fs.IntVar(&cfg.MaxFindings, "max-findings", cfg.MaxFindings, "Maximum number of findings to emit; 0 means all")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the arbiter agent")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("arbiter requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.ArbiterMode, cfg, "arbiter"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseCurator(args []string) (Config, error) {
+	fs := flag.NewFlagSet("curator", flag.ContinueOnError)
+	cfg := Config{
+		Command:         "curator",
+		AgentID:         "curator-001",
+		CuratorMode:     "heuristic",
+		KnowledgeRoot:   filepath.Clean("knowledge"),
+		MaxDialogRounds: 3,
+		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
+	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable curator agent identifier")
+	fs.StringVar(&cfg.CuratorMode, "mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("curator requires --run-dir")
+	}
+	if err := validateAgentLLM(cfg.CuratorMode, cfg, "curator"); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseReview(args []string) (Config, error) {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "review",
+		KnowledgeRoot: filepath.Clean("knowledge"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("review requires --run-dir")
+	}
+	return cfg, nil
+}
+
+func parseFeedback(args []string) (Config, error) {
+	fs := flag.NewFlagSet("feedback", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "feedback",
+		KnowledgeRoot: filepath.Clean("knowledge"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("feedback requires --run-dir")
+	}
+	return cfg, nil
+}
+
+func parseRun(args []string) (Config, error) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	cfg := Config{
+		Command:         "run",
+		Focus:           "tee",
+		OutputDir:       filepath.Clean("runs"),
+		KnowledgeRoot:   filepath.Clean("knowledge"),
+		MaxHotspots:     12,
+		MaxCases:        12,
+		MaxDialogRounds: 3,
+		Mode:            "heuristic",
+		StaticTools:     "auto",
+		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Agent mode: heuristic or llm")
+	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
+	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
+	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")
+	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root")
+	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum case packs")
+	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum hotspots")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum dialog rounds")
+	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
+	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
+	// Extract target (non-flag arg) before parsing so it can appear anywhere
+	var flagArgs []string
+	var target string
+	for i := 0; i < len(args); i++ {
+		if !strings.HasPrefix(args[i], "-") && target == "" {
+			// Check it's not a value for the previous flag
+			if i > 0 && strings.HasPrefix(args[i-1], "-") && !strings.Contains(args[i-1], "=") {
+				flagArgs = append(flagArgs, args[i])
+			} else {
+				target = args[i]
+			}
+		} else {
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	if err := fs.Parse(flagArgs); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	// Also check remaining args after flag parse
+	if target == "" {
+		remaining := fs.Args()
+		if len(remaining) > 0 {
+			target = remaining[0]
+		}
+	}
+	if target == "" {
+		return Config{}, fmt.Errorf("run requires a target (URL or local path)")
+	}
+	cfg.Target = target
+	if cfg.Mode == "llm" {
+		cfg.ExpertMode = "llm"
+		cfg.ChallengeMode = "llm"
+		cfg.VerifierMode = "llm"
+		cfg.ArbiterMode = "llm"
+		cfg.CuratorMode = "llm"
+		if err := validateProviderConfig(cfg, "run"); err != nil {
+			return Config{}, err
+		}
+	}
 	return cfg, nil
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  tee-usage-scanner scan [--fixture-dir DIR] [--report FILE] [--review-dir DIR] [--rule-dir DIR]\n  tee-usage-scanner scan --src PATH [--joern-endpoint URL] [--joern-ssh-target HOST] [--joern-workspace DIR] [--report FILE]\n  tee-usage-scanner kgpack --graph-json FILE [--src PATH] [--focus NAME] [--report FILE] [--prompt FILE]\n  tee-usage-scanner kgpack --src PATH --gitnexus-ssh-target HOST [--graph-json FILE] [--focus NAME] [--report FILE] [--prompt FILE]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--mode heuristic|llm] [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--mode heuristic|llm] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+}
+
+func validateLLMIfNeeded(cfg Config, context string) error {
+	if normalizeMode(cfg.ExpertMode) != "llm" &&
+		normalizeMode(cfg.ChallengeMode) != "llm" &&
+		normalizeMode(cfg.VerifierMode) != "llm" &&
+		normalizeMode(cfg.ArbiterMode) != "llm" &&
+		normalizeMode(cfg.CuratorMode) != "llm" {
+		return nil
+	}
+	return validateProviderConfig(cfg, context)
+}
+
+func validateAgentLLM(mode string, cfg Config, context string) error {
+	if normalizeMode(mode) != "llm" {
+		return nil
+	}
+	return validateProviderConfig(cfg, context)
+}
+
+func validateProviderConfig(cfg Config, context string) error {
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.LLMBaseURL == "" {
+		return fmt.Errorf("%s requires --llm-base-url or TEECHECK_LLM_BASE_URL when using llm mode", context)
+	}
+	if cfg.LLMAPIKey == "" {
+		return fmt.Errorf("%s requires --llm-api-key or TEECHECK_LLM_API_KEY when using llm mode", context)
+	}
+	if cfg.LLMModel == "" {
+		return fmt.Errorf("%s requires --llm-model or TEECHECK_LLM_MODEL when using llm mode", context)
+	}
+	return nil
+}
+
+func normalizeMode(value string) string {
+	if value == "" {
+		return "heuristic"
+	}
+	return value
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func envInt(defaultValue int, keys ...string) int {
+	for _, key := range keys {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func envFloat(defaultValue float64, keys ...string) float64 {
+	for _, key := range keys {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
 }

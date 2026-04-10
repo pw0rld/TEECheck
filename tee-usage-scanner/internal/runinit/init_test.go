@@ -1,0 +1,64 @@
+package runinit
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+)
+
+func TestRunCreatesManifestAndStageDirs(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.Config{
+		Command:   "init-run",
+		RunID:     "oasis-runtime-001",
+		RepoURL:   "https://github.com/oasisprotocol/oasis-sdk",
+		LocalPath: "/tmp/oasis-sdk",
+		Commit:    "8a7f441",
+		Focus:     "runtime",
+		OutputDir: tmp,
+	}
+
+	runRoot, err := Run(cfg, time.Date(2026, 4, 1, 10, 0, 0, 0, time.FixedZone("+0800", 8*3600)))
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if runRoot != filepath.Join(tmp, "oasis-runtime-001") {
+		t.Fatalf("unexpected run root: %s", runRoot)
+	}
+
+	for _, rel := range []string{
+		"01_profile",
+		"01_repo_map",
+		"02_hotspots",
+		"03_cases",
+		"04_expert",
+		"05_challenger",
+		"06_verifier",
+		"07_arbiter",
+		"07_arbiter/packets",
+	} {
+		if _, err := os.Stat(filepath.Join(runRoot, rel)); err != nil {
+			t.Fatalf("expected stage dir %s: %v", rel, err)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(runRoot, "00_manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest artifacts.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	if manifest.RunID != "oasis-runtime-001" {
+		t.Fatalf("unexpected run id: %s", manifest.RunID)
+	}
+	if manifest.Focus != "runtime" {
+		t.Fatalf("unexpected focus: %s", manifest.Focus)
+	}
+}

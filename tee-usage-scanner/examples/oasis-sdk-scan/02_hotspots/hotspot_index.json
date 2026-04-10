@@ -1,0 +1,78 @@
+{
+  "schema_version": "teecheck.hotspot_index.v1",
+  "run_id": "oasis-full-001",
+  "hotspots": [
+    {
+      "hotspot_id": "hotspot-001",
+      "kind": "runtime_entry",
+      "priority": "high",
+      "paths": [
+        "tests/runtimes/components-rofl/src/main.rs"
+      ],
+      "why_selected": [
+        "boundary candidate: runtime_entry (ingress)",
+        "runtime-facing execution entry boundary"
+      ]
+    },
+    {
+      "hotspot_id": "hotspot-002",
+      "kind": "runtime_entry",
+      "priority": "high",
+      "paths": [
+        "runtime-sdk-macros/src/error_derive.rs"
+      ],
+      "why_selected": [
+        "boundary candidate: runtime_entry (ingress)",
+        "runtime-facing execution entry boundary"
+      ]
+    },
+    {
+      "hotspot_id": "hotspot-003",
+      "kind": "runtime_entry",
+      "priority": "high",
+      "paths": [
+        "runtime-sdk-macros/src/generators.rs"
+      ],
+      "why_selected": [
+        "boundary candidate: runtime_entry (ingress)",
+        "runtime-facing execution entry boundary"
+      ]
+    },
+    {
+      "hotspot_id": "hotspot-004",
+      "kind": "runtime_entry",
+      "priority": "high",
+      "paths": [
+        "runtime-sdk-macros/src/module_derive/module.rs"
+      ],
+      "why_selected": [
+        "boundary candidate: runtime_entry (ingress)",
+        "runtime-facing execution entry boundary"
+      ]
+    },
+    {
+      "hotspot_id": "hotspot-005",
+      "kind": "host_interface",
+      "priority": "high",
+      "paths": [
+        "tests/e2e/txgen/txgen.go"
+      ],
+      "why_selected": [
+        "boundary candidate: host_interface (ingress)",
+        "host-facing or client-facing boundary"
+      ]
+    },
+    {
+      "hotspot_id": "hotspot-006",
+      "kind": "key_management",
+      "priority": "high",
+      "paths": [
+        "runtime-sdk/src/crypto/signature/mod.rs"
+      ],
+      "why_selected": [
+        "boundary candidate: key_management (internal)",
+        "key or secret handling boundary"
+      ]
+    }
+  ]
+}

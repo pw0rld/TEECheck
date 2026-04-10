@@ -1,0 +1,41 @@
+{
+  "schema_version": "teecheck.challenge.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:003",
+  "agent_id": "reviewer-001",
+  "exploit_narrative": "The expert is likely over-indexing on missing evidence in a helper file and underestimating the chance that this is not the real trust boundary at all. From an attacker perspective, the interesting question is whether `runtime-sdk-macros/src/generators.rs` emits ingress wrappers or only generic token plumbing. The visible snippet strongly suggests the latter: `wrap_in_const` is scope hygiene, and `sdk_crate_path()` is crate-resolution support. Neither is a natural place to enforce caller binding, authorization, or boundary revalidation. So the claimed issue may be a boundary-mapping error rather than a missing-control bug. That said, macros are dangerous exactly because security-critical logic can be hidden in generated code. If this file also contains generator routines that expand dispatch/entry wrappers, a subtle omission could systematically affect every runtime method: generated entrypoints might deserialize external input and dispatch directly into privileged handlers without re-checking origin, call format, or fail-closed semantics. In that scenario, exploitation would be broad and architectural, because developers would trust the macro to synthesize safe ingress code. But based on the provided snippet alone, an attacker cannot yet point to an actual exploit path; the stronger attack is on the review assumption that this file is the enforcement point.",
+  "counter_arguments": [
+    "The provided code is plainly utility-level macro support, not direct runtime ingress handling.",
+    "Absence of visible checks in helper functions is not evidence that generated entry wrappers omit those checks.",
+    "Authorization and caller binding may be enforced in the runtime core after macro-generated dispatch, making this file boundary-adjacent rather than boundary-owning.",
+    "Trust-boundary obligations in TEE systems are often split across layers: host call decoding, transaction/check layer, dispatcher, and method context construction.",
+    "A proc-macro crate cannot itself execute runtime policy; it only emits code, so the real question is what expansions are produced at call sites, which is not shown.",
+    "The tool hits around `enum_binding` and `match #enum_binding` hint at enum dispatch generation, but dispatch matching alone does not imply a missing security check.",
+    "If generated methods receive a pre-validated context object from lower layers, caller binding may already be established before any macro-emitted code runs.",
+    "The case may be mislabeled because the selected file appears to contain generic generators rather than the runtime-facing boundary implementation."
+  ],
+  "remaining_questions": [
+    "Which macro in `runtime-sdk-macros` actually generates runtime entry/dispatch code, and is it in this file or another module?",
+    "What does the full body of `generators.rs` contain beyond the snippet, especially around the `enum_binding` match sites?",
+    "Where is external input first deserialized and converted into runtime call enums or method invocations?",
+    "Is caller identity bound in a context object constructed before generated dispatch runs?",
+    "Are authorization checks expected per-method in generated wrappers, or centrally in the runtime dispatcher?",
+    "What does the expanded macro output look like for a representative runtime method?",
+    "Are there fail-closed error paths for malformed calls, unauthorized callers, and unexpected variants in generated code?",
+    "Does surrounding context show that this macro only emits trait impl boilerplate and not security-relevant ingress wrappers?",
+    "Is there surrounding context that changes the actual trust boundary?"
+  ],
+  "suggested_checks": [
+    "Inspect the full `runtime-sdk-macros/src/generators.rs` file, especially functions around the `enum_binding` references.",
+    "Search the macro crate for proc-macros related to runtime entry, dispatch, method handlers, or call enums.",
+    "Generate expanded code with `cargo expand` for a sample runtime using these macros and review the actual ingress wrappers.",
+    "Trace the end-to-end call path from external transaction/host input to runtime method invocation to identify the true trust boundary.",
+    "Verify where caller/origin/context is created and whether generated code receives an already-authenticated caller binding.",
+    "Check whether malformed or unknown call variants are rejected fail-closed in generated match arms.",
+    "Review runtime core files outside the macro crate for centralized authorization, dispatch gating, and revalidation logic.",
+    "Confirm whether the boundary classification for this case should point to generated output or a downstream dispatcher instead of this helper file.",
+    "runtime-sdk-macros/src/generators.rs:46 enum_binding: \u0026Ident,",
+    "runtime-sdk-macros/src/generators.rs:93 match #enum_binding {"
+  ],
+  "exploitability": "theoretical",
+  "reviewer_stance": "skeptical of the expert hypothesis; likely boundary misidentification unless expanded/generated runtime entry code shows missing checks"
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "teecheck.verification_memo.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:003",
+  "agent_id": "reviewer-001",
+  "status": "inconclusive",
+  "checks_run": [
+    "Reviewed case metadata, expert hypothesis, challenger objections, and absence of static-check hits",
+    "Compared the described snippet contents in runtime-sdk-macros/src/generators.rs against the claimed boundary obligations",
+    "Assessed whether the visible helpers (wrap_in_const, sdk_crate_path) are plausible enforcement points for runtime ingress security controls",
+    "Evaluated whether available evidence establishes generators.rs as the actual runtime trust-boundary implementation site",
+    "Attempted follow-up clarification via agent queries; no additional evidence was obtained because queried agents were unavailable"
+  ],
+  "confirmed_facts": [
+    "The case targets runtime-sdk-macros/src/generators.rs and there are no static check findings for this case.",
+    "No target symbols were identified, which limits confidence about the exact security-relevant code path in the file.",
+    "The described visible snippet contains macro helper utilities, including wrap_in_const and the start of sdk_crate_path().",
+    "wrap_in_const, as described, only wraps generated tokens in an anonymous const block and does not itself evidence trust-boundary revalidation, caller binding, authorization, or fail-closed handling.",
+    "From the material provided, there is no direct evidence that generators.rs is where external input first crosses into trusted runtime execution."
+  ],
+  "contradictions": [
+    "The expert hypothesis points to potentially missing boundary obligations at this generator location, but the available snippet evidence only shows utility-level macro support rather than a demonstrated ingress wrapper or dispatch boundary implementation.",
+    "Absence of visible checks in the helper snippet is not sufficient evidence that generated runtime entry code omits those checks."
+  ],
+  "notes": [
+    "The challenger's core objection is sustained: the currently shown code is more consistent with generic proc-macro plumbing than with a proven runtime-facing trust boundary.",
+    "At the same time, the expert's broader caution remains reasonable: macro crates can hide security-critical generated logic, and missing controls could exist elsewhere in this file or in macro expansions not provided here.",
+    "Because no further context, full-file contents, macro expansions, or downstream enforcement locations were produced, the record is insufficient to either corroborate a vulnerability or dismiss the concern conclusively.",
+    "Accordingly, the correct arbitration outcome is inconclusive."
+  ]
+}

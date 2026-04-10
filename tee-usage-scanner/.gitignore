@@ -1,12 +1,5 @@
-__pycache__/
-.pytest_cache/
-.venv/
-artifacts/
-reports/
-workspace/
-*.pyc
-bin/
-dist/
-*.test
-.gocache/
 .DS_Store
+.gocache/
+runs/
+teecheck
+*.exe

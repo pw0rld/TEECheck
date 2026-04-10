@@ -1,0 +1,70 @@
+{
+  "schema_version": "teecheck.hypothesis.v1",
+  "case_id": "oasis-sdk@b559f59:tee:boundary:004",
+  "agent_id": "scanner-001",
+  "title": "Potential trust-boundary obligations unclear at runtime entry macro boundary",
+  "summary": "The selected file is a procedural macro deriver (`runtime-sdk-macros/src/module_derive/module.rs`) associated with a high-priority runtime-entry boundary candidate, but the provided snippet only shows macro preprocessing scaffolding and does not expose any runtime-facing authorization, caller binding, revalidation, or failure-handling logic. Because this location may generate code used at an ingress boundary, the key concern is whether generated entry handling revalidates untrusted inputs and binds authorization to the authenticated caller. Based on the visible code alone, this cannot be confirmed.",
+  "suspected_issue": "Possible missing or unverified trust-boundary protections in code generated for a runtime-facing execution entrypoint: caller identity/authorization checks, trust-boundary revalidation of ingress data, and secure failure behavior are not visible in the provided macro snippet.",
+  "missing_obligations": [
+    "Trust-boundary revalidation at the runtime ingress/generated entrypoint is not demonstrated in the provided code.",
+    "Authorization and caller binding are not visible or verifiable from the macro preprocessing snippet.",
+    "Secure failure behavior for invalid/unauthorized entry conditions is not shown in the provided excerpt.",
+    "Need confirmation whether this macro emits boundary checks elsewhere or relies on surrounding runtime framework guarantees."
+  ],
+  "supporting_facts": [
+    "The case is explicitly tagged as a boundary candidate: `runtime_entry (ingress) | runtime-facing execution entry boundary`.",
+    "Expected obligations listed for this case are: `trust-boundary revalidation, authorization and caller binding, secure failure behavior`.",
+    "Target file is `runtime-sdk-macros/src/module_derive/module.rs`, which appears to be a procedural macro/code-generation component rather than direct runtime logic.",
+    "The snippet only shows `DeriveModule` state and a `preprocess` method skeleton, with no visible authentication, authorization, caller binding, input validation, or error handling logic.",
+    "Tool hits are `none`, so there is no corroborating evidence of implemented protections in the inspected material.",
+    "Open question states: `Is there surrounding context that changes the actual trust boundary?`, indicating boundary semantics may depend on generated code or external framework context."
+  ],
+  "knowledge_hints": [
+    {
+      "title": "Authorization And Caller Binding",
+      "path": "knowledge/wiki/patterns/authorization-caller-binding.md",
+      "tags": [
+        "wiki",
+        "patterns",
+        "authorization",
+        "caller",
+        "binding",
+        "md",
+        "key"
+      ],
+      "reason": "title/path match: authorization and caller binding; body match: authorization and caller binding; title/path match: authorization; tag match: authorization; body match: authorization; title/path match: caller; tag match: caller; body match: caller; title/path match: binding; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Trust Boundary Revalidation",
+      "path": "knowledge/wiki/obligations/trust-boundary-revalidation.md",
+      "tags": [
+        "wiki",
+        "obligations",
+        "trust",
+        "boundary",
+        "revalidation",
+        "md",
+        "caller",
+        "binding",
+        "key"
+      ],
+      "reason": "title/path match: boundary; tag match: boundary; body match: boundary; title/path match: revalidation; tag match: revalidation; body match: revalidation; body match: bridge; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    },
+    {
+      "title": "Knowledge Layer",
+      "path": "knowledge/README.md",
+      "tags": [
+        "readme",
+        "md",
+        "attestation",
+        "authorization",
+        "boundary",
+        "caller",
+        "binding"
+      ],
+      "reason": "tag match: boundary; body match: boundary; body match: tee; body match: revalidation; tag match: authorization; body match: authorization; tag match: caller; body match: caller; tag match: binding; body match: binding"
+    }
+  ],
+  "confidence": "medium",
+  "needs_verification": true
+}
