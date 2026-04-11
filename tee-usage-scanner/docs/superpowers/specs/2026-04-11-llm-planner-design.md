@@ -150,7 +150,7 @@ LLM and do not consume a round.
 | `reverse_trace(file, symbol, depth)` | BFS backward from a sink | tree-sitter call-site search, depth cap 3 |
 | `legacy_keyword_scan()` | Run existing mapper + hotspots | Wraps current code, returns top-16 |
 | `repomix_summarize(path)` | Subtree repomix digest | Wraps existing `internal/repomix` |
-| `sink_catalog_lookup(category)` | Fetch a sink category definition | Reads `knowledge/sinks/rust.json` |
+| `sink_catalog_lookup(scope)` | Fetch catalog headers, a full group, or a single category. `scope` is `"*"` / `"<group_id>"` / `"<group_id>.<category_id>"` | Reads `knowledge/sinks/rust.json` |
 | `done(summary, candidates)` | Terminate and emit bundle | Final action |
 
 Explicitly deferred to v2+: LSP (rust-analyzer), Joern, CodeQL, custom
@@ -185,61 +185,143 @@ knowledge/sinks/
 
 ### 5.2 Schema (`rust.json`)
 
+v1 scope is deliberately narrow: **attestation and key lifecycle only**.
+Memory safety, host leakage, panic/debug smells, and generic runtime state
+mutation are explicitly out of scope for this catalog. The LLM can still use
+`ripgrep` or `read_file` to investigate anything outside the catalog; the
+catalog just focuses the reverse-trace effort.
+
+Categories are organized into **groups** so the LLM can fetch a table of
+contents first and then drill down. Three groups in v1: `attestation`,
+`tee_platform_syscalls`, `key_lifecycle`. Thirteen categories total.
+
 ```json
 {
-  "schema_version": "teecheck.sink_catalog.v1",
+  "schema_version": "teecheck.sink_catalog.v2",
   "language": "rust",
-  "categories": [
+  "groups": [
     {
-      "id": "ffi_extern",
-      "description": "FFI boundary into C/assembly — arguments are untrusted",
-      "match": {
-        "kind": "syntax",
-        "patterns": ["extern \"C\"", "#[no_mangle]"]
-      },
-      "severity_hint": "high"
+      "id": "attestation",
+      "description": "Report/quote generation, verification, identity/TCB checks, and freshness — the full remote-attestation chain",
+      "categories": [
+        {
+          "id": "attestation_report_creation",
+          "description": "Quote/report generation and report_data field binding. Audit: what data (session pk, nonce, challenge) is bound into the report.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["sgx_create_report", "sgx_quote_*", "sgx_qe_*", "*::create_report*", "*::generate_quote*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_verification_and_trust",
+          "description": "Verification entry points and the trust decisions made after verification. The exact trust-decision site is project-specific and must be located by reverse_trace from the verify call.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*::verify_quote*", "*::verify_report*", "*::verify_attestation*", "*::verify_evidence*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_identity_and_tcb_checks",
+          "description": "MRENCLAVE/MRSIGNER equality checks and TCB/QEIdentity/collateral/CRL validation. Audit: comparison targets correct, expiration/revocation honored.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*MRENCLAVE*", "*MRSIGNER*", "*::check_tcb*", "*::verify_tcb*", "*::qe_identity*", "*::collateral*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_freshness",
+          "description": "Nonce binding, challenge-response flow, time-window checks. Audit: replay resistance.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*::nonce*", "*::challenge*", "*::freshness*"]
+          },
+          "severity_hint": "high"
+        }
+      ]
     },
     {
-      "id": "unsafe_block",
-      "description": "Arbitrary unsafe — pointer ops, uninit memory, raw syscalls",
-      "match": { "kind": "syntax", "patterns": ["unsafe {", "unsafe fn"] },
-      "severity_hint": "medium"
+      "id": "tee_platform_syscalls",
+      "description": "Enclave entry/exit and SGX platform services — trust boundary crossings",
+      "categories": [
+        {
+          "id": "sgx_ecall",
+          "description": "Enclave entry — arguments are untrusted host input.",
+          "match": { "kind": "symbol", "symbols": ["sgx_tstd::*", "sgx_urts::*", "#[ecall]"] },
+          "severity_hint": "high"
+        },
+        {
+          "id": "sgx_ocall",
+          "description": "Out-of-enclave calls — return values are host-controlled and must be re-validated inside the enclave.",
+          "match": { "kind": "symbol", "symbols": ["*::ocall_*", "sgx_ocall_*"] },
+          "severity_hint": "high"
+        },
+        {
+          "id": "sgx_platform_services",
+          "description": "SGX platform services including QE, RA, and AESM interaction. Audit: error and degradation paths.",
+          "match": { "kind": "symbol", "symbols": ["sgx_qe_*", "sgx_ra_*", "aesm_*", "*::aesm*"] },
+          "severity_hint": "medium"
+        }
+      ]
     },
     {
-      "id": "sgx_ecall",
-      "description": "Intel SGX enclave entry/exit",
-      "match": {
-        "kind": "symbol",
-        "symbols": ["sgx_tstd::*", "sgx_urts::*", "sgx_create_report", "sgx_verify_report"]
-      },
-      "severity_hint": "high"
-    },
-    {
-      "id": "attestation_verify",
-      "description": "Quote / report verification entry points",
-      "match": {
-        "kind": "symbol",
-        "symbols": ["*::verify_quote*", "*::verify_report*", "*::verify_attestation*"]
-      },
-      "severity_hint": "high"
-    },
-    {
-      "id": "crypto_sign_seal",
-      "description": "Signing / sealing / key derivation",
-      "match": { "kind": "symbol", "symbols": ["*::sign*", "*::seal*", "*::derive_key*"] },
-      "severity_hint": "medium"
-    },
-    {
-      "id": "state_mutation",
-      "description": "On-chain state writes (runtime module storage)",
-      "match": { "kind": "symbol", "symbols": ["Store::*::insert", "Store::*::set", "*::commit"] },
-      "severity_hint": "medium"
-    },
-    {
-      "id": "rofl_host_bridge",
-      "description": "ROFL app <-> host socket / channel",
-      "match": { "kind": "symbol", "symbols": ["appd::*", "*::socket*"] },
-      "severity_hint": "high"
+      "id": "key_lifecycle",
+      "description": "Key generation, derivation, sealing, signature ops, AEAD, and secret hygiene — complete key lifecycle audit",
+      "categories": [
+        {
+          "id": "key_generation",
+          "description": "Key pair / secret key generation and the RNG source used. In a TEE the RNG must be attested (OsRng/getrandom with platform hardware entropy), never thread_rng or seeded PRNGs.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["KeyPair::generate", "*::SecretKey::random", "*::generate_keypair*", "OsRng", "thread_rng", "getrandom::*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "key_derivation_and_exchange",
+          "description": "HKDF, KDF, derive_key, ECDH, X25519, key_agreement. Audit: context/info/salt binding prevents cross-context collision; peer identity is bound to an attested key.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*::derive_key*", "*::hkdf*", "*::kdf*", "*::key_agreement*", "*::diffie_hellman*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "key_sealing",
+          "description": "SGX sealing, runtime sealing, and unsealing. Audit: sealing policy binds to MRENCLAVE vs MRSIGNER appropriately; unseal results are re-validated.",
+          "match": { "kind": "symbol", "symbols": ["sgx_seal_data", "sgx_unseal_data", "*::seal*", "*::unseal*"] },
+          "severity_hint": "high"
+        },
+        {
+          "id": "signature_ops",
+          "description": "Signing and signature verification. Audit: signing key source is attested/sealed; verification failure paths cannot fall through; verifying key is trusted.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*::sign", "*::sign_message*", "*::verify_signature*", "ed25519::*", "k256::*", "secp256k1::*"]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "aead_encryption",
+          "description": "AEAD seal/open (ChaCha20-Poly1305, AES-GCM, etc.). Audit: nonce uniqueness, key lifetime, associated data binding.",
+          "match": {
+            "kind": "symbol",
+            "symbols": ["*::seal_in_place*", "*::open_in_place*", "chacha20poly1305::*", "aes_gcm::*"]
+          },
+          "severity_hint": "medium"
+        },
+        {
+          "id": "secret_hygiene",
+          "description": "Zeroize traits, secret wrapper types, and absence thereof. Audit: secret types lack Zeroize/ZeroizeOnDrop, or expose themselves via Debug/Display/serde.",
+          "match": {
+            "kind": "syntax",
+            "patterns": ["Zeroize", "ZeroizeOnDrop", "Secret<", "secrecy::", "#[derive(Debug)]"]
+          },
+          "severity_hint": "medium"
+        }
+      ]
     }
   ]
 }
@@ -247,15 +329,21 @@ knowledge/sinks/
 
 Two matching modes:
 
-- **`syntax`** — tree-sitter node text match (e.g. unsafe block detection)
+- **`syntax`** — tree-sitter node text match (e.g. `Zeroize` presence)
 - **`symbol`** — symbol name glob (e.g. `*::verify_quote*`)
+
+Several category match patterns are intentionally loose (e.g. `attestation_verification_and_trust`). Precise location of
+trust-decision sites and callers is left to the LLM via `reverse_trace`, not baked into the catalog.
 
 ### 5.3 LLM Interaction with the Catalog
 
-The catalog is an audit checklist *for the LLM*, not an auto-executed rule
-set. The LLM calls `sink_catalog_lookup(category_id)` or
-`sink_catalog_lookup(*)`, sees the definitions, and decides which sinks to
-reverse-trace via `reverse_trace(file, symbol, depth)`.
+The catalog is an audit checklist *for the LLM*, not an auto-executed rule set. `sink_catalog_lookup` supports three scope levels:
+
+- `sink_catalog_lookup("*")` — returns group ids + descriptions only (~300 tokens). LLM's first call to see the table of contents.
+- `sink_catalog_lookup("attestation")` — returns a full group with all its categories (~1.5k tokens). Used once the LLM decides a group is relevant.
+- `sink_catalog_lookup("attestation.quote_verification")` — returns a single category definition (~300 tokens). Used for targeted drill-down.
+
+Typical LLM flow: call `*` once → pick one or two groups → call the group(s) → pick categories to reverse-trace → call `reverse_trace(file, symbol, depth)` against the matched symbols to locate real trust-decision sites.
 
 ### 5.4 LLM-Proposed Sinks
 
