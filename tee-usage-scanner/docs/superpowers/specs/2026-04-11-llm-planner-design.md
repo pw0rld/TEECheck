@@ -4,6 +4,7 @@
 **Date**: 2026-04-11
 **Author**: Claude (with pw0rld)
 **Supersedes**: Keyword-scoring hotspot selection in `internal/repomap/run.go` and `internal/hotspots/run.go`
+**Chinese version**: `2026-04-11-llm-planner-design.zh-CN.md`
 
 ## 1. Motivation
 
