@@ -32,8 +32,14 @@ func TestResolvePath_AcceptsCurrentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.HasPrefix(got, dir) {
-		t.Fatalf("got %q, want prefix %q", got, dir)
+	// ResolvePath(dir, ".") must return exactly dir (after any OS-level
+	// normalization from filepath.Abs), not a prefix of it.
+	want, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
@@ -125,5 +131,37 @@ func TestResolvePath_AllowsNonExistentPath(t *testing.T) {
 	want := filepath.Join(dir, "does", "not", "exist.txt")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolvePath_RejectsNullByte(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := actions.ResolvePath(dir, "a\x00b")
+	if err == nil {
+		t.Fatal("expected error for path with null byte, got nil")
+	}
+	if !strings.Contains(err.Error(), "null byte") {
+		t.Fatalf("expected null byte error, got %v", err)
+	}
+}
+
+func TestResolvePath_RejectsSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test uses POSIX semantics")
+	}
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	rootLink := filepath.Join(linkParent, "root_link")
+	if err := os.Symlink(real, rootLink); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	_, err := actions.ResolvePath(rootLink, "a.txt")
+	if err == nil {
+		t.Fatal("expected error when repo root itself is a symlink, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
 	}
 }

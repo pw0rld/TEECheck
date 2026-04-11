@@ -22,6 +22,9 @@ func ResolvePath(repoRoot, rel string) (string, error) {
 	if rel == "" {
 		rel = "."
 	}
+	if strings.ContainsRune(rel, 0) {
+		return "", fmt.Errorf("path contains null byte")
+	}
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("absolute paths not allowed: %s", rel)
 	}
@@ -33,6 +36,13 @@ func ResolvePath(repoRoot, rel string) (string, error) {
 	absRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo root: %w", err)
+	}
+	rootInfo, err := os.Lstat(absRoot)
+	if err != nil {
+		return "", fmt.Errorf("lstat repo root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("repo root is a symlink: %s", absRoot)
 	}
 	full := filepath.Join(absRoot, cleaned)
 	if !strings.HasPrefix(full+string(filepath.Separator), absRoot+string(filepath.Separator)) && full != absRoot {
