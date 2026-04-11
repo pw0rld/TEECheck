@@ -230,7 +230,7 @@ type Candidate struct {
 	WhySelected  []string `json:"why_selected"`
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
 	SinkCategory string   `json:"sink_category,omitempty"`
-	Confidence   float64  `json:"confidence,omitempty"`
+	Confidence   float64  `json:"confidence"`
 }
 
 type SinkHit struct {
