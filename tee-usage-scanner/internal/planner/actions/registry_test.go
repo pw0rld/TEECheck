@@ -82,3 +82,47 @@ func TestRegistry_ListsRegisteredActions(t *testing.T) {
 		t.Fatalf("registry missing handlers: %v", want)
 	}
 }
+
+func TestNewDefaultRegistryWithSinks_RegistersM2Actions(t *testing.T) {
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "rust.json")
+	if err := os.WriteFile(catalog, []byte(testCatalogJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := actions.NewDefaultRegistryWithSinks(catalog)
+	names := reg.Names()
+	want := map[string]bool{
+		"list_dir":            true,
+		"read_file":           true,
+		"ripgrep":             true,
+		"tree_sitter_outline": true,
+		"sink_catalog_lookup": true,
+	}
+	for _, n := range names {
+		delete(want, n)
+	}
+	if len(want) > 0 {
+		t.Fatalf("registry missing handlers: %v", want)
+	}
+}
+
+func TestNewDefaultRegistryWithSinks_LookupWorksEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "rust.json")
+	if err := os.WriteFile(catalog, []byte(testCatalogJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := actions.NewDefaultRegistryWithSinks(catalog)
+	result := reg.Run(context.Background(), actions.ActionRequest{
+		Name: "sink_catalog_lookup",
+		Args: json.RawMessage(`{"scope": "*"}`),
+	})
+	if !result.OK {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "attestation") {
+		t.Fatalf("expected attestation in output, got: %s", result.Output)
+	}
+}
