@@ -1,0 +1,211 @@
+{
+  "schema_version": "teecheck.sink_catalog.v2",
+  "language": "rust",
+  "groups": [
+    {
+      "id": "attestation",
+      "description": "Report/quote generation, verification, identity/TCB checks, and freshness — the full remote-attestation chain",
+      "categories": [
+        {
+          "id": "attestation_report_creation",
+          "description": "Quote/report generation and report_data field binding. Audit: what data (session pk, nonce, challenge) is bound into the report.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "sgx_create_report",
+              "sgx_quote_*",
+              "sgx_qe_*",
+              "*::create_report*",
+              "*::generate_quote*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_verification_and_trust",
+          "description": "Verification entry points and the trust decisions made after verification. The exact trust-decision site is project-specific and must be located by reverse_trace from the verify call.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::verify_quote*",
+              "*::verify_report*",
+              "*::verify_attestation*",
+              "*::verify_evidence*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_identity_and_tcb_checks",
+          "description": "MRENCLAVE/MRSIGNER equality checks and TCB/QEIdentity/collateral/CRL validation. Audit: comparison targets correct, expiration/revocation honored.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*MRENCLAVE*",
+              "*MRSIGNER*",
+              "*::check_tcb*",
+              "*::verify_tcb*",
+              "*::qe_identity*",
+              "*::collateral*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "attestation_freshness",
+          "description": "Nonce binding, challenge-response flow, time-window checks. Audit: replay resistance.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::nonce*",
+              "*::challenge*",
+              "*::freshness*"
+            ]
+          },
+          "severity_hint": "high"
+        }
+      ]
+    },
+    {
+      "id": "tee_platform_syscalls",
+      "description": "Enclave entry/exit and SGX platform services — trust boundary crossings",
+      "categories": [
+        {
+          "id": "sgx_ecall",
+          "description": "Enclave entry — arguments are untrusted host input.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "sgx_tstd::*",
+              "sgx_urts::*",
+              "#[ecall]"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "sgx_ocall",
+          "description": "Out-of-enclave calls — return values are host-controlled and must be re-validated inside the enclave.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::ocall_*",
+              "sgx_ocall_*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "sgx_platform_services",
+          "description": "SGX platform services including QE, RA, and AESM interaction. Audit: error and degradation paths.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "sgx_qe_*",
+              "sgx_ra_*",
+              "aesm_*",
+              "*::aesm*"
+            ]
+          },
+          "severity_hint": "medium"
+        }
+      ]
+    },
+    {
+      "id": "key_lifecycle",
+      "description": "Key generation, derivation, sealing, signature ops, AEAD, and secret hygiene — complete key lifecycle audit",
+      "categories": [
+        {
+          "id": "key_generation",
+          "description": "Key pair / secret key generation and the RNG source used. In a TEE the RNG must be attested (OsRng/getrandom with platform hardware entropy), never thread_rng or seeded PRNGs.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "KeyPair::generate",
+              "*::SecretKey::random",
+              "*::generate_keypair*",
+              "OsRng",
+              "thread_rng",
+              "getrandom::*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "key_derivation_and_exchange",
+          "description": "HKDF, KDF, derive_key, ECDH, X25519, key_agreement. Audit: context/info/salt binding prevents cross-context collision; peer identity is bound to an attested key.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::derive_key*",
+              "*::hkdf*",
+              "*::kdf*",
+              "*::key_agreement*",
+              "*::diffie_hellman*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "key_sealing",
+          "description": "SGX sealing, runtime sealing, and unsealing. Audit: sealing policy binds to MRENCLAVE vs MRSIGNER appropriately; unseal results are re-validated.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "sgx_seal_data",
+              "sgx_unseal_data",
+              "*::seal*",
+              "*::unseal*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "signature_ops",
+          "description": "Signing and signature verification. Audit: signing key source is attested/sealed; verification failure paths cannot fall through; verifying key is trusted.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::sign",
+              "*::sign_message*",
+              "*::verify_signature*",
+              "ed25519::*",
+              "k256::*",
+              "secp256k1::*"
+            ]
+          },
+          "severity_hint": "high"
+        },
+        {
+          "id": "aead_encryption",
+          "description": "AEAD seal/open (ChaCha20-Poly1305, AES-GCM, etc.). Audit: nonce uniqueness, key lifetime, associated data binding.",
+          "match": {
+            "kind": "symbol",
+            "symbols": [
+              "*::seal_in_place*",
+              "*::open_in_place*",
+              "chacha20poly1305::*",
+              "aes_gcm::*"
+            ]
+          },
+          "severity_hint": "medium"
+        },
+        {
+          "id": "secret_hygiene",
+          "description": "Zeroize traits, secret wrapper types, and absence thereof. Audit: secret types lack Zeroize/ZeroizeOnDrop, or expose themselves via Debug/Display/serde.",
+          "match": {
+            "kind": "syntax",
+            "patterns": [
+              "Zeroize",
+              "ZeroizeOnDrop",
+              "Secret<",
+              "secrecy::",
+              "#[derive(Debug)]"
+            ]
+          },
+          "severity_hint": "medium"
+        }
+      ]
+    }
+  ]
+}
