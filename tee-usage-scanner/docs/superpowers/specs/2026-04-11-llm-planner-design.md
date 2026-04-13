@@ -706,6 +706,7 @@ PR-sized, each independently reviewable and revertible:
 | Silent degradation (user thinks they ran llm mode, got heuristic) | Medium | Prominent stdout warning on fallback; `--strict-planner` opt-in for CI |
 | Schema drift between evidence bundle and cases stage | Low | Keep `kind` values identical to legacy classifier output; shared constant set in `artifacts` |
 | Sandbox escape through crafted paths | Low | Dedicated sandbox test suite, symlink rejection, argv-only exec |
+| L3 architectural bet does not pan out (LLM spins, low-quality candidates) | Medium | M5 live test is the verification gate. If it fails, fall back to the **hybrid Plan B** described in section 16.5: pre-stage runs sink catalog + tree-sitter outline deterministically to produce candidate seeds, agentic stage only does reverse_trace and verification on the seeds. |
 
 ## 14. Open Questions for Future Work (Not v1)
 
@@ -729,3 +730,155 @@ v1 is considered successful when:
 4. No regression in `--mode heuristic` output on existing test fixtures.
 5. The live smoke test passes reliably against GLM and one OpenAI-compatible
    provider.
+
+## 16. Related Work: CodeRabbit and the Pipeline-vs-Agentic Debate
+
+This section exists because CodeRabbit — the most-deployed AI code review
+product on the market (~13M PRs processed, 8000+ paying customers as of early
+2026) — has publicly argued **against** the L3 architecture this spec adopts.
+We owe future readers a clear answer to "why are you doing the thing
+CodeRabbit said doesn't work."
+
+### 16.1 What CodeRabbit Does
+
+- **Domain**: General-purpose PR code review. Polyglot. Diff-driven, second-scale latency, runs on every PR across GitHub/GitLab/Bitbucket.
+- **Architecture**: Deterministic pipeline + selectively agentic. Their public position is *"we curate context — we don't wander."* They run **40+ static analyzers**, AST passes, symbol lookups, and historical-pattern filters **before** the LLM ever sees the code.
+- **Code intelligence**: A production-grade codegraph for cross-file dependency reasoning, plus a **LanceDB** vector index for semantic retrieval ("find similar patterns across the repo").
+- **Sub-agents**: Specialized LLM sub-agents per error class (security, style, performance) — each receives pre-curated context tuned to its category.
+- **Infrastructure**: Google Cloud Run, peak ~200 instances at 8 vCPU / 32 GiB, ~10 PR webhooks per second.
+- **Public stance**: Their blog [*Pipeline AI vs. Agentic AI*](https://www.coderabbit.ai/blog/pipeline-ai-vs-agentic-ai-for-code-reviews-let-the-model-reason-within-reason) explicitly identifies three failure modes of fully autonomous L3 agents:
+  1. **Tool overuse** — calling everything "just in case", polluting the prompt
+  2. **Context pollution** — redundant fetches dilute signal with noise
+  3. **No reward signal** — no mechanism to distinguish helpful from useless tool calls
+
+### 16.2 Side-by-Side Comparison
+
+| Dimension | CodeRabbit | TEECheck (this design) |
+|---|---|---|
+| **Use case** | Incremental PR review, second-scale | Whole-repo deep audit, minutes-scale |
+| **Trigger** | Diff-driven, runs on every PR | On-demand, full-repo |
+| **Domain** | General (any language, any project) | Narrow (TEE attestation + key lifecycle, Rust-first) |
+| **Architecture** | Pre-curated pipeline + classification sub-agents | L3 iterative planner with sandboxed action menu |
+| **Static tools** | 40+ integrated (semgrep, codeql, linters, secret scanners) | grep + semgrep implemented; codeql/joern stub |
+| **Code graph** | Production codegraph (cross-file dependencies) | regex graph today; tree-sitter outline in M2 |
+| **Semantic search** | LanceDB vector index | Deliberately **not** chunk-RAG; hand-curated wiki + sink catalog |
+| **Agent topology** | Sub-agents per error category, parallel | 3-agent **adversarial** chain (expert → challenger → verifier → arbiter) |
+| **Context strategy** | Pre-curate everything before LLM sees it | LLM iteratively requests context via actions |
+| **Latency budget** | Seconds (PR blocks merge) | Minutes (human waits) |
+| **Cost per run** | Must be cents (10 req/s × 200 instances) | $0.4–1.2 acceptable |
+| **Failure mode** | Slow PR queue, missed merge | Fall back to heuristic mode, run finishes |
+
+### 16.3 Why TEECheck Can Afford L3 Where CodeRabbit Cannot
+
+The economic and structural differences make L3 viable here even though
+CodeRabbit correctly rejected it for their use case:
+
+1. **Latency budget**. CodeRabbit must answer PRs in seconds and runs at
+   10 req/s peak. They cannot afford 8 LLM rounds × per-round reasoning. We
+   audit on demand, expect minute-scale runs, and have a 10-minute wall
+   clock. The economics are completely different.
+
+2. **Scope is narrow by design**. Our action menu is 9 actions; CodeRabbit's
+   integrated tool space is 40+ analyzers + arbitrary IDE introspection.
+   Our sink catalog is 13 categories in 3 groups. Their universe is "any
+   bug in any language." **"Tool overuse" is bounded for us by construction**
+   — there is not enough surface area for the LLM to wander far.
+
+3. **A reward signal exists in our domain**. CodeRabbit says L3 has no
+   structural reward signal. This is true for general code review where
+   "is this issue worth flagging?" is a soft judgment. **Our domain has
+   binary checkpoints**: a `reverse_trace` from `attestation_verify` either
+   reaches an `attestation_policy_decision` site within depth N or it
+   doesn't. The sink catalog itself is the reward structure CodeRabbit
+   identifies as missing.
+
+4. **Audit ≠ review**. PR review optimizes for *don't break the build* —
+   missing one typo is fine, false positives are catastrophic (developer
+   trust collapses). Audit optimizes for *find the one critical bug* —
+   missing a typo is fine, missing an attestation bypass is catastrophic.
+   These are different optimization targets and reward different
+   architectures. Adversarial 3-agent + agentic exploration beats
+   classification sub-agents at the audit objective.
+
+5. **Auditor is in the loop**. CodeRabbit reviews a PR on its own; the
+   developer reads the comments and accepts/dismisses. TEECheck produces
+   review packets that a human auditor walks through interactively
+   (`teecheck review`). The LLM does not need to be production-grade
+   reliable — it needs to surface enough leads that a human auditor can
+   triage in an afternoon. This shifts the precision/recall trade-off.
+
+### 16.4 What We Should Steal from CodeRabbit
+
+CodeRabbit has 13M PRs of operational data. Their lessons are real and
+several apply to us regardless of architectural choice:
+
+- **Codegraph is stronger than regex graph**. Our M2 tree-sitter outline
+  is a midway point; a future M2.5 should consider rust-analyzer LSP for
+  semantic call graphs. This brings us closer to CodeRabbit's codegraph
+  fidelity without giving up the L3 loop.
+- **Vector retrieval for the learned/ feedback loop**. Our
+  `knowledge/learned/true-positive/` is currently a flat directory. Once
+  history accumulates (50+ runs), a LanceDB-equivalent semantic index
+  would let "past TPs in this category" become a prior on the candidate
+  ranking. This is the closed-loop feedback that CodeRabbit gets from
+  scale and we get from a smaller but curated index.
+- **40+ static tools is a real number**. Our `staticcheck` adapter
+  framework is built but only `grep` + `semgrep` are implemented;
+  `codeql` and `joern` are stubs. CodeRabbit proves multi-tool integration
+  is operationally viable at scale. Post-M5, we should genuinely implement
+  the stubs — they become first-class actions in the planner menu.
+- **Production observability is not optional**. CodeRabbit knows which
+  sub-agents trigger most, which tools are over-used, where token budgets
+  blow up. Our `04_planner/rounds.jsonl` must be designed for aggregation,
+  not just debugging. M3 should include a small `teecheck planner-stats`
+  command that summarizes rounds_used / tokens_used / termination_reason
+  distributions across a directory of runs.
+
+### 16.5 Plan B — Hybrid Architecture if M5 Live Test Fails
+
+CodeRabbit's L3 warnings are real. If the M5 live smoke test against
+oasis-sdk shows the planner spinning, producing low-quality candidates,
+or routinely hitting the round budget without converging, we adopt the
+following hybrid:
+
+**Pre-stage (deterministic, CodeRabbit-style)**:
+1. Load sink catalog
+2. Run tree-sitter outline across the whole repo
+3. For every category in every group, emit a **candidate seed** at every
+   syntactic match point (no LLM)
+4. Output: a `candidate_seeds.json` with rough hit locations, no scoring,
+   no synthesis
+
+**Agentic stage (TEECheck L3 narrowed)**:
+1. Planner is initialized with `candidate_seeds.json` as part of its
+   working memory (not the full action observation log)
+2. The LLM's job becomes: **prioritize, reverse_trace, and synthesize**
+   over the seeds. It may not "explore" outside the seed set in v1 of the
+   hybrid.
+3. Same evidence bundle output, same downstream (cases / expert / etc.)
+
+This preserves the agentic synthesis (where LLM judgment matters) while
+removing the open-ended exploration (where it tends to fail). It is
+strictly less ambitious than the current L3 design but salvages the
+investment in sink catalog, sandbox, and actions.
+
+**Decision gate**: M5 live test results determine which path proceeds.
+If the L3 design hits the success criteria in section 15, we stay on it.
+If it does not, we cut over to Plan B before any further milestone investment.
+
+### 16.6 Honest Remaining Risk
+
+Even with the Plan B safety net, we are making a bet that **agentic
+reverse-trace from a curated sink catalog finds bugs that CodeRabbit's
+forward-pass classification would miss**. This bet is plausible because:
+
+- Attestation bypasses are usually multi-hop reasoning chains ("verify is
+  called, but the result is not bound to the session key three calls
+  later") — exactly what reverse-trace plus LLM synthesis is good at.
+- Forward-pass classifiers find local bugs (this line is wrong); audit
+  bugs are often non-local (these three things together create the
+  hole).
+
+But "plausible" is not "proven". M5 is the moment of truth. This section
+exists so future readers know we made the choice with eyes open, not by
+ignoring the state of the art.
