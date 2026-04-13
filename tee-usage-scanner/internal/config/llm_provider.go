@@ -6,8 +6,9 @@ const (
 	LLMProviderOpenAI = "openai"
 	LLMProviderGLM    = "glm"
 
-	defaultGLMBaseURL = "https://api.z.ai/api/anthropic"
-	defaultGLMModel   = "glm-4.7"
+	defaultGLMBaseURL    = "https://api.z.ai/api/anthropic"
+	defaultGLMModel      = "glm-4.7"
+	defaultGLMTimeoutSec = 180
 )
 
 func NormalizeLLMProvider(value string) string {
@@ -30,6 +31,14 @@ func (cfg Config) WithLLMProviderDefaults() Config {
 		}
 		if strings.TrimSpace(cfg.LLMModel) == "" {
 			cfg.LLMModel = defaultGLMModel
+		}
+		// GLM-4.7 via the Z.AI Anthropic-compatible endpoint routinely
+		// exceeds the project-wide 60s default on large prompts (verified
+		// against mobilecoin: scanner stage OK, challenger first case
+		// timed out). Bump the timeout to a GLM-friendly value when the
+		// caller has not explicitly raised it above the global default.
+		if cfg.LLMTimeoutSec <= 60 {
+			cfg.LLMTimeoutSec = defaultGLMTimeoutSec
 		}
 	}
 	return cfg
