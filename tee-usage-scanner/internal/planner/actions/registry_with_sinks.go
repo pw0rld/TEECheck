@@ -15,5 +15,7 @@ func NewDefaultRegistryWithSinks(catalogPath string) *Registry {
 	// SinkCatalogLookupHandler caches state, so we register a pointer
 	// rather than a value receiver.
 	r.Register(&SinkCatalogLookupHandler{CatalogPath: catalogPath})
+	// DoneHandler is the terminal action the planner loop watches for.
+	r.Register(DoneHandler{})
 	return r
 }

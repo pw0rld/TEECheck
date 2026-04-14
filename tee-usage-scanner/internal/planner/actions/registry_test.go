@@ -98,6 +98,7 @@ func TestNewDefaultRegistryWithSinks_RegistersM2Actions(t *testing.T) {
 		"ripgrep":             true,
 		"tree_sitter_outline": true,
 		"sink_catalog_lookup": true,
+		"done":                true,
 	}
 	for _, n := range names {
 		delete(want, n)
