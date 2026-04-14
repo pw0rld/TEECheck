@@ -83,6 +83,8 @@ func main() {
 		if err == nil {
 			fmt.Printf("\nPipeline completed. Results at %s\n", runPath)
 		}
+	case "plan":
+		err = runPlanCommand(cfg)
 	default:
 		err = fmt.Errorf("unsupported command: %s", cfg.Command)
 	}
