@@ -1,5 +1,7 @@
 .DS_Store
 .gocache/
 runs/
-teecheck
+# Anchored so only the built binary at the module root is ignored,
+# NOT the cmd/teecheck/ source directory.
+/teecheck
 *.exe
