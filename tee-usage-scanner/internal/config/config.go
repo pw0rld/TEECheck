@@ -75,6 +75,8 @@ func Parse(args []string) (Config, error) {
 		return parseCurator(args[1:])
 	case "run":
 		return parseRun(args[1:])
+	case "plan":
+		return parsePlan(args[1:])
 	case "review":
 		return parseReview(args[1:])
 	case "feedback":
@@ -572,6 +574,38 @@ func parseRun(args []string) (Config, error) {
 		if err := validateProviderConfig(cfg, "run"); err != nil {
 			return Config{}, err
 		}
+	}
+	return cfg, nil
+}
+
+// parsePlan is the L3 planner-only entry point. It accepts the same
+// flags as "run" but always invokes the L3 LLM planner directly,
+// then hands the candidates off to the existing 4-agent audit
+// pipeline (cases/expert/challenger/verifier/arbiter).
+//
+// The only required argument is the target (URL or local path).
+// LLM mode is forced on for all downstream agents — the planner
+// whole point is to drive the LLM through an audit, heuristic mode
+// would defeat that.
+func parsePlan(args []string) (Config, error) {
+	// Force --mode=llm BEFORE parseRun sees the args so parseRun's
+	// internal "if Mode == llm { set submodes }" block fires.
+	args = append([]string{"--mode", "llm"}, args...)
+
+	cfg, err := parseRun(args)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Command = "plan"
+	// Belt + suspenders: explicitly force all agent submodes to llm
+	// in case parseRun's logic changes.
+	cfg.Mode = "llm"
+	cfg.ExpertMode = "llm"
+	cfg.ChallengeMode = "llm"
+	cfg.VerifierMode = "llm"
+	cfg.ArbiterMode = "llm"
+	if err := validateProviderConfig(cfg, "plan"); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
