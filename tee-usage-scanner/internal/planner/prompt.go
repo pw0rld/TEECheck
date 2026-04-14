@@ -18,31 +18,60 @@ type PromptProfile struct {
 	FileCount      int
 }
 
+// actionArgSchemas documents the exact args shape each action
+// expects. Used by BuildSystemPrompt so the LLM does not guess at
+// parameter names — guessing leads to silent failures like the LLM
+// passing include_patterns when the ripgrep handler wants globs.
+//
+// Keep entries terse (one line each). When a new action is added
+// to the registry, add a matching entry here.
+var actionArgSchemas = map[string]string{
+	"list_dir":            `{"path": string (repo-relative), "depth": int (0-3)}`,
+	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
+	"ripgrep":             `{"pattern": string (regex), "globs": [string] (e.g. ["*.rs"])}`,
+	"tree_sitter_outline": `{"path": string (must end in .rs)}`,
+	"sink_catalog_lookup": `{"scope": string ("*" | "<group>" | "<group>.<category>")}`,
+	"legacy_keyword_scan": `{"run_dir": string (absolute), "max_hotspots": int (optional)}`,
+	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
+	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}]}`,
+}
+
 // BuildSystemPrompt returns the static system prompt the planner
 // sends with every LLM request. It explains the agent role, lists
-// available actions, and specifies the JSON response format.
+// available actions with typed arg schemas, and specifies the JSON
+// response format.
 func BuildSystemPrompt(availableActions []string) string {
 	var b strings.Builder
 	b.WriteString("You are TEECheck's L3 security audit planner. Your job is to identify candidate locations in a TEE codebase that warrant deep audit, focused on attestation and key lifecycle.\n\n")
 
-	b.WriteString("AVAILABLE ACTIONS:\n")
+	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {
-		fmt.Fprintf(&b, "  - %s\n", name)
+		schema, ok := actionArgSchemas[name]
+		if !ok {
+			schema = "{...}"
+		}
+		fmt.Fprintf(&b, "  - %s  args=%s\n", name, schema)
 	}
 	b.WriteString("\n")
 
 	b.WriteString("APPROACH:\n")
-	b.WriteString("  1. Start by querying sink_catalog_lookup with scope=\"*\" to see what categories exist.\n")
-	b.WriteString("  2. Pick 1-2 groups relevant to the project profile, then drill in.\n")
-	b.WriteString("  3. Use ripgrep or tree_sitter_outline to find concrete sites for sink categories.\n")
-	b.WriteString("  4. Use reverse_trace to walk backward from sinks and identify trust-decision points.\n")
-	b.WriteString("  5. When you have enough evidence, call done with your final candidates.\n\n")
+	b.WriteString("  1. Start by querying sink_catalog_lookup with scope=\"*\" to see what groups exist, then drill in.\n")
+	b.WriteString("  2. Use ripgrep with globs=[\"*.rs\"] to find concrete sites for sink symbols — SKIP Cargo.lock/toml/md files.\n")
+	b.WriteString("  3. When you find a relevant .rs file, use tree_sitter_outline to get its structure before reading.\n")
+	b.WriteString("  4. Use read_file on the specific function/impl ranges the outline reveals.\n")
+	b.WriteString("  5. DO NOT WASTE ROUNDS. Aim for 1-2 good candidates by round 5-6, then call done.\n")
+	b.WriteString("  6. When you have evidence, call done with candidates containing {id, kind, priority, paths, symbols, why_selected}. kind should be one of: attestation, key_management, authorization, state_machine, ffi_boundary, runtime_entry.\n\n")
 
-	b.WriteString("RESPONSE FORMAT (strict JSON, no extra text):\n")
+	b.WriteString("HINTS:\n")
+	b.WriteString("  - Ignore Cargo.lock, Cargo.toml, CHANGELOG.md. Always pass globs=[\"*.rs\"] to ripgrep.\n")
+	b.WriteString("  - Directories to prioritize for TEE work: attest/, enclave-boundary/, sgx/, fog/*/enclave/, consensus/enclave/.\n")
+	b.WriteString("  - You MUST call done by round 7 at the latest. Budget is 8 rounds total.\n\n")
+
+	b.WriteString("RESPONSE FORMAT (strict JSON, no extra text, no markdown code fences):\n")
 	b.WriteString(`{
   "thought": "<your reasoning for this round, 1-3 sentences>",
   "actions": [
-    {"name": "<action_name>", "args": {<typed args object>}}
+    {"name": "<action_name>", "args": {<typed args object matching the schema above>}}
   ]
 }
 `)
