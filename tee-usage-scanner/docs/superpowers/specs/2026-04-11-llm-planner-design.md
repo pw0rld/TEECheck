@@ -731,7 +731,53 @@ v1 is considered successful when:
 5. The live smoke test passes reliably against GLM and one OpenAI-compatible
    provider.
 
-## 16. Related Work: CodeRabbit and the Pipeline-vs-Agentic Debate
+## 16. Implementation Status (as of 2026-04-15)
+
+This section tracks what is shipped vs deferred, so this spec stays a single
+source of truth instead of drifting from the code.
+
+### Shipped (v1)
+
+| Spec section | Status | Code |
+|---|---|---|
+| §3 Architectural overview (planner → cases → 4-agent) | ✅ | `internal/pipeline/run.go` |
+| §4 Action menu (9 actions: list_dir, read_file, ripgrep, tree_sitter_outline, reverse_trace, sink_catalog_lookup, legacy_keyword_scan, repomix_summarize, done) | ✅ | `internal/planner/actions/*.go` |
+| §5 Sink catalog v2 (3 groups: attestation, tee_platform_syscalls, key_lifecycle) | ✅ | `knowledge/sinks/rust.json`, `internal/planner/sinks/` |
+| §6 Artifact schemas (EvidenceBundle, Candidate, SinkHit, RoundRecord) | ✅ | `internal/artifacts/types.go` |
+| §7 Pipeline integration (`run --mode llm`, `plan` shorthand) | ✅ | `internal/pipeline/run.go`, `cmd/teecheck/main.go` |
+| §8 Four-dimensional budget (rounds / tokens / wall-clock / per-action timeout) | ✅ | `internal/planner/budget.go` |
+| §9 Loop + stall detection, malformed JSON tolerance, retry on transient errors | ✅ | `internal/planner/loop_detect.go`, `internal/llm/retry.go`, `internal/llm/json.go` |
+| Observed-paths hallucination defense (soft mid-rounds, hard final round) | ✅ | `internal/planner/planner.go` |
+| §10 Test strategy (mocked-LLM integration tests, sandbox suite) | ✅ | `internal/planner/planner_test.go`, `internal/planner/actions/*_test.go` |
+| §12 M1–M4 milestones | ✅ | tagged commits |
+
+### Partial / Deferred
+
+| Item | Status | Notes |
+|---|---|---|
+| §7.5 Hybrid Plan B fallback (planner failure → heuristic) | ❌ Missing | Planner errors currently abort the run; fallback to heuristic mode is not wired |
+| §14 `proposed_sinks` writeback to `knowledge/sinks/` | ❌ Missing | `ProposedSinks` is captured in the bundle but no curator review/writeback loop exists |
+| §14 Wiki obligations injection into planner prompt | ❌ Missing | `internal/planner/prompt.go` does not currently load `knowledge/wiki/obligations/*.md` |
+| §14 Per-run learned priors (TP/FP history influences ranking) | ❌ Missing | No `learned/` reader on the planner side |
+| §14 LSP integration (rust-analyzer / gopls) | ⏸ v2 | Explicitly deferred |
+| §14 Tree-sitter grammars beyond Rust (Go / Solidity / Python / TS) | ⏸ v2 | Only Rust grammar is wired |
+| §14 Joern / CodeQL heavyweight actions | ⏸ v2 | Stubs exist in `internal/staticcheck/` but no planner action |
+| §15 Live smoke test passing on two providers | ⚠ Partial | Validated on GLM (`glm-4.7` via z.ai); OpenAI provider not yet validated |
+
+### Validation Highlights
+
+- **mobilecoin v13–v17 dogfood runs** consistently route the planner into
+  `attest/`, `sgx/`, `enclave-boundary/`, `fog/*/enclave/`, and
+  `consensus/enclave/` — directories the old keyword scorer could not reach.
+  See `examples/mobilecoin-l3-v14-scan/REPORT.md`.
+- **v17** was the first run where the LLM autonomously called `reverse_trace`
+  and walked from `verify_report` back through `attest/ake/src/initiator.rs`
+  and `attest/ake/src/responder.rs`, producing a real consistency finding
+  (`verify_dcap_evidence` vs `verify_verification_report` use divergent
+  caller-binding styles in the same file).
+- All 183 unit + integration tests green at HEAD.
+
+## 17. Related Work: CodeRabbit and the Pipeline-vs-Agentic Debate
 
 This section exists because CodeRabbit — the most-deployed AI code review
 product on the market (~13M PRs processed, 8000+ paying customers as of early

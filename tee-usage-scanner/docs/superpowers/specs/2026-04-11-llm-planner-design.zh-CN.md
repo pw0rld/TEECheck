@@ -641,3 +641,41 @@ v1 视为成功当:
 3. 端到端运行时间不超过当前 heuristic mode 的 2 倍。
 4. 现有 fixture 上 `--mode heuristic` 输出无回归。
 5. Live smoke test 在 GLM 和一个 OpenAI 兼容 provider 上稳定通过。
+
+## 16. 实施状态 (截至 2026-04-15)
+
+记录已交付与延期项,避免 spec 漂离代码。
+
+### 已交付 (v1)
+
+| Spec 段 | 状态 | 代码位置 |
+|---|---|---|
+| §3 架构总览 (planner → cases → 4-agent) | ✅ | `internal/pipeline/run.go` |
+| §4 Action 菜单 (9 个: list_dir / read_file / ripgrep / tree_sitter_outline / reverse_trace / sink_catalog_lookup / legacy_keyword_scan / repomix_summarize / done) | ✅ | `internal/planner/actions/*.go` |
+| §5 Sink Catalog v2 (3 组: attestation / tee_platform_syscalls / key_lifecycle) | ✅ | `knowledge/sinks/rust.json`, `internal/planner/sinks/` |
+| §6 Artifact schema (EvidenceBundle / Candidate / SinkHit / RoundRecord) | ✅ | `internal/artifacts/types.go` |
+| §7 Pipeline 集成 (`run --mode llm`、`plan` 简写) | ✅ | `internal/pipeline/run.go`, `cmd/teecheck/main.go` |
+| §8 四维 budget (rounds / tokens / wall-clock / per-action timeout) | ✅ | `internal/planner/budget.go` |
+| §9 Loop+stall 检测、JSON 容错、瞬时错误重试 | ✅ | `internal/planner/loop_detect.go`, `internal/llm/retry.go`, `internal/llm/json.go` |
+| Observed-paths 幻觉防御 (中间轮 soft / 终轮 hard) | ✅ | `internal/planner/planner.go` |
+| §10 测试策略 (mocked-LLM 集成测试、sandbox 套件) | ✅ | `internal/planner/planner_test.go`, `internal/planner/actions/*_test.go` |
+| §12 M1–M4 milestone | ✅ | 已 commit |
+
+### 部分 / 延期
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| §7.5 Hybrid Plan B 回退 (planner 失败 → heuristic) | ❌ 缺失 | 当前 planner 出错直接 abort |
+| §14 `proposed_sinks` 写回 `knowledge/sinks/` | ❌ 缺失 | bundle 已采集但无 curator 闭环 |
+| §14 Wiki obligations 注入 prompt | ❌ 缺失 | `internal/planner/prompt.go` 未加载 `knowledge/wiki/obligations/*.md` |
+| §14 Per-run learned 先验 | ❌ 缺失 | planner 端没有 `learned/` 读取 |
+| §14 LSP 集成 (rust-analyzer / gopls) | ⏸ v2 | 明确延期 |
+| §14 Rust 之外的 tree-sitter grammar | ⏸ v2 | 当前只接 Rust |
+| §14 Joern / CodeQL 重型 action | ⏸ v2 | `internal/staticcheck/` 有 stub 但无 planner action |
+| §15 双 provider live smoke | ⚠ 部分 | GLM (`glm-4.7` via z.ai) 已验证;OpenAI provider 待验证 |
+
+### 验证亮点
+
+- **mobilecoin v13–v17** 持续把 planner 路由进 `attest/`、`sgx/`、`enclave-boundary/`、`fog/*/enclave/`、`consensus/enclave/` —— 老关键字打分够不到的地方。详见 `examples/mobilecoin-l3-v14-scan/REPORT.md`。
+- **v17** 是 LLM 第一次自主调 `reverse_trace`,从 `verify_report` 反向走到 `attest/ake/src/initiator.rs` / `responder.rs`,产出真正的一致性问题 (`verify_dcap_evidence` 与 `verify_verification_report` 在同文件使用了不同的 caller-binding 风格)。
+- HEAD 上 183 个单测 + 集成测试全绿。

@@ -1,8 +1,8 @@
 # TEECheck
 
 A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
-security research. TEECheck uses AI agents to collaboratively analyze codebases
-for security issues in trusted execution environments.
+security research. TEECheck uses an L3 LLM planner plus a 4-agent adversarial
+review chain to find real attestation and key-lifecycle issues in trusted code.
 
 ## Quick Start
 
@@ -17,81 +17,92 @@ go build -o teecheck ./cmd/teecheck/
 # Scan a local path
 ./teecheck run /path/to/repo --focus tee --max-cases 4
 
-# Scan with LLM mode (much higher quality analysis)
+# Scan with LLM mode — runs the L3 planner end-to-end through the
+# 4-agent pipeline (expert → challenger → verifier → arbiter)
 ./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
   --llm-base-url http://your-api:8080/v1 \
   --llm-api-key sk-your-key \
   --llm-model your-model \
   --focus tee --max-cases 4
 
-# Scan with the built-in GLM preset (z.ai)
+# Scan with the built-in GLM preset (z.ai Anthropic-compatible endpoint)
 ./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
   --llm-provider glm \
   --llm-api-key your-zai-key \
   --llm-model glm-4.7 \
   --focus tee --max-cases 4
+
+# Equivalent shorthand (same pipeline, mode forced to llm)
+./teecheck plan https://github.com/mobilecoinfoundation/mobilecoin \
+  --llm-provider glm --llm-api-key your-zai-key --focus tee --max-cases 4
 ```
+
+See [`examples/mobilecoin-l3-v14-scan/REPORT.md`](examples/mobilecoin-l3-v14-scan/REPORT.md)
+for a full annotated GLM run on `mobilecoinfoundation/mobilecoin`.
 
 ## How It Works
 
-TEECheck uses a 3-agent pipeline:
+In LLM mode the pipeline is **L3 planner → 4-agent adversarial review**:
 
 ```
-teecheck run <url-or-path>
+teecheck run --mode llm <url-or-path>
     |
     v
-+-- Scanner Agent --+
-|  Clone repo        |
-|  Generate code     |
-|  graph (auto)      |
-|  Run static checks |
-|  Identify hotspots |
-|  Generate security |
-|  hypotheses        |
-+--------+-----------+
-         |
-         v  (Reviewer can query Scanner for more evidence)
-+-- Reviewer Agent -+
-|  Challenge each    |
-|  hypothesis        |
-|  Verify evidence   |
-|  Ask Scanner for   |
-|  additional code   |
-|  searches          |
-+--------+-----------+
-         |
-         v  (Auditor can query Scanner or Reviewer)
-+-- Auditor Agent --+
-|  Synthesize all    |
-|  evidence          |
-|  Final judgment    |
-|  Generate review   |
-|  packets           |
++-- Preprocessor ----+   project profile, languages, frameworks
 +--------+-----------+
          |
          v
-    Final Report
++-- L3 Planner ------+   iterative LLM agent with action budget
+|  ripgrep / read    |   - sink_catalog_lookup → ripgrep → outline
+|  tree_sitter_*     |   - reverse_trace walks call graph backward
+|  reverse_trace     |   - observed-paths whitelist blocks hallucinated
+|  sink_catalog_*    |     file paths in the final round
+|  done              |   → 04_planner/evidence_bundle.json
++--------+-----------+
+         |
+         v   shim → 02_hotspots + 03_cases
++-- Expert ----------+   generates security hypotheses per case
++-- Challenger ------+   adversarial objections to each hypothesis
++-- Verifier --------+   re-grounds each claim against the source
++-- Arbiter ---------+   final findings + human-readable review packets
+         |
+         v
+    Final Report (07_arbiter/packets/*.md)
 ```
+
+The L3 planner replaces the old keyword-scoring hotspot picker. It loads a
+curated **sink catalog** (`knowledge/sinks/rust.json`, three groups:
+attestation, TEE syscalls, key lifecycle) and lets the LLM iteratively decide
+which files to read, which symbols to outline, and which call sites to trace
+backward — under a four-dimensional budget (rounds / tokens / wall-clock /
+per-action timeout). See [`docs/superpowers/specs/2026-04-11-llm-planner-design.md`](docs/superpowers/specs/2026-04-11-llm-planner-design.md)
+for the full design.
 
 ### Two Modes
 
-**Heuristic mode** (default): Fast, no LLM needed. Uses pattern matching and
-heuristic rules. Good for quick scans.
+**Heuristic mode** (default): Fast, no LLM needed. Keyword + pattern scoring
+picks hotspots, then the 4-agent chain runs in heuristic mode. Good for quick
+scans and CI smoke tests.
 
-**LLM mode** (`--mode llm`): Much higher quality. Each agent uses an
-LLM providers to reason about security properties. Built-in presets now include
-`openai` and `glm` (`docs.z.ai`). The `glm` preset uses the Anthropic-compatible
-`https://api.z.ai/api/anthropic` endpoint by default, while custom
-OpenAI-compatible endpoints still work via `--llm-provider openai --llm-base-url ...`.
-Agents can query each other through a message bus for additional context.
-Produces detailed review packets with executive summaries, risk assessments, and
-recommended follow-ups.
+**LLM mode** (`--mode llm` or `teecheck plan`): The L3 planner replaces the
+keyword picker, and every agent runs in LLM mode. Built-in provider presets:
+`openai` (any OpenAI-compatible endpoint) and `glm` (z.ai Anthropic-compatible
+endpoint, defaults to `glm-4.7`). Transient 5xx / timeout errors are retried
+with backoff. Produces detailed review packets, an evidence bundle, and a
+streaming `rounds.jsonl` for full planner replay.
 
 ## Commands
 
 ### `teecheck run` (main command)
 
-Runs the full 3-agent pipeline on a repository.
+Runs the full pipeline on a repository. With `--mode llm` this is L3 planner
+plus the 4-agent adversarial review chain; with `--mode heuristic` (default)
+it falls back to the keyword-based hotspot picker.
+
+### `teecheck plan` (LLM-only shorthand)
+
+Same as `teecheck run --mode llm`. Forces all agents to LLM mode and runs the
+L3 planner. Use this when you don't want to think about the `--mode` flag.
 
 ```bash
 teecheck run <url-or-path> [flags]
@@ -175,11 +186,14 @@ teecheck arbiter ...       # Final arbitration only
 runs/<run-id>/
 ├── 00_manifest.json                   # Run metadata
 ├── 01_profile/project_profile.json    # Languages, frameworks, paths
-├── 02_graph/graph.json                # Auto-generated code structure graph
-├── 03_repo_map/repo_map.json          # Module boundaries, trust surfaces
-├── 04_hotspots/hotspot_index.json     # Ranked security hotspots
-├── 05_cases/case-NNN.json             # Bounded review cases
+├── 01_repo_map/repo_map.json          # Module boundaries, trust surfaces
+├── 02_hotspots/hotspot_index.json     # Ranked hotspots (heuristic mode or shim)
+├── 03_cases/case-NNN.json             # Bounded review cases
 ├── 04_expert/hypothesis-NNN.json      # Security hypotheses
+├── 04_planner/                        # (LLM mode only)
+│   ├── evidence_bundle.json           # Planner candidates + sink hits
+│   ├── rounds.jsonl                   # Streaming per-round transcript
+│   └── sink_hits.json                 # Sink catalog hits
 ├── 05_challenger/challenge-NNN.json   # Challenger objections
 ├── 06_verifier/verify-NNN.json        # Verification memos
 ├── 07_arbiter/
