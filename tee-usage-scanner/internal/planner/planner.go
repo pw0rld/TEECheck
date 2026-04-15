@@ -92,35 +92,51 @@ loop:
 
 		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget)
 
-		// On the final round (or when budget is about to exhaust),
-		// force the LLM to emit a done action. This overrides any
-		// "keep exploring" instinct. The LLM has seen the full state
-		// and must synthesize whatever candidates it has.
-		if cfg.Budget.RoundsUsed == cfg.Budget.MaxRounds {
-			roundPrompt += "\n=== FINAL ROUND — BUDGET EXHAUSTING ===\n"
-			roundPrompt += "This is your FINAL round. You have NO more rounds after this.\n"
-			roundPrompt += "You MUST respond with EXACTLY ONE action: `done`.\n"
-			roundPrompt += "Synthesize candidates from the observations in previous rounds. Even partial findings are valuable.\n"
-			roundPrompt += "Do NOT call list_dir, ripgrep, read_file, or any other exploration action. Only `done`.\n"
+		isFinalRound := cfg.Budget.RoundsUsed == cfg.Budget.MaxRounds
 
-			// Inject the exhaustive list of paths the LLM has actually
-			// observed. This is the defense against path hallucination
-			// (e.g. inventing "sgx/svc/key.rs" when the real path is
-			// "sgx/service/src/lib.rs"). Every candidate path MUST be
-			// drawn from this list — otherwise the downstream validator
-			// will drop the path and possibly the whole candidate.
-			if len(observedPaths) > 0 {
-				paths := make([]string, 0, len(observedPaths))
-				for p := range observedPaths {
-					paths = append(paths, p)
-				}
-				sort.Strings(paths)
+		// Inject the list of paths the LLM has actually observed so
+		// far in every round after the first. The wording is soft in
+		// middle rounds (LLM should still be free to discover new
+		// paths via ripgrep/list_dir) and hard in the final round
+		// (the LLM MUST use these paths in candidates).
+		//
+		// This is the defense against path hallucination — the LLM
+		// inventing plausible-but-fake paths like "sgx/svc/key.rs"
+		// when the real path it saw was "sgx/service/src/lib.rs".
+		// v10 dogfood showed 100% hallucinated paths without this;
+		// v11+ with only-final-round injection showed 0 hallucinated
+		// paths at done time but still occasional mid-round invented
+		// paths. T1.3 closes the mid-round gap.
+		if len(observedPaths) > 0 {
+			paths := make([]string, 0, len(observedPaths))
+			for p := range observedPaths {
+				paths = append(paths, p)
+			}
+			sort.Strings(paths)
+
+			if isFinalRound {
+				roundPrompt += "\n=== FINAL ROUND — BUDGET EXHAUSTING ===\n"
+				roundPrompt += "This is your FINAL round. You have NO more rounds after this.\n"
+				roundPrompt += "You MUST respond with EXACTLY ONE action: `done`.\n"
+				roundPrompt += "Synthesize candidates from the observations in previous rounds. Even partial findings are valuable.\n"
+				roundPrompt += "Do NOT call list_dir, ripgrep, read_file, or any other exploration action. Only `done`.\n"
 				roundPrompt += "\nOBSERVED PATHS (the ONLY paths you may cite in candidates[].paths):\n"
 				for _, p := range paths {
 					roundPrompt += "  - " + p + "\n"
 				}
 				roundPrompt += "\nDo NOT abbreviate directory names. Do NOT invent paths. Do NOT cite paths you have not actually seen.\n"
+			} else {
+				roundPrompt += "\nPATHS OBSERVED SO FAR (you may reference these directly; new paths MUST come from ripgrep or list_dir output, never invented):\n"
+				for _, p := range paths {
+					roundPrompt += "  - " + p + "\n"
+				}
 			}
+		} else if isFinalRound {
+			// No observations yet and it's the final round — still
+			// force done, but there's nothing to constrain against.
+			roundPrompt += "\n=== FINAL ROUND — BUDGET EXHAUSTING ===\n"
+			roundPrompt += "This is your FINAL round. You MUST respond with EXACTLY ONE action: `done`.\n"
+			roundPrompt += "You have not inspected any files yet. Emit a done with empty candidates[] and a summary explaining what would have been needed.\n"
 		}
 
 		fmt.Fprintf(os.Stdout, "[planner] round %d/%d — calling LLM...\n", roundNum, cfg.Budget.MaxRounds)
