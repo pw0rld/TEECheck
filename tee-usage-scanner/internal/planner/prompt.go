@@ -30,6 +30,7 @@ var actionArgSchemas = map[string]string{
 	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
 	"ripgrep":             `{"pattern": string (regex), "globs": [string] (e.g. ["*.rs"])}`,
 	"tree_sitter_outline": `{"path": string (must end in .rs)}`,
+	"reverse_trace":       `{"file": string (where the symbol is defined, must end in .rs), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through .rs files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"sink_catalog_lookup": `{"scope": string ("*" | "<group>" | "<group>.<category>")}`,
 	"legacy_keyword_scan": `{"run_dir": string (absolute), "max_hotspots": int (optional)}`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,

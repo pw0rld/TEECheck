@@ -17,5 +17,9 @@ func NewDefaultRegistryWithSinks(catalogPath string) *Registry {
 	r.Register(&SinkCatalogLookupHandler{CatalogPath: catalogPath})
 	// DoneHandler is the terminal action the planner loop watches for.
 	r.Register(DoneHandler{})
+	// ReverseTraceHandler is the tree-sitter based backward call-site
+	// tracer. Lets the LLM do "who calls this symbol?" in one action
+	// rather than several ripgrep + tree_sitter_outline round trips.
+	r.Register(ReverseTraceHandler{})
 	return r
 }
