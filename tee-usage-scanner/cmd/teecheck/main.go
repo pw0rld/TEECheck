@@ -74,7 +74,12 @@ func main() {
 	case "challenge":
 		err = challenger.Run(cfg)
 	case "verifier":
-		err = verifier.Run(cfg)
+		if strings.EqualFold(cfg.VerifierMode, "llm") {
+			bus := buildStandaloneBus(cfg)
+			err = verifier.RunWithBus(cfg, bus)
+		} else {
+			err = verifier.Run(cfg)
+		}
 	case "arbiter":
 		err = arbiter.Run(cfg)
 	case "review":
@@ -106,6 +111,28 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// buildStandaloneBus builds a bus for the standalone verifier/arbiter
+// subcommands. Mirrors the one in internal/pipeline/run.go but lives
+// here so the subcommand dispatch in this file can stay self-contained.
+func buildStandaloneBus(cfg config.Config) *agentbus.Bus {
+	client := llm.NewClient(cfg)
+	maxRounds := cfg.MaxDialogRounds
+	if maxRounds <= 0 {
+		maxRounds = 3
+	}
+	bus := agentbus.New(maxRounds)
+	bus.Register("expert-001", agentbus.NewLLMHandler(client,
+		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	bus.Register("challenger-001", agentbus.NewLLMHandler(client,
+		"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	bus.Register("reviewer-001", agentbus.NewLLMHandler(client,
+		"You are the Reviewer Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	return bus
 }
 
 func buildCuratorBus(cfg config.Config) *agentbus.Bus {
