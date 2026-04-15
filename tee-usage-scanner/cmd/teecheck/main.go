@@ -27,6 +27,17 @@ import (
 )
 
 func main() {
+	// `stats` is handled directly here without going through the
+	// config parser — it only needs a run dir and an optional repo
+	// root, so we keep the parser surface narrow.
+	if len(os.Args) >= 2 && os.Args[1] == "stats" {
+		if err := runStats(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -77,14 +77,15 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		return GenerateResponse{}, fmt.Errorf("anthropic status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	text, err := parseAnthropicResponse(respBody)
+	text, usage, err := parseAnthropicResponse(respBody)
 	if err != nil {
 		return GenerateResponse{}, fmt.Errorf("parse anthropic response: %w | raw=%s", err, truncateForError(string(respBody), 300))
 	}
 
 	return GenerateResponse{
-		Text: text,
-		Raw:  string(respBody),
+		Text:  text,
+		Raw:   string(respBody),
+		Usage: usage,
 	}, nil
 }
 
@@ -106,6 +107,10 @@ type anthropicMessagesResponse struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 func buildAnthropicMessages(messages []Message) []anthropicMessage {
@@ -125,10 +130,10 @@ func buildAnthropicMessages(messages []Message) []anthropicMessage {
 	return out
 }
 
-func parseAnthropicResponse(body []byte) (string, error) {
+func parseAnthropicResponse(body []byte) (string, Usage, error) {
 	var parsed anthropicMessagesResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("decode json response: %w", err)
+		return "", Usage{}, fmt.Errorf("decode json response: %w", err)
 	}
 
 	var parts []string
@@ -138,7 +143,12 @@ func parseAnthropicResponse(body []byte) (string, error) {
 		}
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("no text content found in response")
+		return "", Usage{}, fmt.Errorf("no text content found in response")
 	}
-	return strings.Join(parts, ""), nil
+	usage := Usage{
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
+		TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
+	}
+	return strings.Join(parts, ""), usage, nil
 }

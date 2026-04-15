@@ -162,8 +162,17 @@ loop:
 			break
 		}
 
-		// Crude token accounting: ~4 chars per token.
-		cfg.Budget.ConsumeTokens(len(systemPrompt)/4 + len(roundPrompt)/4 + len(genResp.Text)/4)
+		// Prefer provider-reported token usage. If the provider did
+		// not return it (older OpenAI-compatible endpoints, stream
+		// responses), fall back to a crude ~4 chars/token estimate so
+		// the budget still advances.
+		tokensIn := genResp.Usage.PromptTokens
+		tokensOut := genResp.Usage.CompletionTokens
+		if tokensIn == 0 && tokensOut == 0 {
+			tokensIn = len(systemPrompt)/4 + len(roundPrompt)/4
+			tokensOut = len(genResp.Text) / 4
+		}
+		cfg.Budget.ConsumeTokens(tokensIn + tokensOut)
 
 		parsed, err := ParseLLMResponse(genResp.Text)
 		if err != nil {
@@ -177,8 +186,10 @@ loop:
 		}
 
 		roundRec := artifacts.RoundRecord{
-			Round:   roundNum,
-			Thought: parsed.Thought,
+			Round:     roundNum,
+			Thought:   parsed.Thought,
+			TokensIn:  tokensIn,
+			TokensOut: tokensOut,
 		}
 
 		actionLimit := len(parsed.Actions)

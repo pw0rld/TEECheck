@@ -71,14 +71,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		return GenerateResponse{}, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	text, err := parseOpenAIResponse(resp.Header.Get("Content-Type"), respBody)
+	text, usage, err := parseOpenAIResponse(resp.Header.Get("Content-Type"), respBody)
 	if err != nil {
 		return GenerateResponse{}, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
 	}
 
 	return GenerateResponse{
-		Text: text,
-		Raw:  string(respBody),
+		Text:  text,
+		Raw:   string(respBody),
+		Usage: usage,
 	}, nil
 }
 
@@ -105,26 +106,40 @@ type openAIChatResponse struct {
 		} `json:"delta"`
 		Text string `json:"text"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
-func parseOpenAIResponse(contentType string, body []byte) (string, error) {
+func parseOpenAIResponse(contentType string, body []byte) (string, Usage, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
-		return "", fmt.Errorf("empty response body")
+		return "", Usage{}, fmt.Errorf("empty response body")
 	}
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") || strings.HasPrefix(trimmed, "data:") {
-		return parseOpenAIStream(trimmed)
+		text, err := parseOpenAIStream(trimmed)
+		return text, Usage{}, err
 	}
 
 	var parsed openAIChatResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("decode json response: %w", err)
+		return "", Usage{}, fmt.Errorf("decode json response: %w", err)
 	}
 	text := extractOpenAIText(parsed)
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("no text content found in response")
+		return "", Usage{}, fmt.Errorf("no text content found in response")
 	}
-	return text, nil
+	usage := Usage{
+		PromptTokens:     parsed.Usage.PromptTokens,
+		CompletionTokens: parsed.Usage.CompletionTokens,
+		TotalTokens:      parsed.Usage.TotalTokens,
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	return text, usage, nil
 }
 
 func parseOpenAIStream(raw string) (string, error) {

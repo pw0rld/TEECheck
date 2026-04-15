@@ -15,8 +15,18 @@ type GenerateRequest struct {
 }
 
 type GenerateResponse struct {
-	Text string
-	Raw  string
+	Text  string
+	Raw   string
+	Usage Usage
+}
+
+// Usage captures token accounting for a single LLM call. Fields are
+// zero when the provider did not return usage information — callers
+// should treat zero as "unknown", not "free".
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type Client interface {
