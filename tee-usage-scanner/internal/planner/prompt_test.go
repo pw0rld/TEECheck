@@ -10,7 +10,7 @@ import (
 
 func TestBuildSystemPrompt_MentionsActions(t *testing.T) {
 	available := []string{"list_dir", "read_file", "ripgrep", "tree_sitter_outline", "sink_catalog_lookup", "reverse_trace", "done"}
-	prompt := planner.BuildSystemPrompt(available)
+	prompt := planner.BuildSystemPrompt(available, "")
 
 	for _, name := range available {
 		if !strings.Contains(prompt, name) {
@@ -19,8 +19,26 @@ func TestBuildSystemPrompt_MentionsActions(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_InjectsObligations(t *testing.T) {
+	block := "### attestation-identity-verification\nQuote and report verification."
+	prompt := planner.BuildSystemPrompt([]string{"done"}, block)
+	if !strings.Contains(prompt, "SECURITY OBLIGATIONS") {
+		t.Error("obligations header missing when block is non-empty")
+	}
+	if !strings.Contains(prompt, "attestation-identity-verification") {
+		t.Error("obligations content missing from prompt")
+	}
+}
+
+func TestBuildSystemPrompt_SkipsObligationsWhenEmpty(t *testing.T) {
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "")
+	if strings.Contains(prompt, "SECURITY OBLIGATIONS") {
+		t.Error("obligations header should not appear when block is empty")
+	}
+}
+
 func TestBuildSystemPrompt_ExplainsResponseFormat(t *testing.T) {
-	prompt := planner.BuildSystemPrompt([]string{"done"})
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "")
 	if !strings.Contains(prompt, "thought") {
 		t.Error("system prompt missing 'thought' field instruction")
 	}

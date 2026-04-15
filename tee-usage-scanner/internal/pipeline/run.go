@@ -257,10 +257,11 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string) error {
 			Languages:      profile.Languages,
 			FrameworkHints: profile.FrameworkHints,
 		},
-		Client:      client,
-		Registry:    registry,
-		Budget:      planner.NewDefaultBudget(),
-		Temperature: cfg.LLMTemp,
+		Client:        client,
+		Registry:      registry,
+		Budget:        planner.NewDefaultBudget(),
+		Temperature:   cfg.LLMTemp,
+		KnowledgeRoot: cfg.KnowledgeRoot,
 	})
 
 	if result.Bundle != nil {

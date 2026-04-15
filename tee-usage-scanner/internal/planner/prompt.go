@@ -39,11 +39,20 @@ var actionArgSchemas = map[string]string{
 
 // BuildSystemPrompt returns the static system prompt the planner
 // sends with every LLM request. It explains the agent role, lists
-// available actions with typed arg schemas, and specifies the JSON
-// response format.
-func BuildSystemPrompt(availableActions []string) string {
+// available actions with typed arg schemas, optionally inlines the
+// curated obligations wiki, and specifies the JSON response format.
+//
+// obligationsBlock should be the string returned by LoadObligations.
+// Pass "" to skip the obligations section entirely.
+func BuildSystemPrompt(availableActions []string, obligationsBlock string) string {
 	var b strings.Builder
 	b.WriteString("You are TEECheck's L3 security audit planner. Your job is to identify candidate locations in a TEE codebase that warrant deep audit, focused on attestation and key lifecycle.\n\n")
+
+	if strings.TrimSpace(obligationsBlock) != "" {
+		b.WriteString("SECURITY OBLIGATIONS TO KEEP IN MIND (curated wiki, treat these as the review criteria a downstream human auditor will apply):\n")
+		b.WriteString(obligationsBlock)
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {

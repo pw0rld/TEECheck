@@ -30,6 +30,14 @@ type RunConfig struct {
 	// MaxActionsPerRound caps how many actions the LLM may request in
 	// one round. Defaults to 3 if zero.
 	MaxActionsPerRound int
+	// KnowledgeRoot is the on-disk root of the TEECheck knowledge wiki
+	// (typically cfg.KnowledgeRoot from the top-level config). When
+	// non-empty, Run will load `wiki/obligations/*.md` and
+	// `wiki/patterns/*.md` into the system prompt so the LLM sees the
+	// curated review criteria alongside the sink catalog. Empty means
+	// "no obligations block" — planner still runs, just without wiki
+	// context.
+	KnowledgeRoot string
 }
 
 // RunResult is the return value of Run. Bundle is always non-nil.
@@ -78,7 +86,8 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	// candidates, preventing the "sgx/svc/" hallucination we saw in v10.
 	observedPaths := map[string]bool{}
 
-	systemPrompt := BuildSystemPrompt(cfg.Registry.Names())
+	obligations := LoadObligations(cfg.KnowledgeRoot)
+	systemPrompt := BuildSystemPrompt(cfg.Registry.Names(), obligations)
 	roundsLog := runfs.RoundsLogPath(cfg.RunDir)
 
 	var donePayload actions.DonePayload
