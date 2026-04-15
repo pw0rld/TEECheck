@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,11 +18,13 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner"
 	scanall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner/all"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
@@ -63,37 +66,38 @@ func Run(cfg config.Config) (string, error) {
 	stageCfg := cfg
 	stageCfg.RunDir = runDir
 
-	// === Agent 1: Scanner ===
-	fmt.Println("\n=== Scanner Agent ===")
-
 	if err := preprocessor.Run(stageCfg); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
 
-	graphReg := scanall.NewDefaultGraphRegistry()
-	graphResult, err := scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
-		RepoRoot: fetch.LocalPath,
-		Focus:    cfg.Focus,
-		Mode:     cfg.Mode,
-	})
-	if err != nil {
-		return "", fmt.Errorf("scan: %w", err)
-	}
-	graphPath := runfs.GraphPath(runDir)
-	if err := runfs.WriteJSON(graphPath, graphResult); err != nil {
-		return "", fmt.Errorf("write graph: %w", err)
-	}
-	fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
-
-	stageCfg.GraphJSONPath = graphPath
-
-	if strings.EqualFold(cfg.Mode, "llm") && repomix.Available() {
-		// LLM mode: use LLM to identify hotspots from code content
-		if err := runLLMHotspotPipeline(stageCfg, fetch.LocalPath, runDir); err != nil {
-			return "", fmt.Errorf("llm hotspot pipeline: %w", err)
+	if strings.EqualFold(cfg.Mode, "llm") {
+		// === Agent 1: L3 Planner ===
+		fmt.Println("\n=== Planner Agent (L3) ===")
+		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir); err != nil {
+			return "", fmt.Errorf("L3 planner: %w", err)
+		}
+		if err := cases.Run(stageCfg); err != nil {
+			return "", fmt.Errorf("cases: %w", err)
 		}
 	} else {
-		// Heuristic mode: use hardcoded rules
+		// === Agent 1: Legacy Scanner ===
+		fmt.Println("\n=== Scanner Agent ===")
+		graphReg := scanall.NewDefaultGraphRegistry()
+		graphResult, err := scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
+			RepoRoot: fetch.LocalPath,
+			Focus:    cfg.Focus,
+			Mode:     cfg.Mode,
+		})
+		if err != nil {
+			return "", fmt.Errorf("scan: %w", err)
+		}
+		graphPath := runfs.GraphPath(runDir)
+		if err := runfs.WriteJSON(graphPath, graphResult); err != nil {
+			return "", fmt.Errorf("write graph: %w", err)
+		}
+		fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
+		stageCfg.GraphJSONPath = graphPath
+
 		if err := mapper.Run(stageCfg); err != nil {
 			return "", fmt.Errorf("mapper: %w", err)
 		}
@@ -211,162 +215,75 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-func runLLMHotspotPipeline(cfg config.Config, repoRoot, runDir string) error {
-	// Step 1: Use Repomix to compress the whole repo
-	fmt.Println("Compressing codebase with Repomix for LLM analysis...")
-	packResult, err := repomix.Pack(context.Background(), repomix.PackRequest{
-		RepoRoot: repoRoot,
-		Compress: true,
-	})
-	if err != nil {
-		return fmt.Errorf("repomix pack: %w", err)
-	}
-	codeContext := repomix.FormatForPrompt(packResult, 60000) // ~60k chars ≈ ~15k tokens
-	fmt.Printf("Compressed %d files for LLM analysis\n", len(packResult.Files))
-
-	// Step 2: Load project profile
+// runL3Planner drives the L3 LLM planner against a cloned repo,
+// persists its evidence bundle + rounds log, and writes a hotspot /
+// repo_map shim so the downstream 4-agent chain (cases -> expert ->
+// challenger -> verifier -> arbiter) consumes the planner's candidates
+// unchanged.
+//
+// Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
+// default L3 entry point). The old hotspot-via-prompt interim solution
+// (formerly runLLMHotspotPipeline) is superseded and deleted.
+func runL3Planner(cfg config.Config, repoRoot, runDir string) error {
 	var profile artifacts.ProjectProfile
 	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
 		return fmt.Errorf("load profile: %w", err)
 	}
 
-	// Step 3: LLM identifies hotspots
-	client := llm.NewClient(cfg)
-	hotspots, err := scanner.IdentifyHotspotsLLM(context.Background(), client, scanner.LLMHotspotRequest{
-		RepoRoot:       repoRoot,
-		CodeContext:    codeContext,
-		Focus:          cfg.Focus,
-		MaxHotspots:    cfg.MaxHotspots,
-		ProjectProfile: profile,
-	}, cfg.LLMTemp)
-	if err != nil {
-		return fmt.Errorf("llm hotspot identification: %w", err)
+	catalogPath := filepath.Join(cfg.KnowledgeRoot, "sinks", "rust.json")
+	if _, err := os.Stat(catalogPath); err != nil {
+		return fmt.Errorf("sink catalog not found at %s: %w", catalogPath, err)
 	}
-	fmt.Printf("LLM identified %d security hotspots\n", len(hotspots))
 
-	// Step 4: Write hotspot index
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-	hotspotIndex := artifacts.HotspotIndex{
-		SchemaVersion: "teecheck.hotspot_index.v1",
-		RunID:         manifest.RunID,
-		Hotspots:      hotspots,
-	}
-	if err := runfs.WriteJSON(runfs.HotspotIndexPath(runDir), hotspotIndex); err != nil {
-		return fmt.Errorf("write hotspot index: %w", err)
-	}
-	fmt.Printf("Hotspot index written to %s\n", runfs.HotspotIndexPath(runDir))
 
-	// Step 5: Also write a minimal repo_map so downstream stages don't fail
-	repoMap := artifacts.RepoMap{
-		SchemaVersion: "teecheck.repo_map.v1",
-		Repo: artifacts.RepoRef{
-			URL:    manifest.RepoURL,
-			Commit: manifest.Commit,
-			Focus:  manifest.Focus,
+	client := llm.NewClient(cfg)
+	registry := actions.NewDefaultRegistryWithSinks(catalogPath)
+
+	fmt.Printf("Registered planner actions: %v\n", registry.Names())
+	fmt.Printf("Catalog: %s\n", catalogPath)
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:    manifest.RunID,
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Profile: planner.PromptProfile{
+			RepoURL:        manifest.RepoURL,
+			Commit:         manifest.Commit,
+			Focus:          cfg.Focus,
+			Languages:      profile.Languages,
+			FrameworkHints: profile.FrameworkHints,
 		},
-		Notes: []string{"repo_map generated as stub; hotspots were identified by LLM"},
-	}
-	if err := runfs.WriteJSON(runfs.RepoMapPath(runDir), repoMap); err != nil {
-		return fmt.Errorf("write repo_map: %w", err)
-	}
+		Client:      client,
+		Registry:    registry,
+		Budget:      planner.NewDefaultBudget(),
+		Temperature: cfg.LLMTemp,
+	})
 
-	// Step 6: Generate case packs from LLM hotspots
-	limit := cfg.MaxCases
-	if limit <= 0 || limit > len(hotspots) {
-		limit = len(hotspots)
-	}
-	repoName := sanitizeSlug(filepath.Base(repoRoot))
-	commit := manifest.Commit
-	if len(commit) > 7 {
-		commit = commit[:7]
-	}
-
-	for idx, hs := range hotspots[:limit] {
-		pack := artifacts.CasePack{
-			SchemaVersion:       "teecheck.case_pack.v1",
-			CaseID:              fmt.Sprintf("%s@%s:%s:%s:%03d", repoName, commit, cfg.Focus, hs.Kind, idx+1),
-			HotspotID:           hs.HotspotID,
-			Focus:               cfg.Focus,
-			Category:            hs.Kind,
-			Priority:            hs.Priority,
-			TargetFiles:         hs.Paths,
-			TargetSymbols:       hs.Symbols,
-			WhySelected:         hs.WhySelected,
-			GraphFacts:          []string{fmt.Sprintf("LLM-identified hotspot: %s (priority: %s)", hs.Kind, hs.Priority)},
-			ExpectedObligations: obligationsForKind(hs.Kind),
-			OpenQuestions:       []string{"Does surrounding context mitigate this concern?"},
-		}
-
-		// Enrich with Repomix content for target files
-		if len(hs.Paths) > 0 {
-			targetPack, err := repomix.Pack(context.Background(), repomix.PackRequest{
-				RepoRoot:    repoRoot,
-				TargetFiles: hs.Paths,
-				Compress:    true,
-			})
-			if err == nil {
-				for filePath, content := range targetPack.Files {
-					if content != "" {
-						pack.Snippets = append(pack.Snippets, artifacts.PromptSnippet{
-							Path:      filePath,
-							StartLine: 1,
-							EndLine:   strings.Count(content, "\n") + 1,
-							Content:   content,
-						})
-					}
-				}
-			}
-		}
-
-		casePath := filepath.Join(runfs.CasePacksDir(runDir), fmt.Sprintf("case-%03d.json", idx+1))
-		if err := runfs.WriteJSON(casePath, pack); err != nil {
-			return fmt.Errorf("write case pack: %w", err)
+	if result.Bundle != nil {
+		m := result.Bundle.PlannerMeta
+		fmt.Printf("\n[planner] termination=%s rounds=%d/%d tokens=%d wall_clock_ms=%d candidates=%d\n",
+			m.TerminationReason, m.RoundsUsed, m.RoundsBudget, m.TokensUsed, m.WallClockMs, len(result.Bundle.Candidates))
+		for _, c := range result.Bundle.Candidates {
+			fmt.Printf("  - %s [%s, %s] paths=%v\n", c.ID, c.Kind, c.Priority, c.Paths)
 		}
 	}
-	fmt.Printf("Wrote %d case pack(s) to %s\n", limit, runfs.CasePacksDir(runDir))
-
-	return nil
-}
-
-func obligationsForKind(kind string) []string {
-	lower := strings.ToLower(kind)
-	switch {
-	case strings.Contains(lower, "inject") || strings.Contains(lower, "xss") || strings.Contains(lower, "sqli"):
-		return []string{"input validation and sanitization", "output encoding", "parameterized queries"}
-	case strings.Contains(lower, "auth"):
-		return []string{"authentication verification", "session management", "credential protection"}
-	case strings.Contains(lower, "access") || strings.Contains(lower, "idor") || strings.Contains(lower, "privilege"):
-		return []string{"authorization checks", "object-level access control", "principle of least privilege"}
-	case strings.Contains(lower, "key") || strings.Contains(lower, "crypto") || strings.Contains(lower, "secret"):
-		return []string{"key and secret handling", "secure key storage", "proper algorithm selection"}
-	case strings.Contains(lower, "exposure") || strings.Contains(lower, "leak") || strings.Contains(lower, "sensitive"):
-		return []string{"sensitive data protection", "secure logging", "data classification"}
-	case strings.Contains(lower, "config") || strings.Contains(lower, "cors") || strings.Contains(lower, "csp"):
-		return []string{"security configuration", "secure defaults", "header hardening"}
-	case strings.Contains(lower, "depend") || strings.Contains(lower, "supply"):
-		return []string{"dependency verification", "version pinning", "vulnerability scanning"}
-	case strings.Contains(lower, "boundary") || strings.Contains(lower, "tee") || strings.Contains(lower, "attest"):
-		return []string{"trust-boundary revalidation", "attestation verification", "caller binding"}
-	case strings.Contains(lower, "state") || strings.Contains(lower, "race") || strings.Contains(lower, "replay"):
-		return []string{"state integrity", "concurrency safety", "replay resistance"}
-	case strings.Contains(lower, "error") || strings.Contains(lower, "fail"):
-		return []string{"secure error handling", "fail-closed behavior", "information leak prevention"}
-	default:
-		return []string{"security best practices", "defense in depth"}
+	if result.Err != nil {
+		return fmt.Errorf("planner run: %w", result.Err)
 	}
-}
-
-func sanitizeSlug(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "@", "-", ".", "-", "_", "-", " ", "-")
-	value = replacer.Replace(value)
-	for strings.Contains(value, "--") {
-		value = strings.ReplaceAll(value, "--", "-")
+	if result.Bundle == nil {
+		return fmt.Errorf("planner returned nil bundle")
 	}
-	return strings.Trim(value, "-")
+	if len(result.Bundle.Candidates) == 0 {
+		return fmt.Errorf("planner produced 0 candidates; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
+	}
+
+	// Convert evidence_bundle candidates into the legacy HotspotIndex +
+	// RepoMap shapes the downstream pipeline expects.
+	return planner.WriteHotspotShim(cfg, result.Bundle)
 }
 
 func enrichCasesWithRepomix(runDir, repoRoot string) {
