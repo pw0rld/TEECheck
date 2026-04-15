@@ -81,7 +81,7 @@ func buildCasePacks(manifest artifacts.Manifest, profile artifacts.ProjectProfil
 			WhySelected:         append([]string{}, hotspot.WhySelected...),
 			ToolFacts:           collectToolFacts(profile, repoMap, hotspot),
 			GraphFacts:          collectGraphFacts(hotspot),
-			Snippets:            collectSnippets(manifest.LocalPath, hotspot.Paths),
+			Snippets:            collectSnippets(manifest.LocalPath, hotspot.Paths, hotspot.Symbols),
 			ExpectedObligations: obligations,
 			OpenQuestions:       openQuestions,
 		}
@@ -121,7 +121,36 @@ func collectGraphFacts(hotspot artifacts.Hotspot) []string {
 	return facts
 }
 
-func collectSnippets(repoRoot string, paths []string) []artifacts.PromptSnippet {
+// snippetSmallFileLineCap controls when collectSnippets returns the
+// entire file as a single snippet vs symbol-anchored windows. Files
+// at or below this length are included whole.
+const snippetSmallFileLineCap = 500
+
+// snippetWindowRadius is the number of lines extracted on each side
+// of a symbol match in a large file. The window covers
+// 2*radius+1 lines centered on the match.
+const snippetWindowRadius = 50
+
+// snippetFallbackHeadLines is the number of leading lines included
+// when no symbols are provided or none of them match in a large file.
+// Larger than the historical 18 so reviewers see useful context.
+const snippetFallbackHeadLines = 80
+
+// collectSnippets reads each (deduped) path in paths and returns
+// PromptSnippets sized to give downstream LLM agents enough context
+// to reason about the candidate.
+//
+// Strategy:
+//  1. Small file (<= snippetSmallFileLineCap lines): include the entire file.
+//  2. Large file with at least one symbol matching its content: extract
+//     a window of ±snippetWindowRadius lines around each first match, then
+//     merge overlapping windows into a single snippet.
+//  3. Large file with no symbol matches: fall back to the first
+//     snippetFallbackHeadLines lines (was 18 in v1 — too small).
+//
+// This replaces the v1 behavior of always returning the first 18 lines,
+// which left expert/challenger blind to anything past the import block.
+func collectSnippets(repoRoot string, paths []string, symbols []string) []artifacts.PromptSnippet {
 	var snippets []artifacts.PromptSnippet
 	for _, rel := range uniqStrings(paths) {
 		full := filepath.Join(repoRoot, rel)
@@ -130,18 +159,111 @@ func collectSnippets(repoRoot string, paths []string) []artifacts.PromptSnippet 
 			continue
 		}
 		lines := strings.Split(string(data), "\n")
-		end := len(lines)
-		if end > 18 {
-			end = 18
+		// Drop trailing empty line from a final newline.
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
 		}
-		snippets = append(snippets, artifacts.PromptSnippet{
-			Path:      filepath.ToSlash(rel),
-			StartLine: 1,
-			EndLine:   end,
-			Content:   strings.Join(lines[:end], "\n"),
-		})
+		total := len(lines)
+		if total == 0 {
+			continue
+		}
+
+		relSlash := filepath.ToSlash(rel)
+
+		// Case 1: small file, include everything.
+		if total <= snippetSmallFileLineCap {
+			snippets = append(snippets, artifacts.PromptSnippet{
+				Path:      relSlash,
+				StartLine: 1,
+				EndLine:   total,
+				Content:   strings.Join(lines, "\n"),
+			})
+			continue
+		}
+
+		// Case 2: large file. Find the first line each symbol appears on.
+		var hits []int
+		for _, sym := range symbols {
+			sym = strings.TrimSpace(sym)
+			if sym == "" {
+				continue
+			}
+			for i, line := range lines {
+				if strings.Contains(line, sym) {
+					hits = append(hits, i+1) // 1-indexed
+					break
+				}
+			}
+		}
+
+		// Case 3: no hits, fall back to head.
+		if len(hits) == 0 {
+			end := snippetFallbackHeadLines
+			if end > total {
+				end = total
+			}
+			snippets = append(snippets, artifacts.PromptSnippet{
+				Path:      relSlash,
+				StartLine: 1,
+				EndLine:   end,
+				Content:   strings.Join(lines[:end], "\n"),
+			})
+			continue
+		}
+
+		// Build merged windows from hits.
+		windows := mergeLineWindows(hits, snippetWindowRadius, total)
+		for _, w := range windows {
+			snippets = append(snippets, artifacts.PromptSnippet{
+				Path:      relSlash,
+				StartLine: w.start,
+				EndLine:   w.end,
+				Content:   strings.Join(lines[w.start-1:w.end], "\n"),
+			})
+		}
 	}
 	return snippets
+}
+
+// lineWindow is a 1-indexed inclusive line range.
+type lineWindow struct {
+	start, end int
+}
+
+// mergeLineWindows takes a list of 1-indexed center lines and a
+// per-side radius, expands each to a [center-radius, center+radius]
+// window clamped to [1, total], then merges any overlapping or
+// touching windows. Returns the merged windows in start-line order.
+func mergeLineWindows(hits []int, radius, total int) []lineWindow {
+	if len(hits) == 0 {
+		return nil
+	}
+	wins := make([]lineWindow, 0, len(hits))
+	for _, h := range hits {
+		s := h - radius
+		if s < 1 {
+			s = 1
+		}
+		e := h + radius
+		if e > total {
+			e = total
+		}
+		wins = append(wins, lineWindow{s, e})
+	}
+	// Sort by start.
+	sort.Slice(wins, func(i, j int) bool { return wins[i].start < wins[j].start })
+	merged := []lineWindow{wins[0]}
+	for _, w := range wins[1:] {
+		last := &merged[len(merged)-1]
+		if w.start <= last.end+1 {
+			if w.end > last.end {
+				last.end = w.end
+			}
+		} else {
+			merged = append(merged, w)
+		}
+	}
+	return merged
 }
 
 func caseTemplate(kind string) (string, []string, []string) {
