@@ -37,8 +37,11 @@ go build -o teecheck ./cmd/teecheck/
   --llm-provider glm --llm-api-key your-zai-key --focus tee --max-cases 4
 ```
 
-See [`examples/mobilecoin-l3-v14-scan/REPORT.md`](examples/mobilecoin-l3-v14-scan/REPORT.md)
-for a full annotated GLM run on `mobilecoinfoundation/mobilecoin`.
+See [`examples/mobilecoin-l3-v17-scan/REPORT.md`](examples/mobilecoin-l3-v17-scan/REPORT.md)
+for a full annotated GLM run on `mobilecoinfoundation/mobilecoin` (v17 is the
+first run where the planner autonomously used `reverse_trace` to pivot from
+low-level SGX wrappers into the AKE trust-decision code). Earlier runs are
+preserved under `examples/mobilecoin-l3-v1{3,4}-scan/`.
 
 ## How It Works
 
@@ -85,11 +88,13 @@ picks hotspots, then the 4-agent chain runs in heuristic mode. Good for quick
 scans and CI smoke tests.
 
 **LLM mode** (`--mode llm` or `teecheck plan`): The L3 planner replaces the
-keyword picker, and every agent runs in LLM mode. Built-in provider presets:
-`openai` (any OpenAI-compatible endpoint) and `glm` (z.ai Anthropic-compatible
-endpoint, defaults to `glm-4.7`). Transient 5xx / timeout errors are retried
-with backoff. Produces detailed review packets, an evidence bundle, and a
-streaming `rounds.jsonl` for full planner replay.
+keyword picker, and every agent runs in LLM mode. **v1 is validated on GLM
+only** — use `--llm-provider glm` with a z.ai API key (defaults to `glm-4.7`
+via the Anthropic-compatible endpoint). An `openai` preset exists for any
+OpenAI-compatible endpoint, but it is unvalidated in v1 and deferred to v2.
+Transient 5xx / timeout errors are retried with backoff. Produces detailed
+review packets, an evidence bundle, and a streaming `rounds.jsonl` for full
+planner replay.
 
 ## Commands
 
@@ -123,7 +128,7 @@ teecheck run <url-or-path> [flags]
 | `--output-dir` | `runs` | Output directory for run artifacts |
 | `--knowledge-root` | `knowledge` | Knowledge wiki root directory |
 | `--static-tools` | `auto` | Static tools: `auto`, `none`, or `grep,semgrep` |
-| `--llm-provider` | `openai` | Provider preset: `openai` or `glm` |
+| `--llm-provider` | `openai` | Provider preset: `glm` (validated in v1) or `openai` (unvalidated) |
 | `--llm-base-url` | env | Provider base URL; `glm` fills Anthropic-compatible defaults automatically |
 | `--llm-api-key` | env | API key |
 | `--llm-model` | env | Model name |
@@ -135,8 +140,8 @@ teecheck run <url-or-path> [flags]
 - `TEECHECK_LLM_MODEL`
 
 Provider presets:
-- `openai`: generic OpenAI-compatible mode. Bring your own `--llm-base-url` if needed.
-- `glm`: uses `https://api.z.ai/api/anthropic` by default and falls back to model `glm-4.7` when `--llm-model` is omitted.
+- `glm` (**validated in v1**): uses `https://api.z.ai/api/anthropic` by default and falls back to model `glm-4.7` when `--llm-model` is omitted.
+- `openai` (**experimental, unvalidated**): generic OpenAI-compatible mode. Bring your own `--llm-base-url` if needed. Not part of v1 scope — see design spec §15.
 
 ### `teecheck review` (optional, interactive)
 
@@ -214,7 +219,7 @@ TEECheck auto-generates a code structure graph using pluggable adapters:
 | **codeql** | Stub | Data flow analysis, call graph extraction |
 | **joern** | Stub | CPG-based cross-procedure analysis |
 
-In LLM mode, the Scanner agent can decide which tools to use based on the project profile.
+In LLM mode, the L3 planner decides which tools to use based on the project profile and the sink catalog.
 
 ## Static Check Framework
 
@@ -250,8 +255,8 @@ pages that agents query during analysis.
 
 In LLM mode, agents communicate through a message bus:
 
-- **Reviewer** can ask **Scanner** to search for specific code patterns
-- **Auditor** can ask **Reviewer** or **Scanner** for clarification
+- **Verifier** can ask **Expert** or **Challenger** for clarification on their claims
+- **Arbiter** can ask **Verifier** or the static-check tool handler for more evidence
 - Dialog rounds are capped (default 3) to control cost
 - All dialogs are persisted as JSONL for auditability
 

@@ -640,7 +640,7 @@ v1 视为成功当:
 2. 上述至少有 2 个 candidate 所在的文件,其路径 / 符号名在老的关键字系统下不会高分 (也就是老系统会漏的)。
 3. 端到端运行时间不超过当前 heuristic mode 的 2 倍。
 4. 现有 fixture 上 `--mode heuristic` 输出无回归。
-5. Live smoke test 在 GLM 和一个 OpenAI 兼容 provider 上稳定通过。
+5. Live smoke test 在 GLM (`glm-4.7` via z.ai Anthropic-compatible 端点) 上稳定通过。v1 范围收敛到 GLM-only,OpenAI 兼容 provider 验证延期到 v2,详见 §16。
 
 ## 16. 实施状态 (截至 2026-04-15)
 
@@ -672,7 +672,8 @@ v1 视为成功当:
 | §14 LSP 集成 (rust-analyzer / gopls) | ⏸ v2 | 明确延期 |
 | §14 Rust 之外的 tree-sitter grammar | ⏸ v2 | 当前只接 Rust |
 | §14 Joern / CodeQL 重型 action | ⏸ v2 | `internal/staticcheck/` 有 stub 但无 planner action |
-| §15 双 provider live smoke | ⚠ 部分 | GLM (`glm-4.7` via z.ai) 已验证;OpenAI provider 待验证 |
+| §15 GLM live smoke | ✅ | `glm-4.7` via z.ai Anthropic-compatible 端点,mobilecoin v13–v17 已验证 |
+| OpenAI 兼容 provider 验证 | ⏸ v2 | 范围决策 2026-04-15: v1 只跑 GLM,OpenAI 代码仍在但不做验证 |
 
 ### 验证亮点
 

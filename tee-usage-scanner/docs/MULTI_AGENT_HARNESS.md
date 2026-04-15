@@ -37,11 +37,17 @@ Agents still have specialized roles, but they collaborate around the same case.
 
 This means:
 
-- the `Mapper` prepares the case
+- the `Mapper` (heuristic mode) or the `L3 Planner` (LLM mode) prepares the case
 - the `Expert` proposes the main security hypothesis
 - the `Challenger` attacks or questions that hypothesis
 - the `Verifier` strengthens or weakens the evidence
 - the `Arbiter` prepares a final review packet
+
+> **Note (2026-04-15):** In LLM mode the L3 planner replaces the keyword-based
+> mapper as the hotspot picker. It runs an action-registry loop against the
+> cloned repo and produces an `evidence_bundle.json` that is shimmed into the
+> legacy `hotspot_index.json` format so the downstream 4-agent chain is
+> unchanged. See `docs/superpowers/specs/2026-04-11-llm-planner-design.md`.
 
 ### 3. No Plain Chunk-RAG As The Main Knowledge Strategy
 

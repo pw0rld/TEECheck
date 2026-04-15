@@ -728,8 +728,9 @@ v1 is considered successful when:
    candidates the old system would have missed).
 3. End-to-end run time is within 2x of the current heuristic mode.
 4. No regression in `--mode heuristic` output on existing test fixtures.
-5. The live smoke test passes reliably against GLM and one OpenAI-compatible
-   provider.
+5. The live smoke test passes reliably against GLM (`glm-4.7` via z.ai
+   Anthropic-compatible endpoint). v1 is scoped to GLM only; OpenAI-compatible
+   provider validation is deferred to v2 — see §16.
 
 ## 16. Implementation Status (as of 2026-04-15)
 
@@ -762,7 +763,8 @@ source of truth instead of drifting from the code.
 | §14 LSP integration (rust-analyzer / gopls) | ⏸ v2 | Explicitly deferred |
 | §14 Tree-sitter grammars beyond Rust (Go / Solidity / Python / TS) | ⏸ v2 | Only Rust grammar is wired |
 | §14 Joern / CodeQL heavyweight actions | ⏸ v2 | Stubs exist in `internal/staticcheck/` but no planner action |
-| §15 Live smoke test passing on two providers | ⚠ Partial | Validated on GLM (`glm-4.7` via z.ai); OpenAI provider not yet validated |
+| §15 Live smoke test on GLM | ✅ | Validated on `glm-4.7` via z.ai Anthropic-compatible endpoint (mobilecoin v13–v17) |
+| OpenAI-compatible provider validation | ⏸ v2 | Scope decision 2026-04-15: v1 is GLM-only; OpenAI path stays implemented but unvalidated |
 
 ### Validation Highlights
 
