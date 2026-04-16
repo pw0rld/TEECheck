@@ -93,8 +93,21 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string) strin
 // planner round. It includes the project profile, accumulated
 // candidates, the trailing window of recent observations, and the
 // remaining budget.
-func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget) string {
+func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget, avoidPaths []string) string {
 	var b strings.Builder
+
+	if len(avoidPaths) > 0 {
+		b.WriteString("=== ALREADY COVERED BY PREVIOUS PASSES (must avoid) ===\n")
+		b.WriteString("The following file::symbol targets were already audited in earlier passes\n")
+		b.WriteString("of this audit session. Your job THIS pass is to find DIFFERENT code paths\n")
+		b.WriteString("that were NOT touched before. Do not re-pick these exact targets.\n")
+		b.WriteString("If the repo has no remaining TEE-relevant code paths to audit, call done\n")
+		b.WriteString("with an empty candidates list and explain in the summary.\n\n")
+		for _, p := range avoidPaths {
+			fmt.Fprintf(&b, "  - %s\n", p)
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("=== PROJECT ===\n")
 	if profile.RepoURL != "" {

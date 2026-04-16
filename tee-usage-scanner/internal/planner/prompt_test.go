@@ -61,7 +61,7 @@ func TestBuildRoundPrompt_IncludesProfile(t *testing.T) {
 		FileCount:      1234,
 	}
 
-	prompt := planner.BuildRoundPrompt(state, profile, budget)
+	prompt := planner.BuildRoundPrompt(state, profile, budget, nil)
 	if !strings.Contains(prompt, "rust") {
 		t.Error("round prompt missing language")
 	}
@@ -81,7 +81,7 @@ func TestBuildRoundPrompt_IncludesBudget(t *testing.T) {
 	budget.ConsumeRound()
 	budget.ConsumeTokens(15000)
 
-	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, budget)
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, budget, nil)
 	if !strings.Contains(prompt, "2/8") && !strings.Contains(prompt, "2 / 8") {
 		t.Errorf("round prompt missing rounds budget: %s", prompt)
 	}
@@ -107,12 +107,36 @@ func TestBuildRoundPrompt_IncludesRecentObservations(t *testing.T) {
 		},
 	})
 
-	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget())
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
 	if !strings.Contains(prompt, "verify_quote") {
 		t.Error("round prompt missing recent observation content")
 	}
 	if !strings.Contains(prompt, "read_file") {
 		t.Error("round prompt missing recent action name")
+	}
+}
+
+func TestBuildRoundPrompt_IncludesAvoidPathsHeader(t *testing.T) {
+	state := planner.NewState("run-001")
+	avoid := []string{"attest/verifier/src/dcap.rs::DcapVerifier::verify", "sgx/service/src/lib.rs::verify_report"}
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), avoid)
+	if !strings.Contains(prompt, "ALREADY COVERED BY PREVIOUS PASSES") {
+		t.Error("avoid-paths header missing when list is non-empty")
+	}
+	if !strings.Contains(prompt, "DcapVerifier::verify") {
+		t.Error("avoid-paths content missing from prompt")
+	}
+	if !strings.Contains(prompt, "sgx/service/src/lib.rs") {
+		t.Error("second avoid entry missing")
+	}
+}
+
+func TestBuildRoundPrompt_OmitsAvoidHeaderWhenEmpty(t *testing.T) {
+	state := planner.NewState("run-001")
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if strings.Contains(prompt, "ALREADY COVERED") {
+		t.Error("avoid header should not appear when list is nil")
 	}
 }
 
@@ -122,7 +146,7 @@ func TestBuildRoundPrompt_IncludesCandidatesSoFar(t *testing.T) {
 		{ID: "candidate-001", Kind: "attestation", Paths: []string{"attest/verify.rs"}},
 	})
 
-	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget())
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
 	if !strings.Contains(prompt, "candidate-001") {
 		t.Error("round prompt missing candidate id")
 	}

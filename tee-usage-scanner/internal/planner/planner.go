@@ -38,6 +38,13 @@ type RunConfig struct {
 	// "no obligations block" — planner still runs, just without wiki
 	// context.
 	KnowledgeRoot string
+
+	// AvoidPaths lists "file::symbol" strings that previous planner
+	// passes in this audit session already covered. When non-empty,
+	// the round prompt will tell the LLM to avoid re-picking these
+	// exact targets and to find different code paths instead. Used
+	// by the multi-sample audit mode (--samples N) in pipeline.Run.
+	AvoidPaths []string
 }
 
 // RunResult is the return value of Run. Bundle is always non-nil.
@@ -99,7 +106,7 @@ loop:
 		cfg.Budget.ConsumeRound()
 		roundNum := cfg.Budget.RoundsUsed
 
-		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget)
+		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths)
 
 		isFinalRound := cfg.Budget.RoundsUsed == cfg.Budget.MaxRounds
 

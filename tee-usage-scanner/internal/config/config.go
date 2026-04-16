@@ -39,6 +39,13 @@ type Config struct {
 	MaxDialogRounds int
 	Target          string
 	Mode            string
+	// Samples is the number of independent planner passes to run
+	// per pipeline invocation. Default 1 = the legacy behavior.
+	// With samples > 1, each pass after the first is told which
+	// (file, symbol) pairs were already covered and asked to find
+	// different ones; the union is deduped and fed to the 4-agent
+	// downstream pipeline as a single case set.
+	Samples int
 }
 
 func Parse(args []string) (Config, error) {
@@ -519,8 +526,10 @@ func parseRun(args []string) (Config, error) {
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		Samples:         1,
 	}
 	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Agent mode: heuristic or llm")
+	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")

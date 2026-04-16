@@ -246,45 +246,133 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string) error {
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 	fmt.Printf("Catalog: %s\n", catalogPath)
 
-	result := planner.Run(context.Background(), planner.RunConfig{
-		RunID:    manifest.RunID,
-		RepoRoot: repoRoot,
-		RunDir:   runDir,
-		Profile: planner.PromptProfile{
-			RepoURL:        manifest.RepoURL,
-			Commit:         manifest.Commit,
-			Focus:          cfg.Focus,
-			Languages:      profile.Languages,
-			FrameworkHints: profile.FrameworkHints,
-		},
-		Client:        client,
-		Registry:      registry,
-		Budget:        planner.NewDefaultBudget(),
-		Temperature:   cfg.LLMTemp,
-		KnowledgeRoot: cfg.KnowledgeRoot,
-	})
+	samples := cfg.Samples
+	if samples <= 0 {
+		samples = 1
+	}
 
-	if result.Bundle != nil {
-		m := result.Bundle.PlannerMeta
-		fmt.Printf("\n[planner] termination=%s rounds=%d/%d tokens=%d wall_clock_ms=%d candidates=%d\n",
-			m.TerminationReason, m.RoundsUsed, m.RoundsBudget, m.TokensUsed, m.WallClockMs, len(result.Bundle.Candidates))
-		for _, c := range result.Bundle.Candidates {
-			fmt.Printf("  - %s [%s, %s] paths=%v\n", c.ID, c.Kind, c.Priority, c.Paths)
+	promptProfile := planner.PromptProfile{
+		RepoURL:        manifest.RepoURL,
+		Commit:         manifest.Commit,
+		Focus:          cfg.Focus,
+		Languages:      profile.Languages,
+		FrameworkHints: profile.FrameworkHints,
+	}
+
+	var bundles []*artifacts.EvidenceBundle
+	var avoid []string
+
+	for pass := 1; pass <= samples; pass++ {
+		if samples > 1 {
+			fmt.Printf("\n=== Planner pass %d/%d (avoiding %d previously-covered targets) ===\n", pass, samples, len(avoid))
+		}
+		result := planner.Run(context.Background(), planner.RunConfig{
+			RunID:         manifest.RunID,
+			RepoRoot:      repoRoot,
+			RunDir:        runDir,
+			Profile:       promptProfile,
+			Client:        client,
+			Registry:      registry,
+			Budget:        planner.NewDefaultBudget(),
+			Temperature:   cfg.LLMTemp,
+			KnowledgeRoot: cfg.KnowledgeRoot,
+			AvoidPaths:    avoid,
+		})
+
+		if result.Bundle != nil {
+			m := result.Bundle.PlannerMeta
+			fmt.Printf("[planner pass %d] termination=%s rounds=%d/%d tokens=%d wall_clock_ms=%d candidates=%d\n",
+				pass, m.TerminationReason, m.RoundsUsed, m.RoundsBudget, m.TokensUsed, m.WallClockMs, len(result.Bundle.Candidates))
+			for _, c := range result.Bundle.Candidates {
+				fmt.Printf("  - %s [%s, %s] paths=%v\n", c.ID, c.Kind, c.Priority, c.Paths)
+			}
+		}
+		if result.Err != nil {
+			if pass == 1 {
+				return fmt.Errorf("planner pass 1: %w", result.Err)
+			}
+			// A later pass failing is not fatal — we already have
+			// earlier-pass bundles to work with.
+			fmt.Fprintf(os.Stderr, "Warning: planner pass %d failed, continuing with earlier passes: %v\n", pass, result.Err)
+			break
+		}
+		if result.Bundle == nil {
+			if pass == 1 {
+				return fmt.Errorf("planner pass 1 returned nil bundle")
+			}
+			break
+		}
+		bundles = append(bundles, result.Bundle)
+
+		// Persist per-pass bundle when running multi-sample so the
+		// stats collector can later replay pass-by-pass metrics.
+		if samples > 1 {
+			passPath := filepath.Join(runfs.PlannerDir(runDir), fmt.Sprintf("pass-%d.json", pass))
+			if err := runfs.WriteJSON(passPath, result.Bundle); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to persist pass %d bundle: %v\n", pass, err)
+			}
+		}
+
+		// Accumulate dedupe state for the next pass's avoid list.
+		merged := DedupeCandidates(bundles)
+		avoid = AvoidList(merged)
+		if samples > 1 && len(result.Bundle.Candidates) > 0 && len(merged) == accumulatedLen(bundles[:len(bundles)-1]) {
+			fmt.Printf("[planner pass %d] all candidates were duplicates of earlier passes — stopping early\n", pass)
+			break
 		}
 	}
-	if result.Err != nil {
-		return fmt.Errorf("planner run: %w", result.Err)
-	}
-	if result.Bundle == nil {
-		return fmt.Errorf("planner returned nil bundle")
-	}
-	if len(result.Bundle.Candidates) == 0 {
-		return fmt.Errorf("planner produced 0 candidates; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
+
+	if len(bundles) == 0 {
+		return fmt.Errorf("planner produced no bundles; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
 	}
 
-	// Convert evidence_bundle candidates into the legacy HotspotIndex +
-	// RepoMap shapes the downstream pipeline expects.
-	return planner.WriteHotspotShim(cfg, result.Bundle)
+	// Merge into a single bundle for downstream: the first bundle's
+	// metadata (commit, repo, run_id) stays authoritative, candidates
+	// are the deduped union.
+	merged := *bundles[0]
+	merged.Candidates = DedupeCandidates(bundles)
+	mergedTokens := 0
+	mergedWall := int64(0)
+	mergedRounds := 0
+	for _, b := range bundles {
+		mergedTokens += b.PlannerMeta.TokensUsed
+		mergedWall += b.PlannerMeta.WallClockMs
+		mergedRounds += b.PlannerMeta.RoundsUsed
+	}
+	merged.PlannerMeta.TokensUsed = mergedTokens
+	merged.PlannerMeta.WallClockMs = mergedWall
+	merged.PlannerMeta.RoundsUsed = mergedRounds
+
+	if samples > 1 {
+		fmt.Printf("\n=== Multi-sample dedupe ===\n")
+		rawTotal := 0
+		for _, b := range bundles {
+			rawTotal += len(b.Candidates)
+		}
+		fmt.Printf("Total raw candidates across %d passes: %d\n", len(bundles), rawTotal)
+		fmt.Printf("Unique after dedup: %d\n", len(merged.Candidates))
+	}
+
+	if len(merged.Candidates) == 0 {
+		return fmt.Errorf("planner produced 0 candidates after dedup; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
+	}
+
+	// Persist merged bundle to the canonical evidence_bundle.json
+	// path so downstream (and stats) see a single view of truth.
+	if err := runfs.WriteJSON(runfs.EvidenceBundlePath(runDir), merged); err != nil {
+		return fmt.Errorf("write merged evidence bundle: %w", err)
+	}
+
+	// Convert merged evidence_bundle candidates into the legacy
+	// HotspotIndex + RepoMap shapes the downstream pipeline expects.
+	return planner.WriteHotspotShim(cfg, &merged)
+}
+
+// accumulatedLen returns how many unique candidates the dedupe
+// result would have had at a given list of prior bundles. Used to
+// detect "this pass added nothing new so stop".
+func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
+	return len(DedupeCandidates(bundles))
 }
 
 func enrichCasesWithRepomix(runDir, repoRoot string) {
