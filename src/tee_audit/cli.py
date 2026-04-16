@@ -44,9 +44,13 @@ def scan(repo: str, stage: str | None, llm_api: str | None, output_dir: str | No
         console.print(f"Stages: {list(stages)}")
     console.print()
 
-    # Pipeline execution is wired in Phase 4
-    console.print("[yellow]Pipeline execution not yet wired[/] — stages are being implemented.")
-    console.print("Run individual stages with Python for now.")
+    from tee_audit.pipeline import run_pipeline, PipelineError
+
+    try:
+        run_pipeline(config, repo, stages=list(stages) if stages else None)
+    except PipelineError as e:
+        console.print(f"\n[red]Pipeline failed:[/] {e}")
+        raise SystemExit(1) from e
 
 
 @main.command("setup")
