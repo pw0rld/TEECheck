@@ -78,6 +78,8 @@ func Parse(args []string) (Config, error) {
 		return parseVerifier(args[1:])
 	case "arbiter":
 		return parseArbiter(args[1:])
+	case "report":
+		return parseReport(args[1:])
 	case "curator":
 		return parseCurator(args[1:])
 	case "run":
@@ -470,6 +472,35 @@ func parseCurator(args []string) (Config, error) {
 	}
 	if err := validateAgentLLM(cfg.CuratorMode, cfg, "curator"); err != nil {
 		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func parseReport(args []string) (Config, error) {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "report",
+		Mode:          "llm",
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode: llm (synthesized) or heuristic (concatenated)")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("report requires --run-dir")
 	}
 	return cfg, nil
 }

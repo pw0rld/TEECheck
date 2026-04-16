@@ -21,6 +21,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/pipeline"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomap"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/report"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
@@ -93,6 +94,8 @@ func main() {
 		} else {
 			err = feedback.Run(cfg, os.Stdout)
 		}
+	case "report":
+		err = report.Run(cfg)
 	case "run", "plan":
 		// Since M4 (T2.1), `plan` is a convenience alias for
 		// `run --mode llm`. config.parsePlan forces cfg.Mode = "llm"

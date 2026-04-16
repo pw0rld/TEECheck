@@ -1,169 +1,276 @@
-# MobileCoin L3 Audit Report — v22 (Multi-Sample)
+# TEECheck Audit Report: mobilecoin@59a52d3
 
-**Target:** `mobilecoinfoundation/mobilecoin` @ `59a52d3d52e6`
-**Focus:** TEE (attestation + key lifecycle)
-**Date:** 2026-04-16
-**Pipeline:** L3 planner (5 independent passes with avoid-list) + 4-agent adversarial review (GLM-4.7)
-**First multi-sample audit run.** 5 planner passes discovered 11 unique candidates across 7 crates — 3.7x the coverage of any single-sample run in v1–v20.
+**Repo:** git@github.com:mobilecoinfoundation/mobilecoin.git  
+**Commit:** 59a52d3d52e6cbbc2f67e0c223fa8d55d034a5b8  
+**Run ID:** mobilecoin-l3-v22
 
-## TL;DR
+## Executive Summary
 
-v22 is the first run using `--samples 5`, which runs the planner 5 times with an avoid-list that grows after each pass. The LLM correctly explored new code paths each time (0 dedup collisions). Combined with the verifier snippet-injection fix from v20, this produces the broadest and most grounded audit report in the series.
+This audit evaluated the Trusted Execution Environment (TEE) implementation, specifically focusing on attestation verification, authorization, and key management within the MobileCoin codebase. The analysis covered 11 candidates across critical paths including the AKE responder, consensus enclave, and SGX service layers. The audit identified one **confirmed** security vulnerability regarding missing attestation verification in the `ClientAuthRequestInput` path, which could allow an attacker to bypass identity verification. Additionally, several areas requiring human review were flagged, primarily concerning the delegation of verification logic and the visibility of security-critical checks (e.g., identity enforcement in `get_verifier` and replay resistance in DCAP verification).
 
-**By the numbers:**
-- 11 unique candidates (vs 3 in any single-sample run)
-- 7 distinct crates covered (attest/, crypto/, consensus/, sgx/, fog/)
-- 3/11 verifier-corroborated (against real code)
-- 2 `confirmed_candidate` (high confidence) + 1 `likely_issue`
-- `reverse_trace` used autonomously in 2 of 5 passes
-- Total planner cost: 66k tokens / 411s wall clock
+While the majority of the low-level SGX wrappers and FFI bindings were found to be correctly implemented as primitives (with no issues observed), the confirmed finding in the AKE responder represents a high-severity trust boundary failure. The remaining "needs review" items highlight architectural dependencies where the security correctness relies on external components or invisible code paths. Immediate action is required to address the confirmed finding and to verify the implementation details of the delegated verification logic.
 
-## Planner Passes
+---
 
-| Pass | Candidates | New Avoid Targets | Key Crates Hit |
-|---|---|---|---|
-| 1 | 2 | 0 → 8 | `attest/ake/`, `crypto/ake/enclave/` |
-| 2 | 2 | 8 → 17 | `consensus/enclave/`, `attest/core/` |
-| 3 | 3 | 17 → 19 | `sgx/service/`, `attest/verifier/` |
-| 4 | 2 | 19 → 22 | `sgx/service/` (seal/unseal + report creation) |
-| 5 | 3 | 22 → 27 | `attest/trusted/`, `sgx/types/` |
-| **Total** | **12 raw → 11 unique** | | **7 crates** |
+## Findings
 
-`reverse_trace` was used in passes 1 and 2 — the LLM autonomously traced backward from `verify_attestation_evidence` to find the AKE responder and consensus enclave integration points.
+### 1. Missing Attestation Verification in ClientAuthRequestInput Path
+**ID:** `mobilecoin@59a52d3:tee:attestation:001`  
+**Status:** `confirmed_candidate` (Corroborated)  
+**Severity:** High  
+**Confidence:** High  
+**Files:** `attest/ake/src/responder.rs`
 
-## All 11 Findings
-
-### Tier 1 — Confirmed Candidates (2, high confidence)
-
-#### Finding 001 — AKE Responder skips attestation on `ClientAuthRequestInput`
-**File:** `attest/ake/src/responder.rs`
-**Verifier:** corroborated
-**Arbiter:** confirmed_candidate (high)
-
-The `ClientAuthRequestInput` transition path deserializes the incoming payload but **skips the critical attestation verification step** (checking quote + collateral) before proceeding to the handshake response. This creates an unauthenticated mode in the AKE responder — a client that sends `ClientAuthRequestInput` instead of `AuthRequestInput` bypasses attestation entirely.
-
-**Evidence (from verifier against real code):**
-- The `try_next` method has two match arms: one for `AuthRequestInput` (which calls `verifier.verify()`) and one for `ClientAuthRequestInput` (which does NOT)
-- The `ClientAuthRequestInput` path proceeds directly to `handle_response` → `Ready` state
-- This is consistent with the code comment at lines 189–201 referencing "unauthenticated" modes
-
-**Human check:** Is `ClientAuthRequestInput` reachable in production? If it's a test-only path, this is low-risk. If any production client can trigger it, this is a real bypass.
-
-#### Finding 006 — `verify_report` wrapper hides report fields from caller
-**File:** `sgx/service/src/lib.rs`
-**Verifier:** corroborated
-**Arbiter:** confirmed_candidate (high)
-
-The `verify_report` function wraps `sgx_verify_report` (FFI) and returns only `sgx_status_t` — it does **not** expose the report's `MRENCLAVE`, `MRSIGNER`, `REPORT_DATA`, or `ATTRIBUTES` fields to the caller. This means a caller who uses `verify_report` can confirm "this report has a valid signature" but **cannot inspect what the report actually claims** (which enclave produced it, what data it bound, whether debug mode was on).
+**Core Observation:**
+The `Transition<Start, ClientAuthRequestInput, AuthResponseOutput>::try_next` function handles the client authentication flow but fails to perform attestation verification on the incoming request. Unlike the parallel `NodeAuthRequestInput` flow, which explicitly deserializes and verifies the DCAP quote, the `ClientAuthRequestInput` path reads the payload containing the client's evidence, discards it (bound to `_payload`), and immediately proceeds to `handle_response`. This allows a client to establish a trusted channel without providing valid attestation evidence.
 
 **Evidence:**
-- Function signature returns `Result<(), SgxError>` — no report body
-- Callers must separately call `sgx_create_report` and compare fields manually — this is not enforced by the API
-- The `report()` function (which generates reports) also accepts `report_data: Option<&sgx_report_data_t>` where `None` means "no binding"
+- The `NodeAuthRequestInput` path (lines 139-177) explicitly deserializes `DcapEvidence` and performs verification using `DcapVerifier`.
+- The `ClientAuthRequestInput` path (lines 180-201) calls `handle_request` but binds the result to `_payload`, effectively discarding the evidence.
+- The `ClientAuthRequestInput` path proceeds immediately to `Self::handle_response` without any attestation verification logic.
+- The `handle_response` function (lines 77-111) sends the responder's attestation evidence but does not verify the peer's evidence.
+- The `NodeAuthRequestInput` uses the `HandshakeIX` pattern (Identity exchange), while `ClientAuthRequestInput` uses `HandshakeNX` (No identity exchange). However, the explicit transmission and subsequent discarding of evidence in the payload suggest a mismatch between protocol design and implementation.
 
-**Human check:** Trace all callers of `verify_report` — do they separately inspect the report body, or do they trust the `Ok(())` alone?
+**Recommended Follow-up:**
+Determine if the omission of verification in the `ClientAuthRequestInput` path is intentional (due to the `HandshakeNX` pattern) or a critical vulnerability. If the protocol requires identity verification for clients, this code must be updated to deserialize and verify the `DcapEvidence` before transitioning to the `Ready` state.
 
-### Tier 2 — Likely Issue (1, medium confidence)
+---
 
-#### Finding 005 — `Quote::verify` implementation not visible in snippet
-**File:** `attest/core/src/quote.rs`
-**Verifier:** corroborated
-**Arbiter:** likely_issue (medium)
+### 2. Incomplete Attestation Verification in verify_report
+**ID:** `mobilecoin@59a52d3:tee:attestation:006`  
+**Status:** `confirmed_candidate` (Corroborated)  
+**Severity:** Medium  
+**Confidence:** High  
+**Files:** `sgx/service/src/lib.rs`
 
-The case pack included the first 190 lines of `quote.rs` (type definitions and constructors). The actual `verify()` and `verify_report()` implementations start at line 279+. The verifier confirmed the types and structure but could not evaluate the verification logic. The hypothesis (missing freshness/identity checks in quote verification) remains open — evidence is incomplete, not refuted.
+**Core Observation:**
+The `verify_report` function in `sgx/service/src/lib.rs` acts as a thin wrapper around the unsafe `sgx_verify_report` FFI call. It validates the cryptographic integrity (MAC) of the report structure but lacks logic to verify the identity (MRENCLAVE/MRSIGNER) or freshness (timestamps/nonce) of the attestation. Relying solely on this wrapper without additional checks in the calling context may lead to accepting expired or unauthorized reports.
 
-**Human check:** Read `attest/core/src/quote.rs` lines 279–400 and check for nonce/timestamp validation.
+**Evidence:**
+- The function `verify_report` (line 41) consists solely of a direct call to the unsafe FFI function `sgx_verify_report`.
+- There is no code inspecting `report.body.attributes`, `report.body.mr_enclave`, or `report.body.mr_signer`.
+- There is no code inspecting `report.body.report_data` for nonces or timestamps.
+- The function documentation describes it as a "Verify a report" wrapper without specifying high-level attestation checks.
 
-### Tier 3 — Needs Review (8, low confidence)
+**Recommended Follow-up:**
+Review all callers of `verify_report` to ensure they explicitly enforce identity checks (MRENCLAVE/MRSIGNER) and freshness (nonce/timestamp) validation. Update the documentation of `verify_report` to clarify that it only performs structural and MAC verification.
 
-These findings share a common pattern: the **code visible in snippets is a delegation boundary** (calling `self.ake.verify_*` or `verifier.verify()`), and the actual logic lives in another crate. The verifier correctly identified this but couldn't resolve it without cross-file context.
+---
 
-| # | File | Core observation |
-|---|---|---|
-| 002 | `crypto/ake/enclave/src/lib.rs` | `peer_init` implementation not in snippet |
-| 003 | same | MRENCLAVE check delegated to invisible `get_verifier` |
-| 004 | `consensus/enclave/impl/src/lib.rs` | attestation delegated to `self.ake`, no visible validation of result |
-| 007 | `attest/verifier/src/dcap.rs` | Core verification delegated to `mc_attestation_verifier` external crate |
-| **008** | `sgx/service/src/lib.rs` | **Sealing uses `SGX_KEYPOLICY_MRENCLAVE` (strict)** — this is actually a positive finding, not a vulnerability |
-| 009 | `sgx/service/src/lib.rs` | `report()` allows `report_data=None` → generates unbound report |
-| 010 | `attest/trusted/src/lib.rs` | `report_data` not checked for freshness/replay |
-| 011 | `sgx/types/src/{function,types}.rs` | Only FFI declarations, no implementation to audit |
+### 3. Incomplete Attestation Verification in Quote::verify
+**ID:** `mobilecoin@59a52d3:tee:attestation:005`  
+**Status:** `needs_review` (Corroborated)  
+**Severity:** High  
+**Confidence:** Medium  
+**Files:** `attest/core/src/quote.rs`
 
-### Notable: Finding 008 answers a prior open question
+**Core Observation:**
+The analysis of `attest/core/src/quote.rs` reveals that the `Quote::verify` and `Quote::verify_report` methods are responsible for validating SGX quotes. However, the provided snippets (lines 1-80) contain only type definitions, constants, and imports. The implementation logic for the critical verification functions is missing, making it impossible to confirm if checks for GID, security version, debug mode, and report data binding are correctly enforced.
 
-v20 Finding 2 flagged `fog/ingest/enclave/impl/src/lib.rs::enclave_init` for "no visible MRENCLAVE check on unseal". We couldn't resolve it without knowing the sealing policy. v22's planner independently entered `sgx/service/src/lib.rs::seal_data` and the verifier confirmed:
+**Evidence:**
+- The provided source code snippet contains only lines 1-80.
+- The target symbols `Quote::verify` and `Quote::verify_report` are not defined within the provided lines.
+- The file imports `Report`, `ReportBody`, and `ReportBodyVerifyError`, suggesting delegation, but the implementation is not visible.
 
-> "The code strictly enforces `SGX_KEYPOLICY_MRENCLAVE`, which binds sealed data to the exact enclave measurement."
+**Recommended Follow-up:**
+Locate and review the full implementation of `Quote::verify` and `Quote::verify_report` in `attest/core/src/quote.rs`. Verify that the implementation explicitly checks the `AttributeFlags::DEBUG`, Security Version, and report data binding.
 
-This means v20 Finding 2 is **not a vulnerability** — the hardware sealing policy provides the MRENCLAVE binding that the application code doesn't need to re-check. v22 closed this question without any human intervention, simply by expanding coverage to include the seal implementation.
+---
 
-## Coverage Map
+### 4. Analysis of EnclaveRouter::peer_init for Authorization and Caller Binding
+**ID:** `mobilecoin@59a52d3:tee:authorization:002`  
+**Status:** `needs_review` (Inconclusive)  
+**Severity:** High  
+**Confidence:** Low  
+**Files:** `crypto/ake/enclave/src/lib.rs`
 
-Directories touched across all 5 passes (✓ = candidate found, ✗ = not reached):
+**Core Observation:**
+The target function `EnclaveRouter::peer_init` is responsible for initiating peer connections. The provided snippets (lines 1-80) show module imports and state structures but do not contain the implementation of `peer_init`. Consequently, it is impossible to verify if the function correctly implements authorization, caller binding, or trust-boundary revalidation.
 
-```
-attest/
-  ├── ake/src/          ✓ responder (pass 1)
-  ├── core/src/         ✓ quote (pass 2)
-  ├── trusted/src/      ✓ report (pass 5)
-  └── verifier/src/     ✓ dcap (pass 3)
-crypto/
-  └── ake/enclave/src/  ✓ session binding (pass 1) + verify (pass 2)
-consensus/
-  └── enclave/impl/src/ ✓ attestation integration (pass 2)
-sgx/
-  ├── service/src/      ✓ verify_report + seal + report creation (passes 3-4)
-  └── types/src/        ✓ key derivation FFI (pass 5)
-fog/
-  ├── ingest/           ✗ (covered in v20/v21, not re-hit in v22)
-  ├── view/             ✗
-  ├── ledger/           ✗
-  └── enclave_connection/ ✗
-enclave-boundary/       ✗
-```
+**Evidence:**
+- The provided code snippet (lines 1-80) contains module imports and the `AkeEnclaveState` struct definition.
+- The target function `EnclaveRouter::peer_init` is not present in the snippet.
+- Tool hits suggest `responder.binding()` is called at line 271, but this line is not in the provided snippet.
 
-5 of 7 major TEE directories covered. `fog/` sub-enclaves and `enclave-boundary/` were missed because v22's planner spent its avoid-budget gravitating toward `attest/` and `sgx/` internals. A v23 run with `--focus fog` would fill the gap.
+**Recommended Follow-up:**
+Inspect the implementation of `EnclaveRouter::peer_init` (around line 271) to verify that attestation evidence is verified and strictly bound to the caller context (e.g., transport channel) to prevent Confused Deputy attacks.
 
-## Cost Analysis
+---
 
-| Metric | v20 (single) | v22 (5 samples) | Ratio |
-|---|---|---|---|
-| Planner tokens | 13,767 | 66,267 | 4.8x |
-| Planner wall clock | 41s | 411s | 10x |
-| Candidates | 3 | 11 | 3.7x |
-| Corroborated | 3 | 3 | 1.0x |
-| Confirmed high-conf | 0 | 2 | — |
-| Cost per candidate | 4,589 | 6,024 | 1.3x |
-| Cost per corroborated | 4,589 | 22,089 | 4.8x |
+### 5. Incomplete Attestation Verification in verify_attestation_evidence
+**ID:** `mobilecoin@59a52d3:tee:attestation:003`  
+**Status:** `needs_review` (Inconclusive)  
+**Severity:** High  
+**Confidence:** Medium  
+**Files:** `crypto/ake/enclave/src/lib.rs`
 
-Multi-sample is ~5x more expensive but produces ~4x more candidates and reaches code paths that no single run has ever touched. The cost-per-candidate is only 1.3x higher (good scaling), but cost-per-corroborated is 4.8x because many of the new candidates hit delegation boundaries where the verifier can't fully resolve.
+**Core Observation:**
+The function `verify_attestation_evidence` performs cryptographic verification of the DCAP quote and checks nonces. However, it relies on an external helper `get_verifier` to provide the verification policy (MRENCLAVE, MRENCLAVE signer, etc.). The definition of `get_verifier` is not visible, leaving the enforcement of identity obligations unconfirmed.
 
-## What a Human Auditor Should Do With This Report
+**Evidence:**
+- The function `verify_attestation_evidence` (line 669) performs a freshness check by comparing `quote.app_report_body()` against the local `report.body()` (line 696).
+- Cryptographic verification is delegated to a `verifier` object obtained via `self.get_verifier(report_data)` (line 701).
+- The implementation of `get_verifier` is not present in the provided snippet (lines 619-719).
 
-**Priority 1 (30 minutes):**
-1. Read `attest/ake/src/responder.rs` lines 134–201. Is the `ClientAuthRequestInput` path reachable from production clients?
-2. Trace callers of `sgx/service/src/lib.rs::verify_report`. Do they inspect the report body, or just check the return code?
+**Recommended Follow-up:**
+Locate the implementation of `get_verifier`. Verify that it returns a policy that strictly enforces MRENCLAVE and MRSIGNER checks against a trusted allowlist, ensuring that a valid quote from a malicious enclave (different measurement) cannot be accepted.
 
-**Priority 2 (1 hour):**
-3. Read `attest/core/src/quote.rs` lines 279–400. Does `verify()` check nonces/timestamps?
-4. Read `sgx/service/src/lib.rs::report()` callers. When is `report_data=None` passed in production?
+---
 
-**Priority 3 (optional):**
-5. Run `teecheck plan mobilecoin --samples 3 --focus fog` to fill the fog/ coverage gap.
-6. Consider the 5 "contested" findings (007–011) as lower-priority follow-ups.
+### 6. Attestation Verification Delegation in Consensus Enclave
+**ID:** `mobilecoin@59a52d3:tee:attestation:004`  
+**Status:** `needs_review` (Inconclusive)  
+**Severity:** Medium  
+**Confidence:** Medium  
+**Files:** `consensus/enclave/impl/src/lib.rs`
 
-## Artifacts
+**Core Observation:**
+The function `verify_attestation_evidence` in `SgxConsensusEnclave` delegates the entire attestation verification process to an internal `ake` module. It acts as a thin wrapper without performing additional checks or state validation. While this may be an architectural decision, the lack of independent validation in the consensus enclave creates a risk if the `ake` module fails to enforce context-specific rules.
 
-```
-04_planner/
-  evidence_bundle.json     11 candidates (merged from 5 passes)
-  pass-1.json .. pass-5.json   per-pass bundles
-  rounds.jsonl             40 rounds (8 per pass × 5), 140KB
-03_cases/                  11 case packs
-04_expert/                 11 hypotheses
-05_challenger/             11 challenges
-06_verifier/               11 memos (3 corroborated, 5 contested, 3 inconclusive)
-07_arbiter/
-  findings.json            11 findings
-  packets/review-*.md      11 human-readable review packets
-```
+**Evidence:**
+- The function `verify_attestation_evidence` (lines 439-447) delegates the call to `self.ake.verify_attestation_evidence`.
+- There is no visible logic for identity verification, nonce freshness, or replay protection within the `SgxConsensusEnclave` implementation.
+- Error handling is a direct propagation (`?`) of the result from the `ake` module.
+
+**Recommended Follow-up:**
+Confirm that the `ake` module's verification logic is sufficient for the consensus enclave's security requirements. Verify that the `ResponderId`s passed during `enclave_init` are correctly used by the `ake` module to enforce identity binding.
+
+---
+
+### 7. DCAP Attestation Verification Logic
+**ID:** `mobilecoin@59a52d3:tee:attestation:007`  
+**Status:** `needs_review` (Contested)  
+**Severity:** Medium  
+**Confidence:** Medium  
+**Files:** `attest/verifier/src/dcap.rs`
+
+**Core Observation:**
+The `DcapVerifier` delegates verification to `EvidenceVerifier` and `ReportDataHashVerifier`. The `ReportDataHashVerifier` performs a static equality check of the report data hash against a pre-computed value. There is no visible logic in `dcap.rs` to validate the freshness of the nonce or enforce that it is unique per session, potentially exposing the system to replay attacks if the nonce is static.
+
+**Evidence:**
+- `ReportDataHashVerifier` compares the hash of the quote's `report_data` against a pre-computed hash derived from `EnclaveReportDataContents`.
+- The `time` parameter passed to `EvidenceVerifier` is used for certificate validity, not quote freshness.
+- There is no logic validating the freshness of the `nonce` or enforcing uniqueness per session.
+- `DcapVerifier::new` accepts a fixed `report_data` object, and the verifier checks against this fixed object.
+
+**Recommended Follow-up:**
+Verify that the `nonce` passed to `DcapVerifier` is guaranteed to be fresh and unique for every verification request (e.g., generated by the verifier just before the request). Ensure that the system does not rely on static nonces, which would allow replay attacks.
+
+---
+
+### 8. SGX Sealing Key Policy and Integrity Validation
+**ID:** `mobilecoin@59a52d3:tee:key_management:008`  
+**Status:** `needs_review` (Contested)  
+**Severity:** Low  
+**Confidence:** High  
+**Files:** `sgx/service/src/lib.rs`
+
+**Core Observation:**
+The implementation uses `SGX_KEYPOLICY_MRENCLAVE` to bind sealed data to the specific enclave measurement. The review noted that the code does not implement explicit caller authorization or access control checks within the sealing/unsealing functions. While the Challenger argues this is the responsibility of the application logic, the absence of explicit checks in the wrapper could be misused.
+
+**Evidence:**
+- Constant `KEY_POLICY` is defined as `SGX_KEYPOLICY_MRENCLAVE` (line 57).
+- `seal_data` and `unseal_data` validate buffer lengths and MACs but do not perform caller authorization.
+- The code accepts `additional_mac_txt` as an argument, provided lengths are consistent.
+
+**Recommended Follow-up:**
+Verify that all callers of `seal_data` and `unseal_data` implement appropriate access control checks to ensure that services within the enclave cannot unseal data intended for other services.
+
+---
+
+### 9. Insufficient Identity Binding in Attestation Report Generation
+**ID:** `mobilecoin@59a52d3:tee:attestation:009`  
+**Status:** `no_issue_observed`  
+**Severity:** Low  
+**Confidence:** High  
+**Files:** `sgx/service/src/lib.rs`
+
+**Core Observation:**
+The `report` function allows `report_data` to be `None`, resulting in a null pointer passed to `sgx_create_report`. The hypothesis suggested this bypasses caller-binding requirements. However, the function is a low-level utility wrapper for `sgx_tservice`. Identity binding is the obligation of the caller and the verifier, not this primitive.
+
+**Evidence:**
+- The function is a direct wrapper mapping Rust types to SGX instructions.
+- The hardware signs whatever is in the memory location (or zeros if null).
+- The security of the binding relies on the protocol using this primitive.
+
+**Recommended Follow-up:**
+None. The function behaves correctly as a low-level primitive.
+
+---
+
+### 10. Missing Validation in Report::new
+**ID:** `mobilecoin@59a52d3:tee:attestation:010`  
+**Status:** `no_issue_observed`  
+**Severity:** Low  
+**Confidence:** High  
+**Files:** `attest/trusted/src/lib.rs`
+
+**Core Observation:**
+The hypothesis claimed `Report::new` fails to validate `report_data` for freshness. The function is a direct interface to the hardware's `EREPORT` instruction, designed to bind data, not validate it. Validation is the responsibility of the verifier.
+
+**Evidence:**
+- The implementation is a pass-through to `mc_sgx_compat::report`.
+- It is technically impossible for `Report::new` to validate freshness without external state.
+
+**Recommended Follow-up:**
+None. The function adheres to its design as a cryptographic primitive.
+
+---
+
+### 11. Analysis of sgx_get_key FFI Bindings
+**ID:** `mobilecoin@59a52d3:tee:key_management:011`  
+**Status:** `no_issue_observed`  
+**Severity:** Low  
+**Confidence:** High  
+**Files:** `sgx/types/src/function.rs`, `sgx/types/src/types.rs`
+
+**Core Observation:**
+The hypothesis suggested missing authorization checks in key derivation. The reviewed files are strictly Rust FFI bindings and type definitions. The enforcement of `key_policy` (MRENCLAVE, MRSIGNER) occurs inside the trusted runtime/CPU microcode, not in the Rust wrapper.
+
+**Evidence:**
+- `sgx/types/src/function.rs` contains `extern` block declarations.
+- `sgx/types/src/types.rs` defines `sgx_key_request_t` and policy constants.
+- No implementation logic exists in the provided files, which is standard for FFI bindings.
+
+**Recommended Follow-up:**
+None. The code correctly delegates security enforcement to the SGX trusted runtime.
+
+---
+
+## Coverage
+
+### Audited Directories/Crates
+- `attest/ake/src/responder.rs`
+- `crypto/ake/enclave/src/lib.rs`
+- `consensus/enclave/impl/src/lib.rs`
+- `attest/core/src/quote.rs`
+- `sgx/service/src/lib.rs`
+- `attest/verifier/src/dcap.rs`
+- `attest/trusted/src/lib.rs`
+- `sgx/types/src/function.rs`
+- `sgx/types/src/types.rs`
+
+### What Was Missed / Limitations
+- **Incomplete Code Visibility:** For several findings (e.g., `mobilecoin@59a52d3:tee:attestation:005`, `mobilecoin@59a52d3:tee:authorization:002`), the critical implementation logic was not present in the provided snippets (lines 1-80 only), leading to `inconclusive` or `needs_review` statuses.
+- **Delegated Logic:** Findings often relied on external helpers (e.g., `get_verifier`, `EvidenceVerifier`). The security of the system depends on the correctness of these unreviewed components.
+- **Dynamic Context:** The analysis was static; runtime behavior or configuration (e.g., specific nonces used in `DcapVerifier`) could not be observed.
+
+---
+
+## Next Steps for Human Reviewer
+
+1.  **Address High-Severity Confirmed Finding:**
+    *   Immediately investigate `attest/ake/src/responder.rs` (Finding #001). Determine if the `ClientAuthRequestInput` path should verify attestation evidence. If so, implement verification similar to the `NodeAuthRequestInput` path.
+
+2.  **Verify Delegated Implementations:**
+    *   Locate and audit the `get_verifier` function in `crypto/ake/enclave/src/lib.rs` (Finding #003) to ensure it enforces strict MRENCLAVE/MRSIGNER policies.
+    *   Locate the full implementation of `Quote::verify` in `attest/core/src/quote.rs` (Finding #005) to confirm it checks `DEBUG` flags and security versions.
+
+3.  **Review Authorization Bindings:**
+    *   Examine `EnclaveRouter::peer_init` in `crypto/ake/enclave/src/lib.rs` (Finding #002) to ensure caller binding prevents Confused Deputy attacks.
+
+4.  **Assess Replay Resistance:**
+    *   Review the usage of `DcapVerifier` (Finding #007) to ensure that nonces are generated freshly for each session and not reused, preventing replay attacks.
+
+5.  **Documentation Updates:**
+    *   For `sgx/service/src/lib.rs` (Finding #006), update documentation for `verify_report` to clarify that it only performs structural/MAC verification and that callers must enforce identity and freshness.
