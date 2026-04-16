@@ -574,6 +574,14 @@ func parseRun(args []string) (Config, error) {
 		return Config{}, fmt.Errorf("run requires a target (URL or local path)")
 	}
 	cfg.Target = target
+	// When multi-sample is requested, auto-scale max-cases so the
+	// downstream pipeline actually audits all discovered candidates
+	// instead of silently truncating to a single-pass cap. The user
+	// can still override with an explicit --max-cases value larger
+	// than the auto-scaled one.
+	if cfg.Samples > 1 && cfg.MaxCases <= 12 {
+		cfg.MaxCases = cfg.Samples * cfg.MaxCases
+	}
 	if cfg.Mode == "llm" {
 		cfg.ExpertMode = "llm"
 		cfg.ChallengeMode = "llm"
