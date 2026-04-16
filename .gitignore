@@ -18,3 +18,6 @@ results/
 .venv/
 venv/
 *.DS_Store
+.omc/
+.omx/
+.agents/
