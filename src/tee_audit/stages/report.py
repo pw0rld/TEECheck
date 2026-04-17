@@ -136,7 +136,8 @@ def run_report(
             error_save_dir=results_dir,
         )
         executive_summary = response.executive_summary
-    except Exception:
+    except Exception as e:
+        logger.warning("LLM report generation failed, using fallback summary: %s", str(e)[:200])
         executive_summary = f"Audit found {len(input_data.findings)} findings across {len(set(f.invariant_id for f in input_data.findings))} invariants."
 
     # Assemble report

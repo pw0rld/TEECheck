@@ -67,8 +67,8 @@ def parse_with_retry(
     raw_response = ""
     try:
         raw_response = client.complete(system, user, temperature=0)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Fallback raw completion also failed: %s", str(e)[:200])
 
     if error_save_dir:
         error_save_dir.mkdir(parents=True, exist_ok=True)

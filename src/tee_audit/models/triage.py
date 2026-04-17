@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from tee_audit.models.finding import Confidence
+from tee_audit.models.finding import Confidence, TrustPathTier
 
 
 class Grade(str, Enum):
@@ -35,7 +35,7 @@ class PositiveGuard(BaseModel):
 
     id: str  # e.g., "PG-01"
     invariant_refs: list[str]  # e.g., ["INV-01", "INV-02"]
-    trust_path_tier: str
+    trust_path_tier: TrustPathTier
     description: str
     code_evidence: str
     completeness_status: str  # "complete" or "partial"

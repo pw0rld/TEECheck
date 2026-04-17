@@ -54,10 +54,9 @@ class AuditContext:
         return data
 
     def get_last_completed(self) -> int:
-        """Return the highest completed stage number, or -1 if none."""
-        if not self._completed_stages:
-            return -1
-        return max(self._completed_stages)
+        """Return the highest completed standard stage number (0-6), or -1 if none."""
+        standard = {s for s in self._completed_stages if 0 <= s <= 6}
+        return max(standard) if standard else -1
 
     def is_stage_completed(self, stage_num: int) -> bool:
         """Check if a stage has been completed."""

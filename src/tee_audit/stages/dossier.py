@@ -81,10 +81,10 @@ def _build_repo_structure(repo_path: Path, max_depth: int = 2, max_entries: int 
             if item.is_dir():
                 lines.append(f"{item.name}/")
                 if max_depth > 1:
-                    for child in sorted(item.iterdir())[:10]:
-                        if child.name.startswith("."):
-                            continue
-                        prefix = "  " + ("├── " if child != sorted(item.iterdir())[-1] else "└── ")
+                    children = sorted(item.iterdir())
+                    visible = [c for c in children[:10] if not c.name.startswith(".")]
+                    for idx, child in enumerate(visible):
+                        prefix = "  " + ("├── " if idx < len(visible) - 1 else "└── ")
                         lines.append(f"{prefix}{child.name}{'/' if child.is_dir() else ''}")
             else:
                 lines.append(item.name)

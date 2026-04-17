@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from tee_audit.contracts import Stage5aInput, Stage5aOutput
-from tee_audit.models.finding import Confidence
+from tee_audit.models.finding import Confidence, TrustPathTier
 from tee_audit.models.triage import Grade, GradedFinding, PositiveGuard
 from tee_audit.utils.sarif import parse_sarif, extract_results
 
@@ -105,7 +105,7 @@ def run_triage(input_data: Stage5aInput) -> Stage5aOutput:
             positive_guards.append(PositiveGuard(
                 id=f"PG-{len(positive_guards) + 1:02d}",
                 invariant_refs=[invariant_id],
-                trust_path_tier="core",
+                trust_path_tier=TrustPathTier.CORE,
                 description=result.message[:200],
                 code_evidence=code_location,
                 completeness_status="complete" if confidence == Confidence.CONFIRMED else "partial",

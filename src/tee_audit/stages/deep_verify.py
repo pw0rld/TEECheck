@@ -183,11 +183,15 @@ def run_deep_verify(
             except Exception as e:
                 logger.error("Cluster %s failed: %s", key, str(e)[:200])
 
-    # Assign sequential IDs
-    for i, f in enumerate(all_findings):
-        f.id = f"V-{i + 1:02d}"
-    for i, u in enumerate(all_unknowns):
-        u.id = f"U-{i + 1:02d}"
+    # Assign sequential IDs (use model_copy to preserve immutability)
+    all_findings = [
+        f.model_copy(update={"id": f"V-{i + 1:02d}"})
+        for i, f in enumerate(all_findings)
+    ]
+    all_unknowns = [
+        u.model_copy(update={"id": f"U-{i + 1:02d}"})
+        for i, u in enumerate(all_unknowns)
+    ]
 
     logger.info(
         "Stage 5b complete: %d verified findings, %d unknowns",

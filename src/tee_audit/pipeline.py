@@ -180,7 +180,8 @@ def _run_single_stage(
         if not stage0_data:
             raise PipelineError("Stage 0 output required. Run stage 0 first.")
         stage0 = Stage0Output.model_validate(stage0_data)
-        assert llm_client is not None
+        if llm_client is None:
+            raise PipelineError("LLM client required for stage 1 but not configured")
         output = run_dossier(
             Stage1Input(repo_path=repo_path, fingerprint=stage0.fingerprint),
             llm_client,
@@ -195,7 +196,8 @@ def _run_single_stage(
             raise PipelineError("Stages 0 and 1 outputs required. Run stages 0-1 first.")
         stage0 = Stage0Output.model_validate(stage0_data)
         stage1 = Stage1Output.model_validate(stage1_data)
-        assert llm_client is not None
+        if llm_client is None:
+            raise PipelineError("LLM client required for stage 2 but not configured")
         output = run_invariants(
             Stage2Input(fingerprint=stage0.fingerprint, dossier=stage1.dossier),
             llm_client,
@@ -217,7 +219,8 @@ def _run_single_stage(
             raise PipelineError("Stage 2 output required for CodeQL query selection.")
         stage2 = Stage2Output.model_validate(stage2_data)
         codeql_path = find_codeql()
-        assert codeql_path is not None
+        if codeql_path is None:
+            raise PipelineError("CodeQL binary not found")
         artifact_root = Path(config.artifact_root)
         output = run_codeql(
             Stage4Input(repo_path=repo_path, invariants=stage2.invariants),
@@ -235,7 +238,7 @@ def _run_single_stage(
         stage2 = Stage2Output.model_validate(stage2_data)
 
         # Stage 5a: Triage
-        sarif_path = Path(stage4_data["sarif_path"]) if stage4_data else None
+        sarif_path = Path(stage4_data["sarif_path"]) if stage4_data and "sarif_path" in stage4_data else None
         if sarif_path and sarif_path.exists():
             triage_output = run_triage(
                 Stage5aInput(sarif_path=sarif_path, invariants=stage2.invariants)
@@ -243,7 +246,8 @@ def _run_single_stage(
             ctx.save_stage(5, triage_output)
 
             # Stage 5b: Deep verify
-            assert llm_client is not None
+            if llm_client is None:
+                raise PipelineError("LLM client required for stage 5b but not configured")
             verify_output = run_deep_verify(
                 Stage5bInput(
                     graded_findings=triage_output.graded_findings,
@@ -253,15 +257,15 @@ def _run_single_stage(
                 llm_client,
                 max_concurrent=config.max_concurrent_llm_calls,
             )
-            # Save 5b output separately
-            ctx.save_stage(6, verify_output)  # Use 6 as 5b index for persistence
+            # Save 5b output separately (use slot 55 to avoid collision with stage 6)
+            ctx.save_stage(55, verify_output)
         else:
             logger.warning("No SARIF file found, skipping triage and deep verification")
 
     elif stage_num == 6:
         stage0_data = ctx.load_stage(0)
         stage2_data = ctx.load_stage(2)
-        stage5b_data = ctx.load_stage(6)  # 5b was saved at index 6
+        stage5b_data = ctx.load_stage(55)  # 5b was saved at index 55
         if not all([stage0_data, stage2_data]):
             raise PipelineError("Stages 0 and 2 outputs required for report.")
         stage0 = Stage0Output.model_validate(stage0_data)
@@ -275,7 +279,8 @@ def _run_single_stage(
             stage5a = Stage5aOutput.model_validate(stage5a_data)
             positive_guards = stage5a.positive_guards
 
-        assert llm_client is not None
+        if llm_client is None:
+            raise PipelineError("LLM client required for stage 6 but not configured")
         output = run_report(
             Stage6Input(
                 fingerprint=stage0.fingerprint,

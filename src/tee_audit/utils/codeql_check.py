@@ -63,7 +63,8 @@ def check_codeql_version(codeql_path: Path) -> str:
             for part in reversed(parts):
                 if part[0].isdigit():
                     return part
-    return "unknown"
+    msg = f"Could not parse CodeQL version from output: {result.stdout}"
+    raise RuntimeError(msg)
 
 
 def validate_codeql(codeql_path: Path) -> Path:
@@ -118,6 +119,12 @@ def download_codeql(version: str | None = None) -> Path:
         urllib.request.urlretrieve(url, archive_path)
 
         with tarfile.open(archive_path) as tar:
+            # Prevent path traversal (CVE-2007-4559)
+            for member in tar.getmembers():
+                member_path = (install_dir / member.name).resolve()
+                if not str(member_path).startswith(str(install_dir.resolve())):
+                    msg = f"Tarfile path traversal attempt: {member.name}"
+                    raise RuntimeError(msg)
             tar.extractall(install_dir)
 
     codeql_bin = install_dir / "codeql" / "codeql"

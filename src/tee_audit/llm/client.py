@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
@@ -21,6 +22,12 @@ class LLMClient(ABC):
         self.api_key = api_key
         self.model = model
         self.total_tokens_used = 0
+        self._tokens_lock = threading.Lock()
+
+    def _add_tokens(self, count: int) -> None:
+        """Thread-safe token counter increment."""
+        with self._tokens_lock:
+            self.total_tokens_used += count
 
     @abstractmethod
     def complete(self, system: str, user: str, temperature: float = 0) -> str:
@@ -45,11 +52,20 @@ class AnthropicClient(LLMClient):
 
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         super().__init__(api_key, model)
+        self._client = None
+        self._init_lock = threading.Lock()
+
+    def _get_client(self):
+        """Lazy-init Anthropic client for connection reuse (thread-safe)."""
+        if self._client is None:
+            with self._init_lock:
+                if self._client is None:
+                    import anthropic
+                    self._client = anthropic.Anthropic(api_key=self.api_key)
+        return self._client
 
     def complete(self, system: str, user: str, temperature: float = 0) -> str:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=self.api_key)
+        client = self._get_client()
         response = client.messages.create(
             model=self.model,
             max_tokens=4096,
@@ -57,16 +73,17 @@ class AnthropicClient(LLMClient):
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        self.total_tokens_used += getattr(response.usage, "input_tokens", 0) + getattr(response.usage, "output_tokens", 0)
+        self._add_tokens(
+            getattr(response.usage, "input_tokens", 0)
+            + getattr(response.usage, "output_tokens", 0)
+        )
         return response.content[0].text
 
     def complete_structured(
         self, system: str, user: str, schema: type[T], temperature: float = 0
     ) -> T:
         """Use Anthropic tool use to get structured JSON output."""
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=self.api_key)
+        client = self._get_client()
 
         # Build a tool that matches the pydantic schema
         json_schema = schema.model_json_schema()
@@ -86,7 +103,10 @@ class AnthropicClient(LLMClient):
             messages=[{"role": "user", "content": user}],
         )
 
-        self.total_tokens_used += getattr(response.usage, "input_tokens", 0) + getattr(response.usage, "output_tokens", 0)
+        self._add_tokens(
+            getattr(response.usage, "input_tokens", 0)
+            + getattr(response.usage, "output_tokens", 0)
+        )
 
         # Extract tool use block
         for block in response.content:
@@ -107,11 +127,20 @@ class OpenAIClient(LLMClient):
 
     def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         super().__init__(api_key, model)
+        self._client = None
+        self._init_lock = threading.Lock()
+
+    def _get_client(self):
+        """Lazy-init OpenAI client for connection reuse (thread-safe)."""
+        if self._client is None:
+            with self._init_lock:
+                if self._client is None:
+                    from openai import OpenAI
+                    self._client = OpenAI(api_key=self.api_key)
+        return self._client
 
     def complete(self, system: str, user: str, temperature: float = 0) -> str:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.api_key)
+        client = self._get_client()
         response = client.chat.completions.create(
             model=self.model,
             temperature=temperature,
@@ -122,16 +151,14 @@ class OpenAIClient(LLMClient):
         )
         usage = response.usage
         if usage:
-            self.total_tokens_used += usage.total_tokens
+            self._add_tokens(usage.total_tokens)
         return response.choices[0].message.content or ""
 
     def complete_structured(
         self, system: str, user: str, schema: type[T], temperature: float = 0
     ) -> T:
         """Use OpenAI function calling to get structured JSON output."""
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.api_key)
+        client = self._get_client()
         json_schema = schema.model_json_schema()
 
         response = client.chat.completions.create(
@@ -141,24 +168,31 @@ class OpenAIClient(LLMClient):
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            functions=[{
-                "name": schema.__name__,
-                "description": f"Respond with a structured {schema.__name__} object.",
-                "parameters": json_schema,
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": schema.__name__,
+                    "description": f"Respond with a structured {schema.__name__} object.",
+                    "parameters": json_schema,
+                }
             }],
-            function_call={"name": schema.__name__},
+            tool_choice={"type": "function", "function": {"name": schema.__name__}},
         )
 
         usage = response.usage
         if usage:
-            self.total_tokens_used += usage.total_tokens
+            self._add_tokens(usage.total_tokens)
 
-        func_call = response.choices[0].message.function_call
-        if func_call and func_call.arguments:
-            return schema.model_validate_json(func_call.arguments)
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            func_call = msg.tool_calls[0]
+            return schema.model_validate_json(func_call.function.arguments)
 
-        # Fallback
-        text = response.choices[0].message.content or "{}"
+        # Fallback: legacy function_call or text
+        if hasattr(msg, "function_call") and msg.function_call and msg.function_call.arguments:
+            return schema.model_validate_json(msg.function_call.arguments)
+
+        text = msg.content or "{}"
         return schema.model_validate_json(text)
 
     def count_tokens(self, text: str) -> int:
