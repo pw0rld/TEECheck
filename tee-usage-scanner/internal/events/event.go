@@ -59,6 +59,17 @@ type Event struct {
 	ToolArgsBlob   string `json:"tool_args_blob,omitempty"`
 	ToolOK         bool   `json:"tool_ok,omitempty"`
 	ToolDurationMs int64  `json:"tool_duration_ms,omitempty"`
+	ToolExitCode   int    `json:"tool_exit_code,omitempty"`
+	Truncated      bool   `json:"truncated,omitempty"`
+
+	// Executor policy snapshot, populated only on tool_call_started
+	// events emitted by the executor. Tool calls that bypass the
+	// executor (today: planner ripgrep going straight through the
+	// action registry) leave these zero/empty.
+	Network        string `json:"network,omitempty"`
+	Write          string `json:"write,omitempty"`
+	TimeoutMs      int64  `json:"timeout_ms,omitempty"`
+	MaxOutputBytes int    `json:"max_output_bytes,omitempty"`
 
 	// planner_round_completed
 	ActionCount      int `json:"action_count,omitempty"`
@@ -156,6 +167,44 @@ func ToolCallCompleted(runID, agent, toolName string, round int, ok bool, durati
 		ToolName:       toolName,
 		ToolOK:         ok,
 		ToolDurationMs: durationMs,
+		Error:          errMsg,
+	}
+}
+
+// ToolCallExecutorStarted is the constructor used by the executor.
+// It carries the policy snapshot so consumers can later filter or
+// audit on Network/Write/Timeout without having to reach into
+// blobs or stage artifacts.
+func ToolCallExecutorStarted(runID, agent, toolName string, round int, toolArgsBlob, network, write string, timeoutMs int64, maxOutputBytes int) Event {
+	return Event{
+		Type:           TypeToolCallStarted,
+		RunID:          runID,
+		Agent:          agent,
+		Round:          round,
+		ToolName:       toolName,
+		ToolArgsBlob:   toolArgsBlob,
+		Network:        network,
+		Write:          write,
+		TimeoutMs:      timeoutMs,
+		MaxOutputBytes: maxOutputBytes,
+	}
+}
+
+// ToolCallExecutorCompleted carries the additional execution facts
+// the executor knows: exit code (separate from OK so a non-zero exit
+// from a normally-failing tool like rg-with-no-matches stays
+// machine-distinguishable from a real failure) and Truncated.
+func ToolCallExecutorCompleted(runID, agent, toolName string, round int, ok bool, exitCode int, durationMs int64, truncated bool, errMsg string) Event {
+	return Event{
+		Type:           TypeToolCallCompleted,
+		RunID:          runID,
+		Agent:          agent,
+		Round:          round,
+		ToolName:       toolName,
+		ToolOK:         ok,
+		ToolExitCode:   exitCode,
+		ToolDurationMs: durationMs,
+		Truncated:      truncated,
 		Error:          errMsg,
 	}
 }

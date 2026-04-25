@@ -93,23 +93,31 @@ func (e *LocalExecutor) Run(ctx context.Context, req Request) Result {
 		Truncated:  stdoutBuf.truncated || stderrBuf.truncated,
 	}
 
+	// Error/ExitCode contract:
+	//   - Process started and exited (0 or non-zero) → ExitCode is
+	//     authoritative; Error stays empty. This lets callers like
+	//     ripgrep (exit 1 = no matches) and semgrep (non-zero with
+	//     valid JSON output) distinguish "tool said no" from a real
+	//     execution failure by checking Error instead of OK.
+	//   - True execution failures (timeout, binary not found, exec
+	//     errors that prevent obtaining an exit code) populate Error
+	//     and leave ExitCode at zero.
+	//   - OK is true iff the process exited 0 AND no error fired.
 	switch {
 	case runErr == nil:
 		res.OK = true
 		res.ExitCode = 0
 	case errors.Is(cctx.Err(), context.DeadlineExceeded):
-		// Timeout: the process may have exited with any code; treat
-		// the whole invocation as failed.
 		res.Error = "executor: timeout after " + timeout.String()
 	case errors.Is(runErr, exec.ErrNotFound) || isExecNotFound(runErr):
 		res.Error = "executor: binary not found: " + req.Command
 	default:
-		// Process started and exited non-zero, OR exec failed for
-		// some other reason. Surface the exit code when we have one.
+		// If the process actually started and exited non-zero,
+		// ExitError carries the code — that is a normal tool
+		// outcome, not an execution failure, so Error stays empty.
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
 			res.ExitCode = exitErr.ExitCode()
-			res.Error = "executor: " + req.Command + " exit " + itoa(res.ExitCode)
 		} else {
 			res.Error = "executor: " + runErr.Error()
 		}
@@ -132,8 +140,21 @@ func (e *LocalExecutor) emitStarted(req Request) {
 			argsBlob = ref
 		}
 	}
-	_ = e.Recorder.Emit(events.ToolCallStarted(
-		req.RunID, req.Agent, toolNameOrCommand(req), req.Round, argsBlob,
+	timeout := req.Profile.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	maxOut := req.Profile.MaxOutputBytes
+	if maxOut <= 0 {
+		maxOut = DefaultMaxOutputBytes
+	}
+	_ = e.Recorder.Emit(events.ToolCallExecutorStarted(
+		req.RunID, req.Agent, toolNameOrCommand(req), req.Round,
+		argsBlob,
+		string(req.Profile.Network),
+		string(req.Profile.Write),
+		timeout.Milliseconds(),
+		maxOut,
 	))
 }
 
@@ -141,9 +162,9 @@ func (e *LocalExecutor) emitCompleted(req Request, res Result) {
 	if e.Recorder == nil {
 		return
 	}
-	_ = e.Recorder.Emit(events.ToolCallCompleted(
+	_ = e.Recorder.Emit(events.ToolCallExecutorCompleted(
 		req.RunID, req.Agent, toolNameOrCommand(req), req.Round,
-		res.OK, res.DurationMs, res.Error,
+		res.OK, res.ExitCode, res.DurationMs, res.Truncated, res.Error,
 	))
 }
 

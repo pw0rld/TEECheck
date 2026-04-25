@@ -36,6 +36,11 @@ func TestLocalExecutor_HappyPath(t *testing.T) {
 }
 
 func TestLocalExecutor_NonZeroExit(t *testing.T) {
+	// Error/ExitCode contract: a process that ran and exited
+	// non-zero is a normal tool outcome (rg returns 1 for "no
+	// matches", semgrep returns non-zero with valid JSON, etc).
+	// ExitCode carries the status; Error stays empty so callers
+	// can distinguish "tool said no" from "execution failed".
 	exec := &LocalExecutor{}
 	res := exec.Run(context.Background(), Request{
 		Command: "/bin/sh",
@@ -47,8 +52,30 @@ func TestLocalExecutor_NonZeroExit(t *testing.T) {
 	if res.ExitCode != 7 {
 		t.Errorf("exit=%d want 7", res.ExitCode)
 	}
-	if !strings.Contains(res.Error, "exit 7") {
-		t.Errorf("error=%q want contains 'exit 7'", res.Error)
+	if res.Error != "" {
+		t.Errorf("error=%q want empty (process started + exited cleanly with non-zero)", res.Error)
+	}
+}
+
+func TestLocalExecutor_NonZeroExitWithOutput(t *testing.T) {
+	// Mirrors the rg-no-matches / semgrep-with-findings shape.
+	// stdout still captured, ExitCode populated, Error empty.
+	exec := &LocalExecutor{}
+	res := exec.Run(context.Background(), Request{
+		Command: "/bin/sh",
+		Args:    []string{"-c", "echo 'tool output'; exit 1"},
+	})
+	if res.OK {
+		t.Error("expected not OK")
+	}
+	if res.ExitCode != 1 {
+		t.Errorf("exit=%d want 1", res.ExitCode)
+	}
+	if res.Error != "" {
+		t.Errorf("error=%q want empty", res.Error)
+	}
+	if !strings.Contains(string(res.Stdout), "tool output") {
+		t.Errorf("stdout=%q lost the tool output", res.Stdout)
 	}
 }
 
@@ -146,6 +173,12 @@ func TestLocalExecutor_EmitsToolCallEvents(t *testing.T) {
 		Name:    "ripgrep",
 		Command: "/bin/sh",
 		Args:    []string{"-c", "echo found"},
+		Profile: Profile{
+			Network:        NetworkNone,
+			Write:          WriteRunDirOnly,
+			Timeout:        15 * time.Second,
+			MaxOutputBytes: 8192,
+		},
 	})
 	if !res.OK {
 		t.Fatalf("not ok: %+v", res)
@@ -154,26 +187,113 @@ func TestLocalExecutor_EmitsToolCallEvents(t *testing.T) {
 	if len(rec.events) != 2 {
 		t.Fatalf("emitted %d events, want 2", len(rec.events))
 	}
-	if rec.events[0].Type != events.TypeToolCallStarted {
-		t.Errorf("events[0].Type=%q want %q", rec.events[0].Type, events.TypeToolCallStarted)
+	started := rec.events[0]
+	completed := rec.events[1]
+
+	if started.Type != events.TypeToolCallStarted {
+		t.Errorf("events[0].Type=%q want %q", started.Type, events.TypeToolCallStarted)
 	}
-	if rec.events[1].Type != events.TypeToolCallCompleted {
-		t.Errorf("events[1].Type=%q want %q", rec.events[1].Type, events.TypeToolCallCompleted)
+	if completed.Type != events.TypeToolCallCompleted {
+		t.Errorf("events[1].Type=%q want %q", completed.Type, events.TypeToolCallCompleted)
 	}
-	if rec.events[0].ToolName != "ripgrep" {
-		t.Errorf("tool_name=%q want ripgrep", rec.events[0].ToolName)
+	if started.ToolName != "ripgrep" {
+		t.Errorf("tool_name=%q want ripgrep", started.ToolName)
 	}
-	if rec.events[0].Round != 3 {
-		t.Errorf("round=%d want 3", rec.events[0].Round)
+	if started.Round != 3 {
+		t.Errorf("round=%d want 3", started.Round)
 	}
-	if !strings.HasPrefix(rec.events[0].ToolArgsBlob, "sha256:") {
-		t.Errorf("ToolArgsBlob=%q want sha256: prefix", rec.events[0].ToolArgsBlob)
+	if !strings.HasPrefix(started.ToolArgsBlob, "sha256:") {
+		t.Errorf("ToolArgsBlob=%q want sha256: prefix", started.ToolArgsBlob)
 	}
-	if !rec.events[1].ToolOK {
+
+	// Profile metadata must surface on tool_call_started.
+	if started.Network != "none" {
+		t.Errorf("started.Network=%q want none", started.Network)
+	}
+	if started.Write != "run-dir-only" {
+		t.Errorf("started.Write=%q want run-dir-only", started.Write)
+	}
+	if started.TimeoutMs != 15000 {
+		t.Errorf("started.TimeoutMs=%d want 15000", started.TimeoutMs)
+	}
+	if started.MaxOutputBytes != 8192 {
+		t.Errorf("started.MaxOutputBytes=%d want 8192", started.MaxOutputBytes)
+	}
+
+	if !completed.ToolOK {
 		t.Error("completed.ToolOK=false")
 	}
-	if rec.events[1].ToolDurationMs < 0 {
-		t.Errorf("duration=%d", rec.events[1].ToolDurationMs)
+	if completed.ToolDurationMs < 0 {
+		t.Errorf("duration=%d", completed.ToolDurationMs)
+	}
+	if completed.ToolExitCode != 0 {
+		t.Errorf("completed.ToolExitCode=%d want 0", completed.ToolExitCode)
+	}
+	if completed.Truncated {
+		t.Error("completed.Truncated=true on small output")
+	}
+}
+
+func TestLocalExecutor_EmitsExitCodeAndTruncatedOnCompleted(t *testing.T) {
+	// rg-style exit-1 with truncated output. ExitCode and Truncated
+	// flags must reach the completed event so downstream analysis
+	// can distinguish "no matches" from a real failure.
+	rec := &captureRecorder{}
+	exec := &LocalExecutor{Recorder: rec}
+
+	exec.Run(context.Background(), Request{
+		RunID:   "r",
+		Agent:   "planner-001",
+		Name:    "rg",
+		Command: "/bin/sh",
+		Args:    []string{"-c", "printf 'A%.0s' $(seq 1 1000); exit 1"},
+		Profile: Profile{MaxOutputBytes: 50},
+	})
+
+	if len(rec.events) != 2 {
+		t.Fatalf("emitted %d, want 2", len(rec.events))
+	}
+	completed := rec.events[1]
+	if completed.ToolOK {
+		t.Error("ToolOK=true on non-zero exit")
+	}
+	if completed.ToolExitCode != 1 {
+		t.Errorf("ToolExitCode=%d want 1", completed.ToolExitCode)
+	}
+	if completed.Error != "" {
+		t.Errorf("Error=%q want empty (process exited cleanly)", completed.Error)
+	}
+	if !completed.Truncated {
+		t.Error("Truncated=false; expected output cap to fire")
+	}
+}
+
+func TestLocalExecutor_DefaultProfileSurfacedInEvent(t *testing.T) {
+	// Caller passes no profile; executor still fills started event
+	// with the resolved defaults so consumers can audit what
+	// actually ran.
+	rec := &captureRecorder{}
+	exec := &LocalExecutor{Recorder: rec}
+
+	exec.Run(context.Background(), Request{
+		RunID:   "r",
+		Agent:   "planner-001",
+		Name:    "echo",
+		Command: "/bin/sh",
+		Args:    []string{"-c", "true"},
+	})
+
+	if len(rec.events) != 2 {
+		t.Fatalf("emitted %d, want 2", len(rec.events))
+	}
+	started := rec.events[0]
+	if started.TimeoutMs != DefaultTimeout.Milliseconds() {
+		t.Errorf("default timeout not surfaced: TimeoutMs=%d want %d",
+			started.TimeoutMs, DefaultTimeout.Milliseconds())
+	}
+	if started.MaxOutputBytes != DefaultMaxOutputBytes {
+		t.Errorf("default cap not surfaced: MaxOutputBytes=%d want %d",
+			started.MaxOutputBytes, DefaultMaxOutputBytes)
 	}
 }
 

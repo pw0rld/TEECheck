@@ -145,28 +145,52 @@ so consumers can pair every `_started` with a `_completed`.
 
 ### `tool_call_started` / `tool_call_completed`
 
-Bracket every planner action invocation (`ripgrep`, `read_file`,
-`tree_sitter_outline`, `done`, etc.).
+Bracket every tool invocation. Two emitter classes write these:
+
+- the **planner** (in-process actions like `read_file`, `list_dir`,
+  `tree_sitter_outline`, `done`) — emits the minimal field set
+- the **executor** (subprocess tools routed through
+  `internal/executor`, e.g. `ripgrep`, `semgrep`, `codeql`) — emits
+  the minimal set plus a profile snapshot and execution facts
 
 `tool_call_started`:
 
-| field            | meaning                                                          |
-|------------------|------------------------------------------------------------------|
-| `tool_name`      | action name                                                      |
-| `tool_args_blob` | `sha256:<hex>` ref to the action args JSON, when args are present|
+| field              | who emits  | meaning                                                          |
+|--------------------|------------|------------------------------------------------------------------|
+| `tool_name`        | both       | logical tool name                                                 |
+| `tool_args_blob`   | both       | `sha256:<hex>` ref to args (one-per-line for executor argv)       |
+| `network`          | executor   | `none` / `restricted` / `allow` — policy at invocation time       |
+| `write`            | executor   | `none` / `run-dir-only` / `workspace`                             |
+| `timeout_ms`       | executor   | resolved timeout (default 60000 if caller did not set Profile)    |
+| `max_output_bytes` | executor   | resolved output cap (default 4 MiB)                               |
+
+The four executor fields surface what *actually* ran, including the
+defaults the executor filled in. Tool calls that did not go through
+the executor leave them at zero/empty.
 
 `tool_call_completed`:
 
-| field              | meaning                              |
-|--------------------|--------------------------------------|
-| `tool_name`        | action name                          |
-| `tool_ok`          | success flag                         |
-| `tool_duration_ms` | wall clock                           |
-| `error`            | populated on failure                 |
+| field              | who emits  | meaning                                                          |
+|--------------------|------------|------------------------------------------------------------------|
+| `tool_name`        | both       | logical tool name                                                 |
+| `tool_ok`          | both       | true iff the call produced a usable result                        |
+| `tool_duration_ms` | both       | wall clock                                                        |
+| `tool_exit_code`   | executor   | process exit code (0 on success; non-zero is *not* a failure on its own) |
+| `truncated`        | executor   | true if `max_output_bytes` was reached on stdout or stderr        |
+| `error`            | both       | populated only on true execution failures (timeout, binary not found, etc.) |
 
-Tool outputs are not blobbed — they are already captured in the
-existing `04_planner/rounds.jsonl` observation records (truncated to
-4000 chars each). Future commits may move full outputs into blobs.
+**Error / ExitCode semantics.** A process that started and exited
+cleanly leaves `error` empty even when its exit code is non-zero.
+This matters for tools whose normal vocabulary includes non-zero
+exits — `rg` returns 1 when nothing matched, `semgrep` returns
+non-zero alongside valid JSON findings. Callers distinguish "tool
+said no" from "execution broke" by checking `error`, then
+`tool_exit_code`. `tool_ok` is the convenience boolean for the
+"everything went fine" case.
+
+Tool stdout and stderr are not blobbed in v1. They live in the
+existing `04_planner/rounds.jsonl` observation records (truncated
+to ~4000 chars). Future commits may move full outputs into blobs.
 
 ## Blob store
 
