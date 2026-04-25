@@ -17,7 +17,10 @@ import (
 
 // ─── Helpers under test ─────────────────────────────────────────────
 
-func TestResolveCitedFacts_DropsFailedCitationsKeepsText(t *testing.T) {
+// These tests now live in internal/citations (citations.ResolveFacts /
+// citations.FlattenFacts). Kept here as integration thin-wraps to
+// confirm expert continues to call them with the right semantics.
+func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 	repo := t.TempDir()
 	src := filepath.Join(repo, "src", "x.rs")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
@@ -48,7 +51,7 @@ func TestResolveCitedFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 			{File: "src/x.rs", StartLine: 1, EndLine: 1},
 		}},
 	}
-	out, errs := resolveCitedFacts(in, repo)
+	out, errs := citations.ResolveFacts(in, repo)
 
 	if len(out) != 3 {
 		t.Fatalf("len(out)=%d, want 3 (empty-text fact dropped)", len(out))
@@ -70,7 +73,7 @@ func TestResolveCitedFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 	}
 }
 
-func TestFlattenCitedFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
+func TestFlattenFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
 	resolved := citations.CitedBytes{
 		File: "x.rs", StartLine: 1, EndLine: 1,
 		StartByte: 0, EndByte: 2, SHA256: "abc",
@@ -81,7 +84,7 @@ func TestFlattenCitedFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
 		// Duplicate citation across two facts — dedupe in pool.
 		{Text: "validated 2", Cited: []citations.CitedBytes{resolved}},
 	}
-	supporting, pool := flattenCitedFacts(in)
+	supporting, pool := citations.FlattenFacts(in)
 
 	// Only facts with at least one resolved citation enter
 	// SupportingFacts; unanchored is excluded.
@@ -100,7 +103,7 @@ func TestFlattenCitedFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
 	}
 }
 
-func TestFlattenCitedFacts_SkipsUnresolvedEntriesInPool(t *testing.T) {
+func TestFlattenFacts_SkipsUnresolvedEntriesInPool(t *testing.T) {
 	in := []citations.CitedFact{
 		{Text: "mixed", Cited: []citations.CitedBytes{
 			{File: "x.rs", StartLine: 1, EndLine: 1},                 // not resolved
@@ -108,7 +111,7 @@ func TestFlattenCitedFacts_SkipsUnresolvedEntriesInPool(t *testing.T) {
 				StartByte: 0, EndByte: 1},                            // resolved
 		}},
 	}
-	_, pool := flattenCitedFacts(in)
+	_, pool := citations.FlattenFacts(in)
 	if len(pool) != 1 {
 		t.Errorf("pool=%d, want 1 (unresolved skipped)", len(pool))
 	}

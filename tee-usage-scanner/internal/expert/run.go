@@ -94,69 +94,9 @@ func emitClaimEvents(rec events.Recorder, runID, agentID string, h artifacts.Hyp
 	}
 }
 
-// resolveCitedFacts iterates over the LLM-produced cited facts,
-// resolves each citation against the repo, drops citations that
-// fail, and returns the cleaned list. Facts that lose ALL their
-// citations stay in the result with an empty Cited slice — the
-// caller decides how to surface "asserted but unanchored" claims.
-//
-// Returns the cleaned facts and a side-channel slice of resolution
-// errors for telemetry / logging. The error slice is informational;
-// callers do NOT abort on resolution failure.
-func resolveCitedFacts(in []citations.CitedFact, repoRoot string) (out []citations.CitedFact, resolveErrors []string) {
-	if len(in) == 0 {
-		return nil, nil
-	}
-	out = make([]citations.CitedFact, 0, len(in))
-	for _, f := range in {
-		text := strings.TrimSpace(f.Text)
-		if text == "" {
-			continue
-		}
-		var kept []citations.CitedBytes
-		for _, c := range f.Cited {
-			resolved, err := citations.Resolve(c, repoRoot)
-			if err != nil {
-				resolveErrors = append(resolveErrors, fmt.Sprintf("%s:%d-%d: %v",
-					c.File, c.StartLine, c.EndLine, err))
-				continue
-			}
-			kept = append(kept, resolved)
-		}
-		out = append(out, citations.CitedFact{Text: text, Cited: kept})
-	}
-	return out, resolveErrors
-}
-
-// flattenCitedFacts produces the legacy fields from the structured
-// CitedFacts list:
-//   - SupportingFacts: text of every fact whose citations resolved
-//     cleanly. Asserted-but-unanchored facts are intentionally
-//     excluded so SupportingFacts means "validated".
-//   - Cited: union of every resolved citation across all facts,
-//     deduplicated by (file, start_byte, end_byte, sha256). Keeps
-//     legacy "Cited"-reading code working through the migration.
-func flattenCitedFacts(facts []citations.CitedFact) (supporting []string, pool []citations.CitedBytes) {
-	seen := map[string]bool{}
-	for _, f := range facts {
-		if !f.HasValidCitation() {
-			continue
-		}
-		supporting = append(supporting, f.Text)
-		for _, c := range f.Cited {
-			if !c.Resolved() {
-				continue
-			}
-			key := fmt.Sprintf("%s:%d:%d:%s", c.File, c.StartByte, c.EndByte, c.SHA256)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			pool = append(pool, c)
-		}
-	}
-	return supporting, pool
-}
+// Citation resolve/flatten helpers were moved to internal/citations
+// (citations.ResolveFacts / citations.FlattenFacts) so the verifier
+// can use the same primitives without code duplication.
 
 func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, agentID string, temperature float64) (artifacts.Hypothesis, error) {
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, append(pack.ExpectedObligations, pack.TargetSymbols...), 8)
@@ -258,12 +198,12 @@ Snippets:
 	// keep the fact text either way. Resolution errors are logged
 	// to stdout (not fatal) so a single bad path does not poison
 	// the whole hypothesis.
-	cleanedFacts, resolveErrors := resolveCitedFacts(parsed.CitedFacts, repoRoot)
+	cleanedFacts, resolveErrors := citations.ResolveFacts(parsed.CitedFacts, repoRoot)
 	if len(resolveErrors) > 0 {
 		fmt.Printf("[expert] %s: %d citation(s) failed to resolve: %s\n",
 			pack.CaseID, len(resolveErrors), strings.Join(resolveErrors, "; "))
 	}
-	supportingFacts, citedPool := flattenCitedFacts(cleanedFacts)
+	supportingFacts, citedPool := citations.FlattenFacts(cleanedFacts)
 
 	// Back-compat: when the LLM returned legacy supporting_facts
 	// instead of cited_facts (older prompts or non-compliant

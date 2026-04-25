@@ -202,18 +202,41 @@ type Challenge struct {
 }
 
 type VerificationMemo struct {
-	SchemaVersion  string   `json:"schema_version"`
-	CaseID         string   `json:"case_id"`
-	AgentID        string   `json:"agent_id"`
-	Status         string   `json:"status"`
-	ChecksRun      []string `json:"checks_run,omitempty"`
+	SchemaVersion string `json:"schema_version"`
+	CaseID        string `json:"case_id"`
+	AgentID       string `json:"agent_id"`
+	Status        string `json:"status"`
+	ChecksRun     []string `json:"checks_run,omitempty"`
+	// ConfirmedFacts holds the validated free-text claims produced
+	// by the verifier — the Text of every ConfirmedCitedFacts entry
+	// whose citations all resolved against the live repo. Legacy
+	// memos used this as the only confirmed-fact field. v1.1.2+
+	// should prefer ConfirmedCitedFacts and treat ConfirmedFacts
+	// as a display fallback. Same exclusion rule as expert: facts
+	// whose citations failed are NOT mirrored here.
 	ConfirmedFacts []string `json:"confirmed_facts,omitempty"`
+	// ConfirmedCitedFacts is the v1.1.2 canonical confirmed-fact
+	// field. Each entry pairs a confirmation claim with the byte
+	// regions backing it.
+	ConfirmedCitedFacts []citations.CitedFact `json:"confirmed_cited_facts,omitempty"`
+	// Contradictions holds the validated contradiction text. Same
+	// dual-field semantics as ConfirmedFacts.
 	Contradictions []string `json:"contradictions,omitempty"`
-	Notes          []string `json:"notes,omitempty"`
-	// Cited is the byte-citation list backing this verification.
-	// The verifier should re-anchor its judgment to specific source
-	// bytes; entries that fail Validate against the repo are
-	// excluded from typed-citation metrics.
+	// ContradictedCitedFacts is the v1.1.2 canonical contradiction
+	// field with byte citations.
+	ContradictedCitedFacts []citations.CitedFact `json:"contradicted_cited_facts,omitempty"`
+	Notes                  []string              `json:"notes,omitempty"`
+	// ExpertCitationValidation records the per-fact result of
+	// running citations.ValidateFacts on hypothesis.CitedFacts at
+	// the moment the verifier saw them. Status is one of
+	// citations.StatusValid / Stale / Unanchored / Unresolved.
+	// Persisted so report / arbiter / human review can later see
+	// which expert claims still held when the verifier reviewed.
+	ExpertCitationValidation []citations.CitationValidation `json:"expert_citation_validation,omitempty"`
+	// Cited is the flat verifier-level citation pool. v1.1.2
+	// populates it as the deduplicated union of every citation
+	// across ConfirmedCitedFacts and ContradictedCitedFacts.
+	// Legacy memos that read Cited directly stay functional.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
