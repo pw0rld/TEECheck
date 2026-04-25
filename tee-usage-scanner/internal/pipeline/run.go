@@ -146,7 +146,14 @@ func Run(cfg config.Config) (runDir string, err error) {
 		}
 	}
 
-	stageCfg.AgentID = "scanner-001"
+	// Agent role identities (V1.1.2 polish C4): each stage's
+	// AgentID now reflects its ROLE (expert / challenger /
+	// verifier / arbiter) rather than the bus tool identity it
+	// happens to run alongside (scanner / reviewer / auditor).
+	// claim_emitted events and persisted agent_id fields now
+	// carry the correct semantic label, which downstream consumers
+	// (stats, replay, review UI) can pattern-match on.
+	stageCfg.AgentID = "expert-001"
 	if err := expert.RunWithEvents(stageCfg, rec, blobs); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
@@ -159,6 +166,10 @@ func Run(cfg config.Config) (runDir string, err error) {
 	if needsBus {
 		bus := buildPipelineBus(cfg)
 
+		// Bus tool registrations stay under TOOL identities; they
+		// represent capability endpoints (a static-check tool, a
+		// reviewer tool, an auditor tool), not agent roles. Other
+		// agents call into these tools via the bus by name.
 		scReg := scall.NewDefaultRegistry()
 		bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
 			req := staticcheck.CheckRequest{
@@ -181,34 +192,36 @@ func Run(cfg config.Config) (runDir string, err error) {
 			}, nil
 		}))
 
-		stageCfg.AgentID = "reviewer-001"
+		stageCfg.AgentID = "challenger-001"
 		if err := challenger.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("challenger: %w", err)
+			return runDir, fmt.Errorf("challenger: %w", err)
 		}
+		stageCfg.AgentID = "verifier-001"
 		if err := verifier.RunWithBusAndEvents(stageCfg, bus, rec); err != nil {
 			return runDir, fmt.Errorf("verifier: %w", err)
 		}
 
 		// === Agent 3: Auditor ===
 		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "auditor-001"
+		stageCfg.AgentID = "arbiter-001"
 		if err := arbiter.RunWithBus(stageCfg, bus); err != nil {
-			return "", fmt.Errorf("arbiter: %w", err)
+			return runDir, fmt.Errorf("arbiter: %w", err)
 		}
 	} else {
-		stageCfg.AgentID = "reviewer-001"
+		stageCfg.AgentID = "challenger-001"
 		if err := challenger.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("challenger: %w", err)
+			return runDir, fmt.Errorf("challenger: %w", err)
 		}
+		stageCfg.AgentID = "verifier-001"
 		if err := verifier.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("verifier: %w", err)
+			return runDir, fmt.Errorf("verifier: %w", err)
 		}
 
 		// === Agent 3: Auditor ===
 		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "auditor-001"
+		stageCfg.AgentID = "arbiter-001"
 		if err := arbiter.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("arbiter: %w", err)
+			return runDir, fmt.Errorf("arbiter: %w", err)
 		}
 	}
 
