@@ -6,18 +6,28 @@ import (
 )
 
 // ResolveFacts iterates over the LLM-produced cited facts, resolves
-// each citation against the repo, drops citations that fail, and
-// returns the cleaned list. Facts that lose ALL their citations
-// stay in the result with an empty Cited slice — the caller decides
-// how to surface "asserted but unanchored" claims.
+// each citation against the repo, and returns the cleaned list.
+//
+// Strict semantics (V1.1.2 polish, was lenient):
+//   - if EVERY citation on a fact resolves, the fact is kept with
+//     all citations populated → caller will mirror text into the
+//     validated supporting-facts surface
+//   - if ANY citation on a fact fails to resolve, the fact's
+//     entire Cited slice is cleared → the fact becomes unanchored
+//     and the caller will NOT mirror it into validated text
+//   - facts that started with no citations stay with empty Cited
+//
+// Why strict: the lenient policy ("any survivor → mirror as
+// validated") let a partial-failure ("X is true because of A AND B"
+// where B drifted) silently land in SupportingFacts as if both
+// A and B still held. The verifier and arbiter then read the
+// claim as fully validated. Strict policy aligns FlattenFacts with
+// ValidateFacts (which already treats partial-failure as stale)
+// and removes the silent contract violation.
 //
 // Returns the cleaned facts and a side-channel slice of resolution
 // errors for telemetry / logging. The error slice is informational;
 // callers do NOT abort on resolution failure.
-//
-// Originally lived in internal/expert as an unexported helper
-// (resolveCitedFacts) — moved here so the verifier can use the
-// same primitive without code duplication.
 func ResolveFacts(in []CitedFact, repoRoot string) (out []CitedFact, resolveErrors []string) {
 	if len(in) == 0 {
 		return nil, nil
@@ -29,14 +39,22 @@ func ResolveFacts(in []CitedFact, repoRoot string) (out []CitedFact, resolveErro
 			continue
 		}
 		var kept []CitedBytes
+		anyFailed := false
 		for _, c := range f.Cited {
 			resolved, err := Resolve(c, repoRoot)
 			if err != nil {
+				anyFailed = true
 				resolveErrors = append(resolveErrors, fmt.Sprintf("%s:%d-%d: %v",
 					c.File, c.StartLine, c.EndLine, err))
 				continue
 			}
 			kept = append(kept, resolved)
+		}
+		// Strict downgrade: any partial failure clears all Cited.
+		// The fact text survives as an unanchored claim; consumers
+		// must not treat it as validated.
+		if anyFailed {
+			kept = nil
 		}
 		out = append(out, CitedFact{Text: text, Cited: kept})
 	}

@@ -17,10 +17,11 @@ import (
 
 // ─── Helpers under test ─────────────────────────────────────────────
 
-// These tests now live in internal/citations (citations.ResolveFacts /
-// citations.FlattenFacts). Kept here as integration thin-wraps to
-// confirm expert continues to call them with the right semantics.
-func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
+// Strict ResolveFacts (V1.1.2 polish C1): partial-failure clears
+// the entire Cited list. Comprehensive coverage lives in
+// internal/citations/validation_test.go; this thin wrap confirms
+// expert calls the same primitive without code-path shenanigans.
+func TestResolveFacts_StrictDowngradeOnPartialFailure(t *testing.T) {
 	repo := t.TempDir()
 	src := filepath.Join(repo, "src", "x.rs")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
@@ -31,45 +32,26 @@ func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 	}
 
 	in := []citations.CitedFact{
-		// All citations resolve.
 		{Text: "good fact", Cited: []citations.CitedBytes{
 			{File: "src/x.rs", StartLine: 1, EndLine: 1},
 		}},
-		// One resolves, one doesn't (file missing) — fact stays
-		// but only the good citation survives.
 		{Text: "partial fact", Cited: []citations.CitedBytes{
-			{File: "src/x.rs", StartLine: 2, EndLine: 2},
+			{File: "src/x.rs", StartLine: 2, EndLine: 2}, // would resolve
 			{File: "src/missing.rs", StartLine: 1, EndLine: 1},
 		}},
-		// All citations fail — fact stays in CitedFacts but its
-		// Cited list is empty.
-		{Text: "unanchored fact", Cited: []citations.CitedBytes{
-			{File: "src/missing.rs", StartLine: 1, EndLine: 1},
-		}},
-		// Empty text → dropped entirely (nothing useful to keep).
 		{Text: "  ", Cited: []citations.CitedBytes{
 			{File: "src/x.rs", StartLine: 1, EndLine: 1},
 		}},
 	}
-	out, errs := citations.ResolveFacts(in, repo)
-
-	if len(out) != 3 {
-		t.Fatalf("len(out)=%d, want 3 (empty-text fact dropped)", len(out))
+	out, _ := citations.ResolveFacts(in, repo)
+	if len(out) != 2 {
+		t.Fatalf("len(out)=%d, want 2 (empty-text fact dropped)", len(out))
 	}
-	if out[0].Text != "good fact" || len(out[0].Cited) != 1 {
-		t.Errorf("good fact: %+v", out[0])
+	if len(out[0].Cited) != 1 {
+		t.Errorf("good fact citation lost: %+v", out[0])
 	}
-	if !out[0].Cited[0].Resolved() {
-		t.Errorf("good fact citation not resolved: %+v", out[0].Cited[0])
-	}
-	if out[1].Text != "partial fact" || len(out[1].Cited) != 1 {
-		t.Errorf("partial fact: %+v want 1 surviving citation", out[1])
-	}
-	if out[2].Text != "unanchored fact" || len(out[2].Cited) != 0 {
-		t.Errorf("unanchored fact: %+v want empty Cited", out[2])
-	}
-	if len(errs) < 2 {
-		t.Errorf("expected at least 2 resolve errors, got %d: %v", len(errs), errs)
+	if len(out[1].Cited) != 0 {
+		t.Errorf("partial fact: kept=%d, want 0 (strict downgrade)", len(out[1].Cited))
 	}
 }
 

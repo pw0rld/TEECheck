@@ -135,7 +135,12 @@ func TestValidateFacts_PreservesText(t *testing.T) {
 
 // ─── ResolveFacts / FlattenFacts moved here from internal/expert ────
 
-func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
+func TestResolveFacts_StrictPartialFailureClearsCited(t *testing.T) {
+	// V1.1.2 polish (C1): partial-failure now downgrades the fact
+	// to unanchored. Previously the fact kept surviving citations
+	// and HasValidCitation reported true, mirroring text into the
+	// validated SupportingFacts surface — a silent contract
+	// violation (depends-on-A-and-B claim with B failing).
 	repo := t.TempDir()
 	src := filepath.Join(repo, "src", "x.rs")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
@@ -150,7 +155,7 @@ func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 			{File: "src/x.rs", StartLine: 1, EndLine: 1},
 		}},
 		{Text: "partial", Cited: []CitedBytes{
-			{File: "src/x.rs", StartLine: 2, EndLine: 2},
+			{File: "src/x.rs", StartLine: 2, EndLine: 2}, // would resolve
 			{File: "src/missing.rs", StartLine: 1, EndLine: 1},
 		}},
 		{Text: "all-bad", Cited: []CitedBytes{
@@ -161,8 +166,16 @@ func TestResolveFacts_DropsFailedCitationsKeepsText(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("len(out)=%d, want 3", len(out))
 	}
-	if len(out[1].Cited) != 1 {
-		t.Errorf("partial fact: kept=%d, want 1", len(out[1].Cited))
+	if len(out[0].Cited) != 1 || !out[0].Cited[0].Resolved() {
+		t.Errorf("good fact: %+v", out[0])
+	}
+	// Strict policy: partial fact's surviving citation is dropped
+	// because the OTHER citation failed.
+	if len(out[1].Cited) != 0 {
+		t.Errorf("partial fact: kept=%d, want 0 (strict downgrade)", len(out[1].Cited))
+	}
+	if out[1].Text != "partial" {
+		t.Errorf("partial fact text lost: %q", out[1].Text)
 	}
 	if len(out[2].Cited) != 0 {
 		t.Errorf("all-bad fact: kept=%d, want 0", len(out[2].Cited))
