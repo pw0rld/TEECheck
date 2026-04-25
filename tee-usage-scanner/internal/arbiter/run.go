@@ -101,6 +101,20 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 	return item, packet
 }
 
+// taggedJoin formats an untyped string list with a per-item tag
+// for inclusion in LLM prompts. Empty list → "(none)" so the LLM
+// sees an explicit signal instead of an empty placeholder.
+func taggedJoin(items []string, tag string) string {
+	if len(items) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		parts = append(parts, tag+" "+it)
+	}
+	return strings.Join(parts, " | ")
+}
+
 // buildFindingEvidence assembles the Evidence []string for a
 // finding. Validated (citation-backed) supporting facts and
 // confirmed facts go in unprefixed; untyped fields from both the
@@ -293,7 +307,9 @@ Expert hypothesis:
 - Title: %s
 - Suspected issue: %s
 - Confidence: %s
-- Supporting facts: %s
+- Supporting facts (validated, citation-anchored): %s
+- Unanchored expert context (tool hits or legacy text — NOT
+  citation-backed; do not treat as evidence on its own): %s
 
 Challenger view:
 - Exploitability: %s
@@ -302,20 +318,30 @@ Challenger view:
 
 Verification:
 - Status: %s
-- Confirmed facts: %s
-- Contradictions: %s
+- Confirmed facts (validated, citation-anchored): %s
+- Contradictions (validated, citation-anchored): %s
+- Unanchored verifier confirmations (legacy text without citations): %s
+- Unanchored verifier contradictions (legacy text without citations): %s
 
 Knowledge hints:
-%s`,
+%s
+
+When you write evidence and the review packet, treat unanchored
+items as supporting context only — they MAY be true but are not
+citation-validated. Validated items are the basis for any
+"likely_issue" or "confirmed_candidate" verdict.`,
 		pack.CaseID, pack.Category, pack.Priority,
 		strings.Join(pack.TargetFiles, ", "),
 		hypothesis.Title, hypothesis.SuspectedIssue, hypothesis.Confidence,
 		strings.Join(hypothesis.SupportingFacts, " | "),
+		taggedJoin(hypothesis.UntypedFacts, "[unanchored]"),
 		challenge.Exploitability, challenge.ReviewerStance,
 		strings.Join(challenge.CounterArguments, " | "),
 		memo.Status,
 		strings.Join(memo.ConfirmedFacts, " | "),
 		strings.Join(memo.Contradictions, " | "),
+		taggedJoin(memo.UntypedConfirmedFacts, "[unanchored]"),
+		taggedJoin(memo.UntypedContradictions, "[unanchored]"),
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))
 
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
@@ -349,6 +375,23 @@ Knowledge hints:
 		}
 
 		if len(parsed.Queries) == 0 {
+			// Always append untyped items to Evidence with explicit
+			// [unanchored ...] tags. The LLM may have reasoned over
+			// the untyped fields when writing parsed.Evidence, but
+			// we cannot rely on it; appending here guarantees that
+			// every untyped artifact item shows up in the finding's
+			// Evidence list at least once, distinguishable from the
+			// LLM's own validated picks.
+			evidence := append([]string{}, parsed.Evidence...)
+			for _, u := range hypothesis.UntypedFacts {
+				evidence = append(evidence, "[unanchored] "+u)
+			}
+			for _, u := range memo.UntypedConfirmedFacts {
+				evidence = append(evidence, "[unanchored verifier confirm] "+u)
+			}
+			for _, u := range memo.UntypedContradictions {
+				evidence = append(evidence, "[unanchored verifier contradict] "+u)
+			}
 			item := artifacts.FindingItem{
 				FindingID:  pack.CaseID,
 				SliceID:    pack.CaseID,
@@ -357,7 +400,7 @@ Knowledge hints:
 				Confidence: parsed.Confidence,
 				Files:      pack.TargetFiles,
 				Summary:    parsed.Summary,
-				Evidence:   parsed.Evidence,
+				Evidence:   evidence,
 			}
 			packet := parsed.ReviewPacketMarkdown
 			if packet == "" {

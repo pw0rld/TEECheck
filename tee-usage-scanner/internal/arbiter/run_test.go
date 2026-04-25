@@ -85,6 +85,18 @@ func TestBuildPacket_SurfacesUntypedSections(t *testing.T) {
 	}
 }
 
+// TestTaggedJoin pins the prompt-formatting helper used by
+// arbitrateLLM so untyped items reach the LLM with explicit tags
+// rather than as a bare strings list.
+func TestTaggedJoin(t *testing.T) {
+	if got := taggedJoin(nil, "[unanchored]"); got != "(none)" {
+		t.Errorf("nil: %q want (none)", got)
+	}
+	if got := taggedJoin([]string{"a", "b"}, "[unanchored]"); got != "[unanchored] a | [unanchored] b" {
+		t.Errorf("got %q", got)
+	}
+}
+
 // CitedFact is referenced from imported package; touch it once so
 // imports stay tidy if test variants are added.
 var _ = citations.CitedFact{}
