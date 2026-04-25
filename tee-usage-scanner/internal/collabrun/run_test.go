@@ -88,8 +88,11 @@ func TestReviewAndFeedbackFlow(t *testing.T) {
 		t.Fatalf("collab run failed: %v", err)
 	}
 
-	// Simulate interactive review: confirm first case, then quit
-	input := "c\n\ntee\nLooks legit\nq\n"
+	// Simulate interactive review (Phase 1 prompt order):
+	//   verdict, [fp_reason if FP], severity_override,
+	//   confidence_override, tags, notes
+	//   then on next iteration: quit
+	input := "t\n\n\ntee\nLooks legit\nq\n"
 	var output bytes.Buffer
 	reviewCfg := config.Config{
 		Command:       "review",

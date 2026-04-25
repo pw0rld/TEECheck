@@ -52,13 +52,18 @@ func Run(cfg config.Config, w io.Writer) error {
 			continue
 		}
 
-		// Determine category and archive
+		// Determine category and archive. NormalizeVerdict maps
+		// the legacy strings ("confirmed", "dismissed", ...) to the
+		// Phase 1 vocabulary, so this works for both old and new
+		// review_records.jsonl files.
 		var category string
-		if record.Verdict == "confirmed" || record.Verdict == "confirmed_via_patch" {
+		switch artifacts.NormalizeVerdict(record.Verdict) {
+		case artifacts.VerdictTruePositive:
 			category = "true-positive"
-		} else if record.Verdict == "dismissed" || record.Verdict == "false_alarm" {
+		case artifacts.VerdictFalsePositive:
 			category = "false-positive"
-		} else {
+		default:
+			// needs_more_context, skip, or unknown — not archived
 			continue
 		}
 
@@ -354,10 +359,10 @@ func formatPageSummaries(pages []knowledge.Page) string {
 }
 
 func verdictToCategory(verdict string) string {
-	switch verdict {
-	case "confirmed", "confirmed_via_patch":
+	switch artifacts.NormalizeVerdict(verdict) {
+	case artifacts.VerdictTruePositive:
 		return "true-positive"
-	case "dismissed", "false_alarm":
+	case artifacts.VerdictFalsePositive:
 		return "false-positive"
 	default:
 		return "review-memory"

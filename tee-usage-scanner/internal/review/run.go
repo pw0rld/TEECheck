@@ -42,31 +42,47 @@ func RunWithIO(cfg config.Config, input io.Reader, output io.Writer, now time.Ti
 			}
 		}
 
+		// Load matching hypothesis + memo to drive the structured
+		// display. Index alignment mirrors how arbiter wrote them
+		// (case-NNN ↔ hypothesis-NNN ↔ verify-NNN).
+		var hyp artifacts.Hypothesis
+		var memo artifacts.VerificationMemo
+		_ = runfs.ReadJSON(filepath.Join(runfs.ExpertDir(cfg.RunDir), fmt.Sprintf("hypothesis-%03d.json", idx+1)), &hyp)
+		_ = runfs.ReadJSON(filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1)), &memo)
+
 		DisplayPacketSummary(output, idx, total, item, packetText)
+		DisplayFindingDetail(output, item, hyp, memo)
 
 		verdict := PromptVerdict(scanner, output)
 		if verdict == "quit" {
 			fmt.Fprintln(output, "Review session ended.")
 			break
 		}
-		if verdict == "skip" {
+		if verdict == artifacts.VerdictSkip {
 			fmt.Fprintln(output, "Skipped.")
 			continue
 		}
 
-		severity := PromptSeverityOverride(scanner, output, item.Severity)
+		var fpReason string
+		if verdict == artifacts.VerdictFalsePositive {
+			fpReason = PromptFPReason(scanner, output)
+		}
+		correctedSeverity := PromptSeverityOverride(scanner, output, item.Severity)
+		confidenceOverride := PromptConfidenceOverride(scanner, output, item.Confidence)
 		tags := PromptTags(scanner, output)
 		notes := PromptNotes(scanner, output)
 
 		record := artifacts.ReviewRecord{
-			SchemaVersion: "teecheck.review_record.v1",
-			CaseID:        item.FindingID,
-			FindingID:     item.FindingID,
-			Verdict:       verdict,
-			Severity:      severity,
-			Tags:          tags,
-			Notes:         notes,
-			ReviewedAt:    now.Format(time.RFC3339),
+			SchemaVersion:      "teecheck.review_record.v1",
+			CaseID:             item.FindingID,
+			FindingID:          item.FindingID,
+			Verdict:            verdict,
+			FPReason:           fpReason,
+			CorrectedSeverity:  correctedSeverity,
+			ConfidenceOverride: confidenceOverride,
+			Tags:               tags,
+			Notes:              notes,
+			ReviewedAt:         now.Format(time.RFC3339),
 		}
 		records = append(records, record)
 
