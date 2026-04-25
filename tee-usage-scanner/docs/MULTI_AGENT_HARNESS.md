@@ -183,6 +183,13 @@ Outputs:
 
 - `challenge/*.json`
 
+> **Known limitation.** The Challenger reads the Expert's hypothesis
+> verbatim and runs on the same model — the design is closer to
+> sequential self-refinement than independent counter-argument. See
+> [`ADVERSARIAL_INDEPENDENCE.md`](ADVERSARIAL_INDEPENDENCE.md) for
+> the structural fix tiers (input blinding, two-phase reveal, model
+> heterogeneity).
+
 ### Layer 3: Verifier Agent
 
 Responsibilities:
@@ -201,6 +208,15 @@ Outputs:
 
 - `verify/*.json`
 
+> **Known limitation.** The Verifier currently sees both the
+> hypothesis and the challenge before judging, which primes the model
+> with the prior agents' framing. The agentbus Q&A channel registered
+> for inter-agent questions is hollow — the registered "expert" /
+> "challenger" handlers answer without their case artifacts in
+> context. See
+> [`ADVERSARIAL_INDEPENDENCE.md`](ADVERSARIAL_INDEPENDENCE.md) for
+> the two-phase reveal proposal and the agentbus fix.
+
 ### Layer 4: Arbiter Agent
 
 Responsibilities:
@@ -214,6 +230,12 @@ Outputs:
 
 - `review_packet/*.md`
 - `findings.json`
+
+> **Known limitation.** The Arbiter reads the verifier memo before
+> issuing a verdict, so the agreement metric `VerifierAgreementRate`
+> is structurally biased and weak as a quality signal — it tracks
+> internal consistency, not finding correctness. See
+> [`ADVERSARIAL_INDEPENDENCE.md`](ADVERSARIAL_INDEPENDENCE.md).
 
 ### Layer 5: Human Review
 

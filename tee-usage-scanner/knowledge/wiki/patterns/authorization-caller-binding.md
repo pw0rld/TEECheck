@@ -7,5 +7,3 @@ Focus points:
 - wrapper or helper enforcement
 - role checks before privileged actions
 - failure should stop execution, not downgrade it
-
-Keywords: authorization, caller, binding, wrapper, role

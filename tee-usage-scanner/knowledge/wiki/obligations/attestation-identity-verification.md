@@ -7,5 +7,3 @@ Focus points:
 - freshness or replay resistance
 - signer or identity policy checks
 - rejecting degraded paths on failure
-
-Keywords: attestation, identity, quote, report, freshness
