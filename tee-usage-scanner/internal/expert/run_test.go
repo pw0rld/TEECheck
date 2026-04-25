@@ -216,6 +216,72 @@ func TestBuildHypothesisLLM_PopulatesCitedFactsAndFlattens(t *testing.T) {
 	}
 }
 
+// ─── Untyped facts separation (V1.1.2 polish C2) ────────────────────
+
+func TestBuildHypothesisLLM_LegacySupportingFactsGoToUntypedFacts(t *testing.T) {
+	repo := t.TempDir()
+	src := filepath.Join(repo, "src", "x.rs")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("fn one() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// LLM returns BOTH structured cited_facts AND legacy
+	// supporting_facts. Pre-V1.1.2-polish the legacy strings would
+	// have been mixed into SupportingFacts as "validated"; now they
+	// must land in UntypedFacts instead.
+	resp := map[string]any{
+		"title":           "x",
+		"summary":         "x",
+		"suspected_issue": "x",
+		"cited_facts": []map[string]any{
+			{"text": "anchored fact", "cited": []map[string]any{
+				{"file": "src/x.rs", "start_line": 1, "end_line": 1},
+			}},
+		},
+		"supporting_facts":   []string{"legacy unstructured claim"},
+		"confidence":         "low",
+		"needs_verification": false,
+	}
+	respBytes, _ := json.Marshal(resp)
+	stub := &stubLLM{responseJSON: string(respBytes)}
+
+	pack := artifacts.CasePack{CaseID: "case-001"}
+	h, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, "expert-001", 0)
+	if err != nil {
+		t.Fatalf("buildHypothesisLLM: %v", err)
+	}
+
+	// SupportingFacts must contain ONLY the anchored claim text.
+	for _, s := range h.SupportingFacts {
+		if strings.Contains(s, "legacy unstructured claim") {
+			t.Errorf("legacy text leaked into SupportingFacts: %q", s)
+		}
+	}
+	hasAnchored := false
+	for _, s := range h.SupportingFacts {
+		if strings.Contains(s, "anchored fact") {
+			hasAnchored = true
+		}
+	}
+	if !hasAnchored {
+		t.Errorf("anchored fact missing from SupportingFacts: %v", h.SupportingFacts)
+	}
+
+	// UntypedFacts must contain the legacy string.
+	hasLegacy := false
+	for _, s := range h.UntypedFacts {
+		if strings.Contains(s, "legacy unstructured claim") {
+			hasLegacy = true
+		}
+	}
+	if !hasLegacy {
+		t.Errorf("legacy string missing from UntypedFacts: %v", h.UntypedFacts)
+	}
+}
+
 // ─── Event emission ─────────────────────────────────────────────────
 
 type captureRecorder struct {

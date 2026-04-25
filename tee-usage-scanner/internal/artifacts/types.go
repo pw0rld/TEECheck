@@ -177,6 +177,16 @@ type Hypothesis struct {
 	// with an empty Cited list — that's an acknowledged "asserted
 	// but could not anchor" case, not promoted to SupportingFacts.
 	CitedFacts []citations.CitedFact `json:"cited_facts,omitempty"`
+	// UntypedFacts holds free-text context that was NOT validated:
+	//   - legacy supporting_facts returned by an LLM that ignored
+	//     the cited_facts schema
+	//   - flattened tool hits (ripgrep matches injected by the
+	//     expert pipeline) — useful context but not citation-anchored
+	// V1.1.2 polish C2: kept separate from SupportingFacts so the
+	// "validated facts" surface remains honest. Verifier prompt and
+	// arbiter Evidence render these with an explicit [unanchored]
+	// tag; they never silently merge with cited claims.
+	UntypedFacts []string `json:"untyped_facts,omitempty"`
 	KnowledgeHints []KnowledgeHint    `json:"knowledge_hints,omitempty"`
 	Confidence     string             `json:"confidence"`
 	NeedsVerification bool            `json:"needs_verification"`

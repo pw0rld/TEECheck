@@ -305,7 +305,9 @@ Expert hypothesis:
 - Title: %s
 - Suspected issue: %s
 - Missing obligations: %s
-- Supporting facts: %s
+- Supporting facts (validated, citation-anchored): %s
+- Untyped context (UNVALIDATED — tool hits or legacy text the
+  expert did not cite; treat as background, not as evidence): %s
 - Confidence: %s
 
 EXPERT CITATION STATUS (validated against the live repo at the moment you began review):
@@ -328,6 +330,7 @@ Static check findings (%d total):
 		hypothesis.Title, hypothesis.SuspectedIssue,
 		strings.Join(hypothesis.MissingObligations, ", "),
 		strings.Join(hypothesis.SupportingFacts, " | "),
+		formatUntypedFacts(hypothesis.UntypedFacts),
 		hypothesis.Confidence,
 		formatExpertCitationStatus(expertValidation),
 		challenge.Exploitability, challenge.ExploitNarrative,
@@ -505,6 +508,20 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// formatUntypedFacts renders a hypothesis's UntypedFacts list with
+// an explicit per-line [unanchored] tag so the verifier never
+// confuses them with citation-anchored Supporting facts.
+func formatUntypedFacts(untyped []string) string {
+	if len(untyped) == 0 {
+		return "(none)"
+	}
+	lines := make([]string, 0, len(untyped))
+	for _, u := range untyped {
+		lines = append(lines, "[unanchored] "+u)
+	}
+	return strings.Join(lines, " | ")
 }
 
 // emitVerifierClaimEvents fires one claim_emitted event per cited

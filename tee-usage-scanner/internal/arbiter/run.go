@@ -94,11 +94,31 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 		Confidence: confidence,
 		Files:      pack.TargetFiles,
 		Summary:    summary,
-		Evidence:   append(append([]string{}, hypothesis.SupportingFacts...), memo.ConfirmedFacts...),
+		Evidence:   buildFindingEvidence(hypothesis, memo),
 	}
 
 	packet := buildPacket(pack, hypothesis, challenge, memo, item)
 	return item, packet
+}
+
+// buildFindingEvidence assembles the Evidence []string for a
+// finding. Validated (citation-backed) supporting facts and
+// confirmed facts go in unprefixed; UntypedFacts and (future)
+// untyped verifier fields go in with an explicit "[unanchored]"
+// prefix so the human reviewer can tell at a glance which evidence
+// items the agents actually anchored to source bytes.
+//
+// Strict order: validated first, untyped last.
+func buildFindingEvidence(hypothesis artifacts.Hypothesis, memo artifacts.VerificationMemo) []string {
+	out := make([]string, 0,
+		len(hypothesis.SupportingFacts)+len(memo.ConfirmedFacts)+
+			len(hypothesis.UntypedFacts))
+	out = append(out, hypothesis.SupportingFacts...)
+	out = append(out, memo.ConfirmedFacts...)
+	for _, u := range hypothesis.UntypedFacts {
+		out = append(out, "[unanchored] "+u)
+	}
+	return out
 }
 
 func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, item artifacts.FindingItem) string {

@@ -216,16 +216,16 @@ Snippets:
 	}
 	supportingFacts, citedPool := citations.FlattenFacts(cleanedFacts)
 
-	// Back-compat: when the LLM returned legacy supporting_facts
-	// instead of cited_facts (older prompts or non-compliant
-	// models), fold those strings into SupportingFacts as
-	// untyped/unvalidated entries. They will not appear in the
-	// CitedFacts list, so consumers can still distinguish them
-	// from validated claims.
+	// V1.1.2 polish C2: legacy supporting_facts (LLM ignoring the
+	// cited_facts schema) and flattened tool hits go to a SEPARATE
+	// field. Mixing them into SupportingFacts would let unvalidated
+	// text reach verifier/arbiter as if it were citation-backed —
+	// the contract violation the V1.1.2 doc warned against.
+	var untyped []string
 	if len(parsed.SupportingFacts) > 0 {
-		supportingFacts = append(supportingFacts, parsed.SupportingFacts...)
+		untyped = append(untyped, parsed.SupportingFacts...)
 	}
-	supportingFacts = append(supportingFacts, flattenToolHits(toolHits)...)
+	untyped = append(untyped, flattenToolHits(toolHits)...)
 
 	return artifacts.Hypothesis{
 		SchemaVersion:      "teecheck.hypothesis.v1",
@@ -237,6 +237,7 @@ Snippets:
 		MissingObligations: uniq(parsed.MissingObligations),
 		SupportingFacts:    uniq(supportingFacts),
 		CitedFacts:         cleanedFacts,
+		UntypedFacts:       uniq(untyped),
 		Cited:              citedPool,
 		KnowledgeHints:     pack.KnowledgeHints,
 		Confidence:         normalizeConfidence(parsed.Confidence),
