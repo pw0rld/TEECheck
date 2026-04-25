@@ -134,6 +134,17 @@ cited_facts format — each entry is:
 Rules:
 - Pick the smallest line range that contains the evidence — do not
   cite an entire file when a 5-line region suffices.
+- General citation length cap: aim for ≤30 lines. If you find
+  yourself wanting more, ask whether the claim can be split into
+  multiple narrower facts each with its own small citation.
+- Long-function exception: if the claim genuinely depends on the
+  whole function body (e.g. "this 60-line function never validates
+  X anywhere"), a wider range is acceptable, but the fact text
+  must explicitly say WHY the wider range is needed.
+- Absence proofs (claim of form "X is not present in Y"): cite 1-3
+  representative lines plus a textual explanation, not the entire
+  file. The verifier will trust a focused negative example over a
+  100-line "search this whole file yourself" citation.
 - Only cite paths that appear in the snippets / tool hits below, or
   that you have other concrete reason to believe exist; the system
   will discard citations whose files cannot be opened.
