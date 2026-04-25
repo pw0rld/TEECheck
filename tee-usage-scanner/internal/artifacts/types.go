@@ -260,16 +260,51 @@ type VerificationMemo struct {
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
+// ReviewRecord is the human ground-truth label attached to one
+// arbiter finding. Phase 1 expanded the schema so reviewer judgment
+// (true_positive / false_positive / needs_more_context) is
+// distinct from the arbiter's own status, and false-positive
+// reasons are recorded with a closed taxonomy (see FP* constants
+// in review.go) to make precision metrics meaningful.
 type ReviewRecord struct {
 	SchemaVersion string   `json:"schema_version"`
 	CaseID        string   `json:"case_id"`
 	FindingID     string   `json:"finding_id"`
-	Verdict       string   `json:"verdict"`
-	Severity      string   `json:"severity"`
-	Tags          []string `json:"tags,omitempty"`
-	Notes         string   `json:"notes,omitempty"`
-	ReviewerID    string   `json:"reviewer_id,omitempty"`
-	ReviewedAt    string   `json:"reviewed_at"`
+
+	// Verdict is one of the Verdict* constants. NormalizeVerdict
+	// accepts legacy values ("confirmed"/"dismissed"/"inconclusive").
+	Verdict string `json:"verdict"`
+
+	// FPReason is a taxonomy code (FP* constants) populated only
+	// when Verdict == VerdictFalsePositive. Unknown codes are
+	// stored verbatim for extensibility.
+	FPReason string `json:"fp_reason,omitempty"`
+
+	// CorrectedSeverity is the reviewer's adjustment to the
+	// arbiter's severity. Empty means "keep arbiter's value".
+	CorrectedSeverity string `json:"corrected_severity,omitempty"`
+
+	// ConfidenceOverride is the reviewer's adjustment to the
+	// arbiter's confidence. Empty means "keep arbiter's value".
+	ConfidenceOverride string `json:"confidence_override,omitempty"`
+
+	// ReviewedEvidence is the subset of finding.Evidence the
+	// reviewer affirmed they actually inspected. Empty means
+	// "did not record per-evidence inspection".
+	ReviewedEvidence []string `json:"reviewed_evidence,omitempty"`
+
+	Tags    []string `json:"tags,omitempty"`
+	Notes   string   `json:"notes,omitempty"`
+
+	// Severity is preserved for backward compatibility with old
+	// review_records.jsonl. New writes set CorrectedSeverity
+	// instead. Readers that want the human-corrected severity
+	// should prefer CorrectedSeverity, falling back to Severity
+	// for legacy records.
+	Severity string `json:"severity,omitempty"`
+
+	ReviewerID string `json:"reviewer_id,omitempty"`
+	ReviewedAt string `json:"reviewed_at"`
 }
 
 // EvidenceBundle is the top-level output of the L3 LLM planner.
