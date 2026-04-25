@@ -47,7 +47,37 @@ func Collect(runDir, repoRoot string) (*RunStats, error) {
 	rs.Verifier = collectVerifier(runDir)
 	rs.Arbiter = collectArbiter(runDir, rs.Verifier.MemoCount)
 	rs.Overall = computeOverall(rs)
+	rs.Source = computeOverallSource(rs)
 	return rs, nil
+}
+
+// computeOverallSource summarizes which input drove the run's stats.
+// "events" requires every populated stage to be event-derived, which
+// will only be possible once expert/challenger/verifier/arbiter are
+// instrumented in later commits. Today, "events" is unreachable —
+// the typical states are "mixed" (events.jsonl present, planner
+// folded from it, other stages from artifacts) or "artifacts" (no
+// events.jsonl, legacy run).
+func computeOverallSource(rs *RunStats) string {
+	plannerSource := rs.Planner.Source
+	otherStagesPresent := rs.Cases.Present || rs.Expert.Present ||
+		rs.Challenger.Present || rs.Verifier.Present || rs.Arbiter.Present
+
+	switch plannerSource {
+	case "events":
+		if otherStagesPresent {
+			return "mixed"
+		}
+		return "events"
+	case "artifacts":
+		return "artifacts"
+	default:
+		// planner not present
+		if otherStagesPresent {
+			return "artifacts"
+		}
+		return ""
+	}
 }
 
 func collectPlanner(runDir, repoRoot string) PlannerStats {
@@ -125,7 +155,29 @@ func collectPlanner(runDir, repoRoot string) PlannerStats {
 		s.SymbolValidityRate = 1.0
 	}
 
-	// Action mix + per-round token trace from rounds.jsonl.
+	// Try events.jsonl first. When the planner emitted events
+	// (commit 2 onwards) we prefer them — they directly reflect
+	// what was actually executed (excluding loop-detector rejects)
+	// and they survive incremental schema changes to RoundRecord.
+	if fold, ok, _ := foldPlannerEvents(runDir); ok {
+		s.Source = "events"
+		// rounds_used and tokens_used from the bundle are already
+		// authoritative for completed runs, but the bundle records
+		// the budget's view. The events fold is the executed view.
+		// Prefer events when they disagree.
+		if fold.RoundsUsed > 0 {
+			s.RoundsUsed = fold.RoundsUsed
+		}
+		if fold.TokensUsed > 0 {
+			s.TokensUsed = fold.TokensUsed
+		}
+		s.ActionMix = fold.ActionMix
+		s.TokensByRound = fold.TokensByRound
+		return s
+	}
+
+	// Fallback: action mix + per-round token trace from rounds.jsonl.
+	s.Source = "artifacts"
 	rounds, _ := loadRounds(runfs.RoundsLogPath(runDir))
 	for _, r := range rounds {
 		for _, a := range r.Actions {

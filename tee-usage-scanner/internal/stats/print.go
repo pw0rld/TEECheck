@@ -12,12 +12,20 @@ import (
 // the JSON produced by Collect directly.
 func Print(w io.Writer, rs *RunStats) {
 	fmt.Fprintf(w, "=== TEECheck run stats — %s ===\n", rs.RunID)
-	fmt.Fprintf(w, "Run dir: %s\n\n", rs.RunDir)
+	fmt.Fprintf(w, "Run dir: %s\n", rs.RunDir)
+	if rs.Source != "" {
+		fmt.Fprintf(w, "Source:  %s\n", rs.Source)
+	}
+	fmt.Fprintln(w)
 
 	// Planner
 	if rs.Planner.Present {
 		p := rs.Planner
-		fmt.Fprintf(w, "Planner\n")
+		fmt.Fprintf(w, "Planner")
+		if p.Source != "" {
+			fmt.Fprintf(w, " [source=%s]", p.Source)
+		}
+		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  candidates=%d  termination=%s  rounds=%d/%d  diversity=%d\n",
 			p.CandidateCount, p.TerminationReason, p.RoundsUsed, p.RoundsBudget, p.DiversityIndex)
 		fmt.Fprintf(w, "  path_validity=%.2f  symbol_validity=%.2f\n", p.PathValidityRate, p.SymbolValidityRate)

@@ -10,6 +10,18 @@ type RunStats struct {
 	RunID         string `json:"run_id"`
 	RunDir        string `json:"run_dir"`
 
+	// Source labels which input drove the metrics:
+	//   - "events"    : every populated stage was derived from events.jsonl
+	//   - "artifacts" : no events.jsonl available; everything came from
+	//                   stage JSON files (rounds.jsonl, evidence_bundle.json,
+	//                   hypothesis-*.json, etc.)
+	//   - "mixed"     : some stages used events, others used artifacts —
+	//                   currently the typical case, since only the planner
+	//                   is event-instrumented (commit 2). Other agents
+	//                   continue to come from stage JSON until they are
+	//                   wired to events in later commits.
+	Source string `json:"source,omitempty"`
+
 	Planner    PlannerStats    `json:"planner"`
 	Cases      CasesStats      `json:"cases"`
 	Expert     ExpertStats     `json:"expert"`
@@ -20,8 +32,17 @@ type RunStats struct {
 }
 
 // PlannerStats aggregates signals from 04_planner/.
+//
+// Source labels which on-disk input the metrics were folded from:
+//   - "events"    : events.jsonl supplied rounds_used, tokens_used,
+//                   tokens_by_round, action_mix; the rest came from
+//                   evidence_bundle.json (which still owns candidates,
+//                   path/symbol validity, diversity, termination reason)
+//   - "artifacts" : no events.jsonl available (legacy run); folded
+//                   from rounds.jsonl + evidence_bundle.json
 type PlannerStats struct {
 	Present             bool           `json:"present"`
+	Source              string         `json:"source,omitempty"`
 	CandidateCount      int            `json:"candidate_count"`
 	PathValidityRate    float64        `json:"path_validity_rate"`
 	SymbolValidityRate  float64        `json:"symbol_validity_rate"`

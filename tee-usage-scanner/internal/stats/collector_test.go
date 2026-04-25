@@ -228,6 +228,181 @@ func TestCollect_FullSyntheticRunAlignsVerifierAndArbiter(t *testing.T) {
 	if rs.Overall.PipelineYield != 0.5 {
 		t.Errorf("pipeline_yield=%v want 0.5", rs.Overall.PipelineYield)
 	}
+
+	// Source: legacy run with no events.jsonl → artifacts everywhere.
+	if rs.Source != "artifacts" {
+		t.Errorf("rs.Source=%q want artifacts", rs.Source)
+	}
+	if rs.Planner.Source != "artifacts" {
+		t.Errorf("planner.source=%q want artifacts", rs.Planner.Source)
+	}
+}
+
+// TestCollect_PrefersEventsOverArtifacts seeds both an evidence
+// bundle and an events.jsonl with conflicting numbers and verifies
+// the planner stats fold from events. Bundle-only fields (candidates,
+// path validity, termination reason) still come from the bundle.
+func TestCollect_PrefersEventsOverArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+
+	// Repo with a single real file so path validity stays measurable.
+	real := filepath.Join(repo, "src", "x.rs")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("fn x() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bundle reports tokens=99, rounds=99 — wrong values, the events
+	// fold should override them.
+	bundle := artifacts.EvidenceBundle{
+		SchemaVersion: "teecheck.evidence_bundle.v1",
+		RunID:         "test-events",
+		PlannerMeta: artifacts.PlannerMeta{
+			RoundsUsed:        99,
+			RoundsBudget:      8,
+			TokensUsed:        99,
+			TerminationReason: "llm_done",
+		},
+		Candidates: []artifacts.Candidate{
+			{ID: "c1", Paths: []string{"src/x.rs"}, Symbols: []string{"x"}},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "04_planner", "evidence_bundle.json"), bundle)
+
+	// rounds.jsonl with stale data — events should win.
+	roundsFile := filepath.Join(dir, "04_planner", "rounds.jsonl")
+	_ = os.MkdirAll(filepath.Dir(roundsFile), 0o755)
+	_ = os.WriteFile(roundsFile,
+		[]byte(`{"round":1,"actions":[{"name":"stale","args":{}}],"observations":[],"tokens_in":1,"tokens_out":1}`+"\n"),
+		0o644)
+
+	// events.jsonl: 2 rounds, planner-001 agent, real tool calls,
+	// real token totals. We hand-craft these instead of using the
+	// recorder to keep this test focused on the fold logic.
+	eventsLines := []string{
+		`{"seq":1,"time":"2026-04-25T10:00:00Z","type":"run_started","run_id":"test-events"}`,
+		`{"seq":2,"time":"2026-04-25T10:00:01Z","type":"planner_round_started","run_id":"test-events","agent":"planner-001","round":1}`,
+		`{"seq":3,"time":"2026-04-25T10:00:02Z","type":"llm_call_completed","run_id":"test-events","agent":"planner-001","round":1,"tokens_in":300,"tokens_out":100}`,
+		`{"seq":4,"time":"2026-04-25T10:00:03Z","type":"tool_call_completed","run_id":"test-events","agent":"planner-001","round":1,"tool_name":"ripgrep","tool_ok":true,"tool_duration_ms":42}`,
+		`{"seq":5,"time":"2026-04-25T10:00:04Z","type":"tool_call_completed","run_id":"test-events","agent":"planner-001","round":1,"tool_name":"read_file","tool_ok":true,"tool_duration_ms":12}`,
+		`{"seq":6,"time":"2026-04-25T10:00:05Z","type":"planner_round_completed","run_id":"test-events","agent":"planner-001","round":1,"action_count":2,"observation_count":2}`,
+		`{"seq":7,"time":"2026-04-25T10:00:06Z","type":"planner_round_started","run_id":"test-events","agent":"planner-001","round":2}`,
+		`{"seq":8,"time":"2026-04-25T10:00:07Z","type":"llm_call_completed","run_id":"test-events","agent":"planner-001","round":2,"tokens_in":200,"tokens_out":50}`,
+		`{"seq":9,"time":"2026-04-25T10:00:08Z","type":"tool_call_completed","run_id":"test-events","agent":"planner-001","round":2,"tool_name":"done","tool_ok":true}`,
+		`{"seq":10,"time":"2026-04-25T10:00:09Z","type":"planner_round_completed","run_id":"test-events","agent":"planner-001","round":2,"action_count":1,"observation_count":1}`,
+		`{"seq":11,"time":"2026-04-25T10:00:10Z","type":"run_completed","run_id":"test-events","reason":"completed"}`,
+		// non-planner llm event must NOT pollute planner tokens
+		`{"seq":12,"time":"2026-04-25T10:00:11Z","type":"llm_call_completed","run_id":"test-events","agent":"expert-001","tokens_in":9999,"tokens_out":9999}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"),
+		[]byte(joinNL(eventsLines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rs, err := stats.Collect(dir, repo)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	if rs.Planner.Source != "events" {
+		t.Errorf("planner.source=%q want events", rs.Planner.Source)
+	}
+	// expert event must not leak into planner tokens.
+	if rs.Planner.TokensUsed != 650 {
+		t.Errorf("tokens_used=%d want 650 (300+100+200+50)", rs.Planner.TokensUsed)
+	}
+	if rs.Planner.RoundsUsed != 2 {
+		t.Errorf("rounds_used=%d want 2", rs.Planner.RoundsUsed)
+	}
+	// Bundle-derived fields still come from the bundle.
+	if rs.Planner.RoundsBudget != 8 {
+		t.Errorf("rounds_budget=%d want 8 (from bundle)", rs.Planner.RoundsBudget)
+	}
+	if rs.Planner.TerminationReason != "llm_done" {
+		t.Errorf("termination=%q want llm_done", rs.Planner.TerminationReason)
+	}
+	if rs.Planner.CandidateCount != 1 {
+		t.Errorf("candidate_count=%d want 1", rs.Planner.CandidateCount)
+	}
+	if got := rs.Planner.ActionMix["ripgrep"]; got != 1 {
+		t.Errorf("action_mix[ripgrep]=%d want 1", got)
+	}
+	if got := rs.Planner.ActionMix["read_file"]; got != 1 {
+		t.Errorf("action_mix[read_file]=%d want 1", got)
+	}
+	if got := rs.Planner.ActionMix["done"]; got != 1 {
+		t.Errorf("action_mix[done]=%d want 1", got)
+	}
+	if got := rs.Planner.ActionMix["stale"]; got != 0 {
+		t.Errorf("rounds.jsonl 'stale' action leaked into events fold: got %d", got)
+	}
+	// tokens_by_round[0] = 400 (round 1: 300+100), [1] = 250 (round 2: 200+50)
+	if len(rs.Planner.TokensByRound) != 2 {
+		t.Fatalf("tokens_by_round len=%d want 2", len(rs.Planner.TokensByRound))
+	}
+	if rs.Planner.TokensByRound[0] != 400 {
+		t.Errorf("tokens_by_round[0]=%d want 400", rs.Planner.TokensByRound[0])
+	}
+	if rs.Planner.TokensByRound[1] != 250 {
+		t.Errorf("tokens_by_round[1]=%d want 250", rs.Planner.TokensByRound[1])
+	}
+
+	// No other stages present; rs.Source ends up "events" since
+	// planner is the only present stage and it folded from events.
+	if rs.Source != "events" {
+		t.Errorf("rs.Source=%q want events", rs.Source)
+	}
+}
+
+// TestCollect_MixedSourceWhenOtherStagesPresent verifies that a run
+// with events.jsonl AND artifact-only downstream stages reports
+// rs.Source = "mixed".
+func TestCollect_MixedSourceWhenOtherStagesPresent(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+
+	real := filepath.Join(repo, "x.rs")
+	_ = os.WriteFile(real, []byte("fn x() {}\n"), 0o644)
+
+	bundle := artifacts.EvidenceBundle{
+		SchemaVersion: "teecheck.evidence_bundle.v1",
+		RunID:         "mixed",
+		PlannerMeta:   artifacts.PlannerMeta{RoundsUsed: 1, RoundsBudget: 1, TerminationReason: "llm_done"},
+		Candidates:    []artifacts.Candidate{{ID: "c1", Paths: []string{"x.rs"}}},
+	}
+	writeJSON(t, filepath.Join(dir, "04_planner", "evidence_bundle.json"), bundle)
+
+	// Minimal events.jsonl with one round so planner folds from events.
+	eventsBody := `{"seq":1,"time":"2026-04-25T10:00:00Z","type":"planner_round_completed","run_id":"mixed","agent":"planner-001","round":1}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(eventsBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// One artifact-only stage downstream.
+	writeJSON(t, filepath.Join(dir, "07_arbiter", "findings.json"),
+		artifacts.Findings{Findings: []artifacts.FindingItem{{FindingID: "f1", SliceID: "case-1"}}})
+
+	rs, err := stats.Collect(dir, repo)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if rs.Planner.Source != "events" {
+		t.Errorf("planner.source=%q want events", rs.Planner.Source)
+	}
+	if rs.Source != "mixed" {
+		t.Errorf("rs.Source=%q want mixed (planner from events, arbiter from artifacts)", rs.Source)
+	}
+}
+
+func joinNL(lines []string) string {
+	out := ""
+	for _, l := range lines {
+		out += l + "\n"
+	}
+	return out
 }
 
 // tiny itoa to avoid strconv import in a test file
