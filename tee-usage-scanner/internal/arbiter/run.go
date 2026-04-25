@@ -139,7 +139,20 @@ func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, chall
 	b.WriteString("## Hypothesis\n\n")
 	b.WriteString(fmt.Sprintf("- Title: %s\n", hypothesis.Title))
 	b.WriteString(fmt.Sprintf("- Summary: %s\n", hypothesis.Summary))
-	b.WriteString(fmt.Sprintf("- Missing obligations: %s\n\n", strings.Join(hypothesis.MissingObligations, ", ")))
+	b.WriteString(fmt.Sprintf("- Missing obligations: %s\n", strings.Join(hypothesis.MissingObligations, ", ")))
+	if len(hypothesis.SupportingFacts) > 0 {
+		b.WriteString("- Supporting facts (anchored):\n")
+		for _, item := range hypothesis.SupportingFacts {
+			b.WriteString(fmt.Sprintf("  - %s\n", item))
+		}
+	}
+	if len(hypothesis.UntypedFacts) > 0 {
+		b.WriteString("- Unanchored context (tool hits / legacy text — not citation-backed):\n")
+		for _, item := range hypothesis.UntypedFacts {
+			b.WriteString(fmt.Sprintf("  - [unanchored] %s\n", item))
+		}
+	}
+	b.WriteString("\n")
 	b.WriteString("## Challenger View\n\n")
 	b.WriteString(fmt.Sprintf("- Exploitability: %s\n", challenge.Exploitability))
 	b.WriteString(fmt.Sprintf("- Narrative: %s\n", challenge.ExploitNarrative))
@@ -161,6 +174,18 @@ func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, chall
 		b.WriteString("- Contradictions:\n")
 		for _, item := range memo.Contradictions {
 			b.WriteString(fmt.Sprintf("  - %s\n", item))
+		}
+	}
+	if len(memo.UntypedConfirmedFacts) > 0 {
+		b.WriteString("- Unanchored confirmed (verifier returned legacy text without citations):\n")
+		for _, item := range memo.UntypedConfirmedFacts {
+			b.WriteString(fmt.Sprintf("  - [unanchored] %s\n", item))
+		}
+	}
+	if len(memo.UntypedContradictions) > 0 {
+		b.WriteString("- Unanchored contradictions (verifier returned legacy text without citations):\n")
+		for _, item := range memo.UntypedContradictions {
+			b.WriteString(fmt.Sprintf("  - [unanchored] %s\n", item))
 		}
 	}
 	b.WriteString("\n## Knowledge Hints\n\n")
