@@ -14,6 +14,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -32,7 +33,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
-func Run(cfg config.Config) (string, error) {
+func Run(cfg config.Config) (runDir string, err error) {
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -58,13 +59,42 @@ func Run(cfg config.Config) (string, error) {
 	}
 	initCfg := cfg
 	initCfg.Command = "init-run"
-	runDir, err := runinit.Run(initCfg, time.Now())
+	runDir, err = runinit.Run(initCfg, time.Now())
 	if err != nil {
 		return "", fmt.Errorf("init run: %w", err)
 	}
 
 	stageCfg := cfg
 	stageCfg.RunDir = runDir
+
+	// Open event recorder + blob store. From this point on, agents
+	// can emit typed events that downstream stats / replay / review
+	// UI fold over to derive metrics. See docs/EVENT_SCHEMA.md.
+	rec, err := events.NewJSONLRecorder(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		return runDir, fmt.Errorf("init events recorder: %w", err)
+	}
+	blobs, err := events.NewBlobStore(filepath.Join(runDir, "blobs"))
+	if err != nil {
+		_ = rec.Close()
+		return runDir, fmt.Errorf("init blob store: %w", err)
+	}
+	manifest, manifestErr := runfs.LoadManifest(runDir)
+	runID := ""
+	if manifestErr == nil {
+		runID = manifest.RunID
+	}
+	_ = rec.Emit(events.RunStarted(runID, cfg.Target, cfg.Mode, cfg.Focus))
+	defer func() {
+		reason := "completed"
+		errMsg := ""
+		if err != nil {
+			reason = "error"
+			errMsg = err.Error()
+		}
+		_ = rec.Emit(events.RunCompleted(runID, reason, errMsg))
+		_ = rec.Close()
+	}()
 
 	if err := preprocessor.Run(stageCfg); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
@@ -73,8 +103,8 @@ func Run(cfg config.Config) (string, error) {
 	if strings.EqualFold(cfg.Mode, "llm") {
 		// === Agent 1: L3 Planner ===
 		fmt.Println("\n=== Planner Agent (L3) ===")
-		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir); err != nil {
-			return "", fmt.Errorf("L3 planner: %w", err)
+		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir, rec, blobs); err != nil {
+			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
 		if err := cases.Run(stageCfg); err != nil {
 			return "", fmt.Errorf("cases: %w", err)
@@ -224,7 +254,7 @@ func truncate(s string, n int) string {
 // Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, repoRoot, runDir string) error {
+func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore) error {
 	var profile artifacts.ProjectProfile
 	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
 		return fmt.Errorf("load profile: %w", err)
@@ -277,6 +307,9 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string) error {
 			Temperature:   cfg.LLMTemp,
 			KnowledgeRoot: cfg.KnowledgeRoot,
 			AvoidPaths:    avoid,
+			Events:        rec,
+			Blobs:         blobs,
+			Model:         cfg.LLMModel,
 		})
 
 		if result.Bundle != nil {

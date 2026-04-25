@@ -11,10 +11,16 @@ import (
 	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
+
+// DefaultPlannerAgentID is used in events when RunConfig.AgentID is
+// empty. Matches the suffix convention used by other agents
+// (expert-001, challenger-001, ...).
+const DefaultPlannerAgentID = "planner-001"
 
 // RunConfig is the input to Run. Everything the main loop needs is
 // passed explicitly — no package-level state.
@@ -45,6 +51,23 @@ type RunConfig struct {
 	// exact targets and to find different code paths instead. Used
 	// by the multi-sample audit mode (--samples N) in pipeline.Run.
 	AvoidPaths []string
+
+	// Events records typed events for stats / replay / review UI.
+	// If nil, defaults to events.Nop and the planner stays silent.
+	// See internal/events for the contract.
+	Events events.Recorder
+	// Blobs is the content-addressed store for prompt / response /
+	// tool-args bodies. When non-nil, those bodies are written there
+	// and only the sha256 ref appears in events.jsonl. When nil,
+	// blob fields in events stay empty — events still emit, just
+	// without large bodies.
+	Blobs *events.BlobStore
+	// AgentID is the identifier used in events. Defaults to
+	// DefaultPlannerAgentID.
+	AgentID string
+	// Model is the model name reported in llm_call_* events. Empty
+	// is allowed; consumers may fall back to "unknown".
+	Model string
 }
 
 // RunResult is the return value of Run. Bundle is always non-nil.
@@ -70,6 +93,12 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	}
 	if cfg.MaxActionsPerRound <= 0 {
 		cfg.MaxActionsPerRound = 3
+	}
+	if cfg.Events == nil {
+		cfg.Events = events.Nop{}
+	}
+	if cfg.AgentID == "" {
+		cfg.AgentID = DefaultPlannerAgentID
 	}
 
 	cfg.Budget.Start()
@@ -105,6 +134,8 @@ loop:
 	for !cfg.Budget.Exhausted() {
 		cfg.Budget.ConsumeRound()
 		roundNum := cfg.Budget.RoundsUsed
+
+		_ = cfg.Events.Emit(events.PlannerRoundStarted(cfg.RunID, cfg.AgentID, roundNum))
 
 		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths)
 
@@ -162,8 +193,15 @@ loop:
 			Temperature:  cfg.Temperature,
 			JSONMode:     true,
 		}
+		_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
 		genResp, err := cfg.Client.Generate(ctx, genReq)
 		if err != nil {
+			// Emit a completion event with Error populated so
+			// downstream consumers can pair the started/completed
+			// events even on failure.
+			failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
+			failed.Error = err.Error()
+			_ = cfg.Events.Emit(failed)
 			runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
 			terminationReason = "llm_error"
 			break
@@ -181,6 +219,19 @@ loop:
 		}
 		cfg.Budget.ConsumeTokens(tokensIn + tokensOut)
 
+		// Persist prompt + response bodies to the blob store (if
+		// configured) and emit llm_call_completed with refs only.
+		var promptBlob, responseBlob string
+		if cfg.Blobs != nil {
+			if ref, err := cfg.Blobs.WriteString(systemPrompt + "\n\n---\n\n" + roundPrompt); err == nil {
+				promptBlob = ref
+			}
+			if ref, err := cfg.Blobs.WriteString(genResp.Text); err == nil {
+				responseBlob = ref
+			}
+		}
+		_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
+
 		parsed, err := ParseLLMResponse(genResp.Text)
 		if err != nil {
 			runErr = fmt.Errorf("round %d: %w", roundNum, err)
@@ -189,6 +240,7 @@ loop:
 				Round:   roundNum,
 				Thought: "<unparseable>: " + truncate(genResp.Text, 500),
 			}, roundsLog)
+			_ = cfg.Events.Emit(events.PlannerRoundCompleted(cfg.RunID, cfg.AgentID, roundNum, 0, 0))
 			break
 		}
 
@@ -197,6 +249,11 @@ loop:
 			Thought:   parsed.Thought,
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
+		}
+		emitRoundDone := func() {
+			_ = cfg.Events.Emit(events.PlannerRoundCompleted(
+				cfg.RunID, cfg.AgentID, roundNum,
+				len(roundRec.Actions), len(roundRec.Observations)))
 		}
 
 		actionLimit := len(parsed.Actions)
@@ -222,12 +279,22 @@ loop:
 			}
 
 			fmt.Fprintf(os.Stdout, "[planner]   -> %s\n", act.Name)
+			var toolArgsBlob string
+			if cfg.Blobs != nil && len(act.Args) > 0 {
+				if ref, err := cfg.Blobs.Write([]byte(act.Args)); err == nil {
+					toolArgsBlob = ref
+				}
+			}
+			_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
+
 			result := cfg.Registry.Run(ctx, actions.ActionRequest{
 				Name:     act.Name,
 				Args:     act.Args,
 				RepoRoot: cfg.RepoRoot,
 			})
 			loopDet.Record(act.Name, argsStr)
+
+			_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, result.Error))
 
 			roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{
 				Name:       result.Name,
@@ -248,6 +315,7 @@ loop:
 				if err := json.Unmarshal([]byte(result.Output), &donePayload); err == nil {
 					state.AppendRoundAndPersist(roundRec, roundsLog)
 					terminationReason = "llm_done"
+					emitRoundDone()
 					break loop
 				}
 			}
@@ -256,8 +324,10 @@ loop:
 		if err := state.AppendRoundAndPersist(roundRec, roundsLog); err != nil {
 			runErr = fmt.Errorf("round %d: persist: %w", roundNum, err)
 			terminationReason = "persist_error"
+			emitRoundDone()
 			break
 		}
+		emitRoundDone()
 	}
 
 	if terminationReason == "" {
