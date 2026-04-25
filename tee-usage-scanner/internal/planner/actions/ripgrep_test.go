@@ -9,8 +9,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 )
+
+// testExec is the bare LocalExecutor (no recorder, no blob store)
+// used by the in-package ripgrep tests. Production wires a real
+// executor via the pipeline; these tests exercise the handler logic
+// in isolation.
+func testExec() executor.Executor { return &executor.LocalExecutor{} }
 
 func requireRipgrep(t *testing.T) {
 	t.Helper()
@@ -40,6 +47,7 @@ func TestRipgrep_FindsPattern(t *testing.T) {
 		Name:     "ripgrep",
 		Args:     ripgrepArgs(t, "verify_quote", nil),
 		RepoRoot: dir,
+		Executor: testExec(),
 	})
 	if !result.OK {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -64,6 +72,7 @@ func TestRipgrep_NoMatch(t *testing.T) {
 		Name:     "ripgrep",
 		Args:     ripgrepArgs(t, "verify_quote", nil),
 		RepoRoot: dir,
+		Executor: testExec(),
 	})
 	if !result.OK {
 		t.Fatalf("expected OK on no-match, got error: %s", result.Error)
@@ -88,6 +97,7 @@ func TestRipgrep_GlobFilter(t *testing.T) {
 		Name:     "ripgrep",
 		Args:     ripgrepArgs(t, "verify_quote", []string{"*.rs"}),
 		RepoRoot: dir,
+		Executor: testExec(),
 	})
 	if !result.OK {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -116,6 +126,7 @@ func TestRipgrep_Truncation(t *testing.T) {
 		Name:     "ripgrep",
 		Args:     ripgrepArgs(t, "verify_quote_target", nil),
 		RepoRoot: dir,
+		Executor: testExec(),
 	})
 	if !result.OK {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -137,11 +148,57 @@ func TestRipgrep_MissingPattern(t *testing.T) {
 		Name:     "ripgrep",
 		Args:     ripgrepArgs(t, "", nil),
 		RepoRoot: dir,
+		Executor: testExec(),
 	})
 	if result.OK {
 		t.Fatal("expected failure for empty pattern")
 	}
 	if !strings.Contains(result.Error, "pattern") {
 		t.Fatalf("expected pattern error, got: %s", result.Error)
+	}
+}
+
+// TestRipgrep_NoExecutorIsExplicitFailure verifies the handler does
+// not silently fall back to an event-less executor when the request
+// is missing one — that fallback would hide policy and observability
+// from the run.
+func TestRipgrep_NoExecutorIsExplicitFailure(t *testing.T) {
+	h := actions.RipgrepHandler{}
+	result := h.Run(context.Background(), actions.ActionRequest{
+		Name:     "ripgrep",
+		Args:     ripgrepArgs(t, "x", nil),
+		RepoRoot: t.TempDir(),
+		// Executor intentionally nil
+	})
+	if result.OK {
+		t.Fatal("expected failure when Executor is nil")
+	}
+	if !strings.Contains(result.Error, "executor") {
+		t.Fatalf("expected error to mention executor wiring, got: %s", result.Error)
+	}
+}
+
+// TestRipgrep_IsExecutorBacked confirms the handler advertises itself
+// as executor-backed so the planner skips its manual emit path.
+func TestRipgrep_IsExecutorBacked(t *testing.T) {
+	h := actions.RipgrepHandler{}
+	if !h.IsExecutorBacked() {
+		t.Error("RipgrepHandler.IsExecutorBacked() = false, want true")
+	}
+}
+
+// TestRegistry_IsExecutorBacked confirms the registry helper agrees
+// with the handler's self-report and returns false for in-process
+// actions and unknown names.
+func TestRegistry_IsExecutorBacked(t *testing.T) {
+	r := actions.NewDefaultRegistry()
+	if !r.IsExecutorBacked("ripgrep") {
+		t.Error("registry.IsExecutorBacked(ripgrep) = false, want true")
+	}
+	if r.IsExecutorBacked("read_file") {
+		t.Error("registry.IsExecutorBacked(read_file) = true, want false (in-process action)")
+	}
+	if r.IsExecutorBacked("nonexistent") {
+		t.Error("registry.IsExecutorBacked(nonexistent) = true, want false")
 	}
 }

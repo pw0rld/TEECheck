@@ -12,6 +12,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
@@ -68,6 +69,14 @@ type RunConfig struct {
 	// Model is the model name reported in llm_call_* events. Empty
 	// is allowed; consumers may fall back to "unknown".
 	Model string
+
+	// Executor is the chokepoint for subprocess-class actions
+	// (currently ripgrep; future: semgrep, codeql, ...). It is
+	// stamped into every ActionRequest so executor-backed handlers
+	// can route through it. May be nil — handlers that need an
+	// executor fail explicitly when the field is missing rather
+	// than silently bypass policy and observability.
+	Executor executor.Executor
 }
 
 // RunResult is the return value of Run. Bundle is always non-nil.
@@ -279,22 +288,39 @@ loop:
 			}
 
 			fmt.Fprintf(os.Stdout, "[planner]   -> %s\n", act.Name)
-			var toolArgsBlob string
-			if cfg.Blobs != nil && len(act.Args) > 0 {
-				if ref, err := cfg.Blobs.Write([]byte(act.Args)); err == nil {
-					toolArgsBlob = ref
+
+			// Executor-backed handlers (ripgrep today; semgrep,
+			// codeql, ... in future commits) emit their own
+			// tool_call_started / tool_call_completed events through
+			// the executor. The planner must skip its manual emit
+			// path for those actions or events.jsonl will record
+			// duplicates and stats action_mix doubles.
+			executorBacked := cfg.Registry.IsExecutorBacked(act.Name)
+
+			if !executorBacked {
+				var toolArgsBlob string
+				if cfg.Blobs != nil && len(act.Args) > 0 {
+					if ref, err := cfg.Blobs.Write([]byte(act.Args)); err == nil {
+						toolArgsBlob = ref
+					}
 				}
+				_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
 			}
-			_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
 
 			result := cfg.Registry.Run(ctx, actions.ActionRequest{
 				Name:     act.Name,
 				Args:     act.Args,
 				RepoRoot: cfg.RepoRoot,
+				Executor: cfg.Executor,
+				RunID:    cfg.RunID,
+				Agent:    cfg.AgentID,
+				Round:    roundNum,
 			})
 			loopDet.Record(act.Name, argsStr)
 
-			_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, result.Error))
+			if !executorBacked {
+				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, result.Error))
+			}
 
 			roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{
 				Name:       result.Name,

@@ -15,6 +15,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -103,7 +104,13 @@ func Run(cfg config.Config) (runDir string, err error) {
 	if strings.EqualFold(cfg.Mode, "llm") {
 		// === Agent 1: L3 Planner ===
 		fmt.Println("\n=== Planner Agent (L3) ===")
-		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir, rec, blobs); err != nil {
+		// LocalExecutor is constructed once and shared with the
+		// planner via runL3Planner. Recorder + blob store are the
+		// same instances the planner uses for its in-process
+		// events, so all subprocess tool_call_* events land in the
+		// same events.jsonl with the same correlation ids.
+		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
+		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
 		if err := cases.Run(stageCfg); err != nil {
@@ -254,7 +261,7 @@ func truncate(s string, n int) string {
 // Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore) error {
+func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	var profile artifacts.ProjectProfile
 	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
 		return fmt.Errorf("load profile: %w", err)
@@ -310,6 +317,7 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 			Events:        rec,
 			Blobs:         blobs,
 			Model:         cfg.LLMModel,
+			Executor:      exec,
 		})
 
 		if result.Bundle != nil {

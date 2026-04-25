@@ -9,6 +9,8 @@ package actions
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
 // ActionRequest is one tool invocation the LLM has asked for.
@@ -22,6 +24,22 @@ type ActionRequest struct {
 	// RepoRoot is the absolute path to the cloned repository. It is
 	// injected by the planner, not supplied by the LLM.
 	RepoRoot string `json:"-"`
+
+	// Executor is the chokepoint for subprocess-class actions
+	// (ripgrep, semgrep, codeql, ...). It is non-nil for production
+	// callers; in-process actions (read_file, list_dir, ...) ignore
+	// the field.
+	//
+	// Subprocess handlers should refuse to run when Executor is nil
+	// — silently falling back to an event-less local executor would
+	// hide policy and observability from the run.
+	Executor executor.Executor `json:"-"`
+	// RunID / Agent / Round are correlation identifiers stamped onto
+	// any event the executor emits for this call. Only meaningful
+	// for executor-backed handlers.
+	RunID string `json:"-"`
+	Agent string `json:"-"`
+	Round int    `json:"-"`
 }
 
 // ActionResult is what a handler returns. It is the single observation
@@ -44,6 +62,20 @@ type ActionResult struct {
 type Handler interface {
 	Name() string
 	Run(ctx context.Context, req ActionRequest) ActionResult
+}
+
+// ExecutorBacked is an optional marker implemented by handlers that
+// route their work through internal/executor and therefore emit
+// their own tool_call_started / tool_call_completed events. The
+// planner uses this signal to skip its manual event emission for
+// those actions, so the executor's events are not duplicated.
+//
+// In-process handlers (read_file, list_dir, tree_sitter_outline,
+// done) do not implement this interface; the planner emits events
+// for them on the surrounding registry call.
+type ExecutorBacked interface {
+	Handler
+	IsExecutorBacked() bool
 }
 
 // fail is a helper for handlers to construct an error result.

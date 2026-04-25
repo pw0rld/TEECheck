@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 )
@@ -65,6 +66,13 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 		t.Fatalf("blobs: %v", err)
 	}
 
+	// Production-faithful wiring: the same recorder + blob store
+	// flow into both the planner (for in-process events) and the
+	// executor (for ripgrep). Ripgrep is now executor-backed, so
+	// without this the planner would skip its manual emit AND the
+	// handler would fail with "executor not provided".
+	exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
+
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:       "test-events",
 		RepoRoot:    repoRoot,
@@ -77,6 +85,7 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 		Events:      rec,
 		Blobs:       blobs,
 		Model:       "glm-4.7",
+		Executor:    exec,
 	})
 	if result.Err != nil {
 		t.Fatalf("planner: %v", result.Err)
@@ -160,6 +169,53 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 	blobFiles, _ := os.ReadDir(filepath.Join(runDir, "blobs"))
 	if len(blobFiles) == 0 {
 		t.Errorf("blob store is empty; expected prompt/response/tool-args bodies")
+	}
+
+	// No-double-emit guard: round 1 dispatches ripgrep
+	// (executor-backed) and round 2 dispatches done (in-process).
+	// Each round must contribute exactly one tool_call_started and
+	// one tool_call_completed — never two pairs for the same call.
+	startedByRound := map[int]int{}
+	completedByRound := map[int]int{}
+	for _, e := range es {
+		switch e.Type {
+		case events.TypeToolCallStarted:
+			startedByRound[e.Round]++
+		case events.TypeToolCallCompleted:
+			completedByRound[e.Round]++
+		}
+	}
+	for round, n := range startedByRound {
+		if n != 1 {
+			t.Errorf("round %d: %d tool_call_started events, want 1 (double-emit?)", round, n)
+		}
+	}
+	for round, n := range completedByRound {
+		if n != 1 {
+			t.Errorf("round %d: %d tool_call_completed events, want 1 (double-emit?)", round, n)
+		}
+	}
+
+	// Profile metadata only on the executor-backed (ripgrep) call.
+	// Round 1 = ripgrep → started event must carry network/timeout.
+	// Round 2 = done    → started event must NOT carry them.
+	for _, e := range es {
+		if e.Type != events.TypeToolCallStarted {
+			continue
+		}
+		if e.ToolName == "ripgrep" {
+			if e.Network == "" {
+				t.Error("ripgrep started event missing Network metadata")
+			}
+			if e.TimeoutMs == 0 {
+				t.Error("ripgrep started event missing TimeoutMs")
+			}
+		}
+		if e.ToolName == "done" {
+			if e.Network != "" {
+				t.Errorf("done is in-process but carries Network=%q", e.Network)
+			}
+		}
 	}
 }
 

@@ -36,6 +36,22 @@ func (r *Registry) Register(h Handler) {
 	r.handlers[h.Name()] = h
 }
 
+// IsExecutorBacked reports whether the handler registered under
+// name implements ExecutorBacked and returned true. The planner
+// uses this to skip its manual tool_call_* event emission so the
+// executor's events are not duplicated. Unknown names report false.
+func (r *Registry) IsExecutorBacked(name string) bool {
+	h, ok := r.handlers[name]
+	if !ok {
+		return false
+	}
+	eb, ok := h.(ExecutorBacked)
+	if !ok {
+		return false
+	}
+	return eb.IsExecutorBacked()
+}
+
 // Names returns the sorted list of registered handler names.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.handlers))
