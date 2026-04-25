@@ -486,6 +486,115 @@ func TestCollect_TypedCitationsWithoutRepoIsZero(t *testing.T) {
 	}
 }
 
+// TestCollect_ReviewLabels exercises Phase 1 review-labels:
+// review_records.jsonl drives TP/FP/NMC counts, and case packs +
+// findings.json supply the slicing dimensions.
+func TestCollect_ReviewLabels(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+
+	bundle := artifacts.EvidenceBundle{
+		SchemaVersion: "teecheck.evidence_bundle.v1",
+		PlannerMeta:   artifacts.PlannerMeta{TerminationReason: "llm_done"},
+		Candidates:    []artifacts.Candidate{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
+	}
+	writeJSON(t, filepath.Join(dir, "04_planner", "evidence_bundle.json"), bundle)
+
+	for i, cat := range []string{"attestation", "boundary", "attestation"} {
+		pack := artifacts.CasePack{CaseID: "case-00" + itoa(i+1), Category: cat}
+		writeJSON(t, filepath.Join(dir, "03_cases", "case-00"+itoa(i+1)+".json"), pack)
+	}
+
+	findings := artifacts.Findings{
+		Findings: []artifacts.FindingItem{
+			{FindingID: "case-001", SliceID: "case-001", Status: "needs_review", Severity: "high",
+				Evidence: []string{"VALIDATED claim", "[unanchored] tool hit"}},
+			{FindingID: "case-002", SliceID: "case-002", Status: "needs_review", Severity: "low",
+				Evidence: []string{"[unanchored] background only"}},
+			{FindingID: "case-003", SliceID: "case-003", Status: "no_issue_observed", Severity: "low",
+				Evidence: []string{"VALIDATED other"}},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "07_arbiter", "findings.json"), findings)
+
+	jsonlPath := filepath.Join(dir, "08_review", "review_records.jsonl")
+	if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	enc := json.NewEncoder(f)
+	for _, rec := range []artifacts.ReviewRecord{
+		{CaseID: "case-001", FindingID: "case-001", Verdict: artifacts.VerdictTruePositive, ReviewedAt: "t"},
+		{CaseID: "case-002", FindingID: "case-002", Verdict: artifacts.VerdictFalsePositive, FPReason: artifacts.FPWrongLayer, ReviewedAt: "t"},
+		{CaseID: "case-003", FindingID: "case-003", Verdict: artifacts.VerdictNeedsMoreContext, ReviewedAt: "t"},
+	} {
+		_ = enc.Encode(rec)
+	}
+	_ = f.Close()
+
+	rs, err := stats.Collect(dir, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rs.Review
+	if !r.Present {
+		t.Fatal("Review not present")
+	}
+	if r.TotalReviewed != 3 || r.TPCount != 1 || r.FPCount != 1 || r.NMCCount != 1 {
+		t.Errorf("counts: total=%d TP=%d FP=%d NMC=%d", r.TotalReviewed, r.TPCount, r.FPCount, r.NMCCount)
+	}
+	if r.FPRate != 0.5 {
+		t.Errorf("FPRate=%v want 0.5", r.FPRate)
+	}
+	if r.FPReasons[artifacts.FPWrongLayer] != 1 {
+		t.Errorf("FPReasons[wrong_layer]=%d want 1", r.FPReasons[artifacts.FPWrongLayer])
+	}
+	if att := r.ByCategory["attestation"]; att.Total != 2 || att.TP != 1 {
+		t.Errorf("ByCategory[attestation]=%+v", att)
+	}
+	if bnd := r.ByCategory["boundary"]; bnd.FP != 1 || bnd.FPRate != 1.0 {
+		t.Errorf("ByCategory[boundary]=%+v", bnd)
+	}
+	if nr := r.ByArbiterStatus["needs_review"]; nr.TP != 1 || nr.FP != 1 || nr.FPRate != 0.5 {
+		t.Errorf("ByArbiterStatus[needs_review]=%+v", nr)
+	}
+	if val := r.ByCitationValidity["validated"]; val.TP != 1 || val.NMC != 1 {
+		t.Errorf("ByCitationValidity[validated]=%+v", val)
+	}
+	if una := r.ByCitationValidity["unanchored"]; una.FP != 1 || una.FPRate != 1.0 {
+		t.Errorf("ByCitationValidity[unanchored]=%+v want FP=1 rate=1.0", una)
+	}
+}
+
+func TestCollect_ReviewAbsent(t *testing.T) {
+	rs, err := stats.Collect(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Review.Present {
+		t.Error("Review.Present=true on empty run")
+	}
+}
+
+func TestCollect_ReviewLegacyVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	jsonlPath := filepath.Join(dir, "08_review", "review_records.jsonl")
+	_ = os.MkdirAll(filepath.Dir(jsonlPath), 0o755)
+	body := `{"case_id":"x","finding_id":"x","verdict":"confirmed","reviewed_at":"t"}` + "\n" +
+		`{"case_id":"y","finding_id":"y","verdict":"dismissed","reviewed_at":"t"}` + "\n"
+	_ = os.WriteFile(jsonlPath, []byte(body), 0o644)
+	rs, err := stats.Collect(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Review.TPCount != 1 {
+		t.Errorf("legacy 'confirmed' should map to TP, got %d", rs.Review.TPCount)
+	}
+	if rs.Review.FPCount != 1 {
+		t.Errorf("legacy 'dismissed' should map to FP, got %d", rs.Review.FPCount)
+	}
+}
+
 func joinNL(lines []string) string {
 	out := ""
 	for _, l := range lines {

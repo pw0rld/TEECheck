@@ -28,6 +28,7 @@ type RunStats struct {
 	Challenger ChallengerStats `json:"challenger"`
 	Verifier   VerifierStats   `json:"verifier"`
 	Arbiter    ArbiterStats    `json:"arbiter"`
+	Review     ReviewStats     `json:"review,omitempty"`
 	Overall    OverallStats    `json:"overall"`
 }
 
@@ -120,6 +121,46 @@ type ArbiterStats struct {
 	SeverityDistribution  map[string]int `json:"severity_distribution"`
 	VerifierAgreementRate float64        `json:"verifier_agreement_rate"`
 	PacketWordcountP50    int            `json:"packet_wordcount_p50"`
+}
+
+// ReviewStats aggregates human ground-truth labels from
+// 08_review/review_records.jsonl (Phase 1). Empty / Present=false
+// when the run has not been reviewed yet — the typical state for
+// fresh dogfood data.
+//
+// FPRate is fp_count / (tp_count + fp_count) — it excludes
+// needs_more_context and skip because those are not definitive
+// labels.
+//
+// Slices: ByCategory keys are the case category fields
+// (attestation / authorization / boundary / ...). ByArbiterStatus
+// keys are findings.json status values (no_issue_observed /
+// needs_review / likely_issue / confirmed_candidate).
+// ByCitationValidity buckets are "validated" (finding had at least
+// one anchored CitedFact) and "unanchored" (finding had no
+// resolved citations). FPReasons counts the distribution of FP
+// reason taxonomy codes among false-positive verdicts.
+type ReviewStats struct {
+	Present              bool                       `json:"present"`
+	TotalReviewed        int                        `json:"total_reviewed"`
+	TPCount              int                        `json:"tp_count"`
+	FPCount              int                        `json:"fp_count"`
+	NMCCount             int                        `json:"nmc_count"`
+	SkipCount            int                        `json:"skip_count"`
+	FPRate               float64                    `json:"fp_rate"`
+	ByCategory           map[string]ReviewBucketAgg `json:"by_category,omitempty"`
+	ByArbiterStatus      map[string]ReviewBucketAgg `json:"by_arbiter_status,omitempty"`
+	ByCitationValidity   map[string]ReviewBucketAgg `json:"by_citation_validity,omitempty"`
+	FPReasons            map[string]int             `json:"fp_reasons,omitempty"`
+}
+
+// ReviewBucketAgg is the per-slice TP/FP/NMC count for one bucket.
+type ReviewBucketAgg struct {
+	TP     int     `json:"tp"`
+	FP     int     `json:"fp"`
+	NMC    int     `json:"nmc"`
+	Total  int     `json:"total"`
+	FPRate float64 `json:"fp_rate"`
 }
 
 // OverallStats ties the stage counts together.

@@ -46,6 +46,7 @@ func Collect(runDir, repoRoot string) (*RunStats, error) {
 	rs.Challenger = collectChallenger(runDir)
 	rs.Verifier = collectVerifier(runDir)
 	rs.Arbiter = collectArbiter(runDir, rs.Verifier.MemoCount)
+	rs.Review = collectReview(runDir)
 	rs.Overall = computeOverall(rs)
 	rs.Source = computeOverallSource(rs)
 	return rs, nil

@@ -89,6 +89,29 @@ func Print(w io.Writer, rs *RunStats) {
 			formatMapInt(a.SeverityDistribution), formatMapInt(a.ConfidenceDistribution))
 	}
 
+	// Review (Phase 1 ground truth)
+	if rs.Review.Present {
+		r := rs.Review
+		fmt.Fprintf(w, "\nReview (human ground truth)\n")
+		fmt.Fprintf(w, "  total_reviewed=%d  TP=%d  FP=%d  NMC=%d  skip=%d  fp_rate=%.2f\n",
+			r.TotalReviewed, r.TPCount, r.FPCount, r.NMCCount, r.SkipCount, r.FPRate)
+		if len(r.FPReasons) > 0 {
+			fmt.Fprintf(w, "  fp_reasons=%s\n", formatMapInt(r.FPReasons))
+		}
+		if len(r.ByArbiterStatus) > 0 {
+			fmt.Fprintln(w, "  by_arbiter_status:")
+			printReviewBuckets(w, r.ByArbiterStatus)
+		}
+		if len(r.ByCategory) > 0 {
+			fmt.Fprintln(w, "  by_category:")
+			printReviewBuckets(w, r.ByCategory)
+		}
+		if len(r.ByCitationValidity) > 0 {
+			fmt.Fprintln(w, "  by_citation_validity:")
+			printReviewBuckets(w, r.ByCitationValidity)
+		}
+	}
+
 	// Overall
 	o := rs.Overall
 	fmt.Fprintf(w, "\nOverall\n")
@@ -97,6 +120,19 @@ func Print(w io.Writer, rs *RunStats) {
 	fmt.Fprintf(w, "  dropoff: candidates=%d cases=%d hypotheses=%d challenges=%d verifies=%d findings=%d corroborated=%d\n",
 		o.Dropoff.Candidates, o.Dropoff.Cases, o.Dropoff.Hypotheses,
 		o.Dropoff.Challenges, o.Dropoff.Verifies, o.Dropoff.Findings, o.Dropoff.Corroborated)
+}
+
+func printReviewBuckets(w io.Writer, m map[string]ReviewBucketAgg) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b := m[k]
+		fmt.Fprintf(w, "    %-22s tp=%d fp=%d nmc=%d  fp_rate=%.2f\n",
+			k, b.TP, b.FP, b.NMC, b.FPRate)
+	}
 }
 
 func formatMapInt(m map[string]int) string {
