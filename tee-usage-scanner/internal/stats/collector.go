@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -42,7 +42,7 @@ func Collect(runDir, repoRoot string) (*RunStats, error) {
 
 	rs.Planner = collectPlanner(runDir, repoRoot)
 	rs.Cases = collectCases(runDir)
-	rs.Expert = collectExpert(runDir)
+	rs.Expert = collectExpert(runDir, repoRoot)
 	rs.Challenger = collectChallenger(runDir)
 	rs.Verifier = collectVerifier(runDir)
 	rs.Arbiter = collectArbiter(runDir, rs.Verifier.MemoCount)
@@ -258,7 +258,21 @@ func collectCases(runDir string) CasesStats {
 	return s
 }
 
-func collectExpert(runDir string) ExpertStats {
+// collectExpert is the typed-citation entry point.
+//
+// CitationRate counts hypotheses with at least one validated
+// CitedBytes — "did the agent actually cite anything that holds up
+// against the live repo?". CitationValidityRate is the
+// finer-grained signal: of all citations the agent attempted, what
+// fraction still validate? A high CitationRate with low
+// CitationValidityRate flags an agent that cites freely but whose
+// citations drift quickly under repo changes.
+//
+// repoRoot is required for validation. When empty (or repoRoot does
+// not exist on disk), citations are treated as unvalidated and both
+// rates are reported as zero — same shape as legacy hypotheses
+// without a Cited field, so the metric stays interpretable.
+func collectExpert(runDir, repoRoot string) ExpertStats {
 	var s ExpertStats
 	paths, _ := filepath.Glob(filepath.Join(runfs.ExpertDir(runDir), "hypothesis-*.json"))
 	if len(paths) == 0 {
@@ -267,8 +281,15 @@ func collectExpert(runDir string) ExpertStats {
 	s.Present = true
 	s.HypothesisCount = len(paths)
 
-	citeRe := regexp.MustCompile(`[\w./-]+\.(rs|go|c|cpp|py|ts|js|sol):\d+`)
-	cited := 0
+	canValidate := repoRoot != ""
+	if canValidate {
+		if _, err := os.Stat(repoRoot); err != nil {
+			canValidate = false
+		}
+	}
+
+	hypothesesWithValidCite := 0
+	var allCitations, validCitations int
 	var lengths []int
 	var factCounts []int
 	for _, p := range paths {
@@ -279,25 +300,28 @@ func collectExpert(runDir string) ExpertStats {
 		body := h.Summary + " " + h.SuspectedIssue
 		lengths = append(lengths, len(strings.Fields(body)))
 		factCounts = append(factCounts, len(h.SupportingFacts))
-		if citeRe.MatchString(body) || anyContainsCitation(h.SupportingFacts) {
-			cited++
+
+		hadValid := false
+		for _, c := range h.Cited {
+			allCitations++
+			if !canValidate {
+				continue
+			}
+			if err := citations.Validate(c, repoRoot); err == nil {
+				validCitations++
+				hadValid = true
+			}
+		}
+		if hadValid {
+			hypothesesWithValidCite++
 		}
 	}
-	s.CitationRate = ratio(cited, len(paths))
+	s.CitationRate = ratio(hypothesesWithValidCite, len(paths))
+	s.CitationValidityRate = ratio(validCitations, allCitations)
 	s.HypothesisLenP50 = percentile(lengths, 50)
 	s.HypothesisLenMean = mean(lengths)
 	s.SupportingFactsP50 = percentile(factCounts, 50)
 	return s
-}
-
-func anyContainsCitation(facts []string) bool {
-	re := regexp.MustCompile(`[\w./-]+\.(rs|go|c|cpp|py|ts|js|sol):\d+`)
-	for _, f := range facts {
-		if re.MatchString(f) {
-			return true
-		}
-	}
-	return false
 }
 
 func collectChallenger(runDir string) ChallengerStats {

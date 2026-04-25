@@ -1,6 +1,10 @@
 package artifacts
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+)
 
 type Manifest struct {
 	SchemaVersion string            `json:"schema_version"`
@@ -161,6 +165,14 @@ type Hypothesis struct {
 	KnowledgeHints     []KnowledgeHint `json:"knowledge_hints,omitempty"`
 	Confidence         string          `json:"confidence"`
 	NeedsVerification  bool            `json:"needs_verification"`
+	// Cited is the byte-citation list backing this hypothesis. Each
+	// entry pins a region of source bytes the expert claims to be
+	// quoting; stats validates them against repo bytes to compute
+	// CitationRate / CitationValidityRate. Empty on legacy
+	// hypotheses written before the citation contract — those land
+	// in stats with a zero typed-citation rate, which is the right
+	// answer (they were not in fact citing).
+	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
 type Challenge struct {
@@ -184,6 +196,11 @@ type VerificationMemo struct {
 	ConfirmedFacts []string `json:"confirmed_facts,omitempty"`
 	Contradictions []string `json:"contradictions,omitempty"`
 	Notes          []string `json:"notes,omitempty"`
+	// Cited is the byte-citation list backing this verification.
+	// The verifier should re-anchor its judgment to specific source
+	// bytes; entries that fail Validate against the repo are
+	// excluded from typed-citation metrics.
+	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
 type ReviewRecord struct {

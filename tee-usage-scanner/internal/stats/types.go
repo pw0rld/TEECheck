@@ -69,13 +69,27 @@ type CasesStats struct {
 }
 
 // ExpertStats aggregates signals from 04_expert/.
+//
+// CitationRate semantics changed in the A1 byte-citation work:
+//   - Before: regex match for "file.rs:42" substrings in summary +
+//     supporting_facts. Counted any line-number-shaped string,
+//     never validated against the repo.
+//   - Now: fraction of hypotheses whose Cited list is non-empty AND
+//     contains at least one CitedBytes that successfully validates
+//     against the repo (file present, line range resolvable, sha256
+//     either matches or is unset for legacy entries).
+//
+// Legacy hypotheses that pre-date the citation contract have no
+// Cited field, so they show CitationRate = 0. That is the right
+// answer — they were not in fact citing.
 type ExpertStats struct {
-	Present            bool    `json:"present"`
-	HypothesisCount    int     `json:"hypothesis_count"`
-	CitationRate       float64 `json:"citation_rate"`
-	HypothesisLenP50   int     `json:"hypothesis_length_p50"`
-	HypothesisLenMean  int     `json:"hypothesis_length_mean"`
-	SupportingFactsP50 int     `json:"supporting_facts_p50"`
+	Present              bool    `json:"present"`
+	HypothesisCount      int     `json:"hypothesis_count"`
+	CitationRate         float64 `json:"citation_rate"`
+	CitationValidityRate float64 `json:"citation_validity_rate"`
+	HypothesisLenP50     int     `json:"hypothesis_length_p50"`
+	HypothesisLenMean    int     `json:"hypothesis_length_mean"`
+	SupportingFactsP50   int     `json:"supporting_facts_p50"`
 }
 
 // ChallengerStats aggregates signals from 05_challenger/.

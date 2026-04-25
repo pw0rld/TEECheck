@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/stats"
 )
 
@@ -195,9 +196,14 @@ func TestCollect_FullSyntheticRunAlignsVerifierAndArbiter(t *testing.T) {
 		t.Errorf("obligations_attached=%d want 2", rs.Cases.ObligationsAttached)
 	}
 
-	// Expert: both hypotheses cite src/attestation.rs:12 → citation_rate=1.0
-	if rs.Expert.CitationRate != 1.0 {
-		t.Errorf("citation_rate=%v want 1.0", rs.Expert.CitationRate)
+	// Expert: hypotheses don't carry typed Cited fields here
+	// (legacy shape), so the typed citation_rate is 0.
+	// citation_validity_rate is also 0 (no citations to validate).
+	if rs.Expert.CitationRate != 0.0 {
+		t.Errorf("citation_rate=%v want 0.0 (no Cited fields → typed rate is zero)", rs.Expert.CitationRate)
+	}
+	if rs.Expert.CitationValidityRate != 0.0 {
+		t.Errorf("citation_validity_rate=%v want 0.0", rs.Expert.CitationValidityRate)
 	}
 
 	// Challenger: 1 non-rubber-stamp (case-001) out of 2
@@ -394,6 +400,89 @@ func TestCollect_MixedSourceWhenOtherStagesPresent(t *testing.T) {
 	}
 	if rs.Source != "mixed" {
 		t.Errorf("rs.Source=%q want mixed (planner from events, arbiter from artifacts)", rs.Source)
+	}
+}
+
+// TestCollect_TypedCitations exercises the byte-citation path:
+// hypotheses with Cited entries get scored by validating against
+// real repo bytes, not by regex-matching their prose.
+func TestCollect_TypedCitations(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+
+	// Real source file we'll cite.
+	src := filepath.Join(repo, "src", "x.rs")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "fn a() {}\nfn b() {}\nfn c() {}\n"
+	if err := os.WriteFile(src, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve a real citation we'll then bake into a hypothesis.
+	good, err := citations.Resolve(citations.CitedBytes{
+		File: "src/x.rs", StartLine: 2, EndLine: 2,
+	}, repo)
+	if err != nil {
+		t.Fatalf("resolve good: %v", err)
+	}
+
+	// Hypothesis 1: one valid citation. Counts toward both rates.
+	writeJSON(t, filepath.Join(dir, "04_expert", "hypothesis-001.json"),
+		artifacts.Hypothesis{CaseID: "case-001", Cited: []citations.CitedBytes{good}})
+
+	// Hypothesis 2: one drifted citation. Doesn't count toward
+	// CitationRate; the citation also doesn't count toward
+	// CitationValidityRate's numerator (but does toward denominator).
+	drifted := good
+	drifted.SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+	writeJSON(t, filepath.Join(dir, "04_expert", "hypothesis-002.json"),
+		artifacts.Hypothesis{CaseID: "case-002", Cited: []citations.CitedBytes{drifted}})
+
+	// Hypothesis 3: no citations at all. Doesn't count toward
+	// either rate's numerator; doesn't add to validity denominator.
+	writeJSON(t, filepath.Join(dir, "04_expert", "hypothesis-003.json"),
+		artifacts.Hypothesis{CaseID: "case-003"})
+
+	rs, err := stats.Collect(dir, repo)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	// 1 of 3 hypotheses had a valid cite → 0.33...
+	if rs.Expert.CitationRate < 0.33 || rs.Expert.CitationRate > 0.34 {
+		t.Errorf("citation_rate=%v want ~0.33 (1 of 3 hypotheses cited validly)", rs.Expert.CitationRate)
+	}
+	// 1 of 2 attempted citations validated → 0.5
+	if rs.Expert.CitationValidityRate != 0.5 {
+		t.Errorf("citation_validity_rate=%v want 0.5 (1 valid, 1 drifted)", rs.Expert.CitationValidityRate)
+	}
+}
+
+// TestCollect_TypedCitationsWithoutRepoIsZero confirms the
+// well-defined behavior when stats is asked to collect without a
+// repo checkout: typed citations cannot be validated, so both rates
+// are zero rather than the regex-era false-positive readings.
+func TestCollect_TypedCitationsWithoutRepoIsZero(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "04_expert", "hypothesis-001.json"),
+		artifacts.Hypothesis{
+			CaseID: "case-001",
+			Cited: []citations.CitedBytes{
+				{File: "x.rs", StartLine: 1, EndLine: 1, SHA256: "deadbeef"},
+			},
+		})
+
+	rs, err := stats.Collect(dir, "")
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if rs.Expert.CitationRate != 0 {
+		t.Errorf("citation_rate=%v want 0 (no repo to validate against)", rs.Expert.CitationRate)
+	}
+	if rs.Expert.CitationValidityRate != 0 {
+		t.Errorf("citation_validity_rate=%v want 0", rs.Expert.CitationValidityRate)
 	}
 }
 

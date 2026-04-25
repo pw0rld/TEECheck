@@ -57,8 +57,8 @@ func Print(w io.Writer, rs *RunStats) {
 	if rs.Expert.Present {
 		e := rs.Expert
 		fmt.Fprintf(w, "\nExpert\n")
-		fmt.Fprintf(w, "  hypotheses=%d  citation_rate=%.2f  words_p50=%d  facts_p50=%d\n",
-			e.HypothesisCount, e.CitationRate, e.HypothesisLenP50, e.SupportingFactsP50)
+		fmt.Fprintf(w, "  hypotheses=%d  citation_rate=%.2f  citation_validity=%.2f  words_p50=%d  facts_p50=%d\n",
+			e.HypothesisCount, e.CitationRate, e.CitationValidityRate, e.HypothesisLenP50, e.SupportingFactsP50)
 	}
 
 	// Challenger

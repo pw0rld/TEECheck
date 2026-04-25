@@ -11,7 +11,11 @@
 //     re-open so resumed runs continue numbering without gaps
 package events
 
-import "time"
+import (
+	"time"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+)
 
 // Event types. Stable strings — schema-breaking changes require a
 // schema version bump in docs/EVENT_SCHEMA.md.
@@ -24,6 +28,7 @@ const (
 	TypeLLMCallCompleted       = "llm_call_completed"
 	TypeToolCallStarted        = "tool_call_started"
 	TypeToolCallCompleted      = "tool_call_completed"
+	TypeClaimEmitted           = "claim_emitted"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -78,6 +83,11 @@ type Event struct {
 	// run_completed, *_started errors
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
+
+	// claim_emitted
+	ClaimID string                 `json:"claim_id,omitempty"`
+	Claim   string                 `json:"claim,omitempty"`
+	Cited   []citations.CitedBytes `json:"cited,omitempty"`
 }
 
 // Constructors — keep callers from misfiling event-type-specific
@@ -187,6 +197,28 @@ func ToolCallExecutorStarted(runID, agent, toolName string, round int, toolArgsB
 		Write:          write,
 		TimeoutMs:      timeoutMs,
 		MaxOutputBytes: maxOutputBytes,
+	}
+}
+
+// ClaimEmitted is the constructor for the byte-citation contract
+// (A1). Each claim made by an agent (expert, challenger, verifier,
+// arbiter) is paired with a list of CitedBytes that pin the claim
+// to a specific region of source bytes. Stats validates these
+// against repo bytes to compute typed citation metrics.
+//
+// claim_id is opaque and only needs to be unique within a case_id
+// scope. Cited may be nil/empty for claims the agent could not
+// substantiate; downstream consumers can choose to drop or flag
+// uncited claims.
+func ClaimEmitted(runID, agent, caseID, claimID, claim string, cited []citations.CitedBytes) Event {
+	return Event{
+		Type:    TypeClaimEmitted,
+		RunID:   runID,
+		Agent:   agent,
+		CaseID:  caseID,
+		ClaimID: claimID,
+		Claim:   claim,
+		Cited:   cited,
 	}
 }
 

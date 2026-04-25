@@ -213,36 +213,89 @@ path     = blobsDir + "/" + filename
 Blob writes use `tmp + rename` so concurrent readers never see
 truncated content.
 
-## Citation contract (forthcoming, commit 5+)
+### `claim_emitted`
 
-The planned `claim_emitted` event type will introduce a typed citation
-field:
+Emitted by any agent that produces an explicit, source-anchored
+claim. The full schema for the citation list is documented in the
+"Citation contract" section below; this entry just notes the
+common-field choices. `claim_id` is opaque and only needs to be
+unique within a `case_id` scope.
+
+| field      | meaning                                                          |
+|------------|------------------------------------------------------------------|
+| `agent`    | which agent emitted the claim (`expert-001`, `verifier-001`, …)  |
+| `case_id`  | the case the claim belongs to                                    |
+| `claim_id` | per-case identifier; used to correlate with stage artifacts      |
+| `claim`    | the human-readable claim text                                    |
+| `cited`    | array of CitedBytes; may be empty for unsubstantiated claims     |
+
+The constructor `events.ClaimEmitted` is wired and ready; the
+expert / verifier prompt updates that will start emitting these
+land in a later commit.
+
+## Citation contract — `claim_emitted`
+
+Every claim an agent (expert / challenger / verifier / arbiter)
+makes about source code is paired with a list of byte citations.
+The citation primitive is implemented in `internal/citations` and
+embedded into events as a `cited` array.
+
+Event shape:
 
 ```json
 {
+  "seq": 87,
+  "time": "2026-04-25T11:14:23Z",
   "type": "claim_emitted",
-  "agent": "expert",
-  "case_id": "...",
-  "claim_id": "...",
+  "run_id": "oasis-core-l3",
+  "agent": "expert-001",
+  "case_id": "case-001",
+  "claim_id": "h1-c2",
   "claim": "AVR signature is verified but enclave identity policy is missing",
-  "cited_bytes": [
+  "cited": [
     {
       "file": "runtime/src/common/sgx/ias.rs",
       "start_line": 142,
       "end_line": 158,
       "start_byte": 4192,
       "end_byte": 4781,
-      "sha256": "..."
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     }
   ]
 }
 ```
 
-Claims without `cited_bytes` will be stripped before report
-generation. Line range is for human review; byte range + sha256 is
-for machine verification — line numbers shift under reformatting,
-byte offsets and content hashes do not. See
-`docs/ADVERSARIAL_INDEPENDENCE.md` for the rationale.
+Field semantics:
+
+| field         | required | meaning                                                                        |
+|---------------|----------|--------------------------------------------------------------------------------|
+| `file`        | yes      | repo-relative path                                                             |
+| `start_line`  | yes      | 1-indexed inclusive                                                             |
+| `end_line`    | yes      | 1-indexed inclusive, ≥ `start_line`                                            |
+| `start_byte`  | resolved | 0-indexed byte offset; filled in by `citations.Resolve`                        |
+| `end_byte`    | resolved | half-open; bytes in `[start_byte, end_byte)` are the cited region              |
+| `sha256`      | resolved | hex sha256 of the cited bytes; the machine source of truth                     |
+
+Line numbers are for humans; they shift under reformatting and
+move with insertions before the cited region. Byte offsets +
+sha256 are for machines — `citations.Validate` returns
+`ErrSHA256Mismatch` whenever the cited region drifted. The
+`citation_validity_rate` stat is the fraction of attempted citations
+whose recomputed sha256 still matches.
+
+Stage artifacts also carry citations on disk: `Hypothesis.cited`
+(in `04_expert/hypothesis-*.json`) and `VerificationMemo.cited` (in
+`06_verifier/verify-*.json`) hold the same shape. Stats reads
+either source — events when present, artifacts otherwise — so the
+metric is consistent across the events / artifacts split.
+
+Hypotheses or memos without `cited` (legacy artifacts written
+before this contract) read as zero in the typed-citation metric,
+which is the correct answer: they were not in fact citing.
+
+See [`ADVERSARIAL_INDEPENDENCE.md`](ADVERSARIAL_INDEPENDENCE.md)
+for the structural rationale (Top finding #3 in the architect
+review).
 
 ## Consumer guidance
 
