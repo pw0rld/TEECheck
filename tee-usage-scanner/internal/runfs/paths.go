@@ -93,6 +93,22 @@ func AuditorFindingsPath(runDir string) string {
 	return filepath.Join(runDir, "08_auditor", "findings.json")
 }
 
+func PlannerDir(runDir string) string {
+	return filepath.Join(runDir, "04_planner")
+}
+
+func EvidenceBundlePath(runDir string) string {
+	return filepath.Join(runDir, "04_planner", "evidence_bundle.json")
+}
+
+func RoundsLogPath(runDir string) string {
+	return filepath.Join(runDir, "04_planner", "rounds.jsonl")
+}
+
+func SinkHitsPath(runDir string) string {
+	return filepath.Join(runDir, "04_planner", "sink_hits.json")
+}
+
 func LoadManifest(runDir string) (artifacts.Manifest, error) {
 	var manifest artifacts.Manifest
 	if err := ReadJSON(ManifestPath(runDir), &manifest); err != nil {

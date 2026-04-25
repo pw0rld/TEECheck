@@ -8,5 +8,3 @@ Focus points:
 - parameter validation
 - host or bridge revalidation
 - secure failure on invalid input
-
-Keywords: boundary, revalidation, caller, bridge, host

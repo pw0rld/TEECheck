@@ -258,6 +258,9 @@ Challenger view:
 - Counter arguments: %s
 - Remaining questions: %s
 
+Source code snippets from the case pack (you MUST re-ground your judgment against this actual code, not just the summaries above):
+%s
+
 Static check findings (%d total):
 %s`,
 		pack.CaseID, pack.Category, pack.Priority,
@@ -270,6 +273,7 @@ Static check findings (%d total):
 		challenge.Exploitability, challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
+		formatSnippets(pack.Snippets),
 		len(scFindings), formatCheckFindings(scFindings))
 
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
@@ -342,6 +346,46 @@ Static check findings (%d total):
 		Status:        "inconclusive",
 		Notes:         []string{"Reached maximum dialog rounds without final judgment"},
 	}, nil
+}
+
+// formatSnippets renders the case pack's code snippets into the
+// verifier prompt. Each snippet is emitted as a fenced block with the
+// path and line range so the LLM can cite `file:line` back at us.
+// Caps each snippet at 20k characters (~5k tokens) and the total at
+// 60k characters to keep the prompt under GLM's window while still
+// giving the LLM enough to re-ground.
+func formatSnippets(snippets []artifacts.PromptSnippet) string {
+	if len(snippets) == 0 {
+		return "(no snippets in case pack)"
+	}
+	const perSnippetCap = 20000
+	const totalCap = 60000
+	var b strings.Builder
+	used := 0
+	for i, s := range snippets {
+		if used >= totalCap {
+			fmt.Fprintf(&b, "\n(%d more snippets omitted — prompt cap reached)\n", len(snippets)-i)
+			break
+		}
+		content := s.Content
+		truncated := false
+		if len(content) > perSnippetCap {
+			content = content[:perSnippetCap]
+			truncated = true
+		}
+		if used+len(content) > totalCap {
+			content = content[:totalCap-used]
+			truncated = true
+		}
+		fmt.Fprintf(&b, "\n--- %s [%d-%d] ---\n", s.Path, s.StartLine, s.EndLine)
+		b.WriteString(content)
+		if truncated {
+			b.WriteString("\n... (truncated)\n")
+		}
+		b.WriteString("\n")
+		used += len(content)
+	}
+	return b.String()
 }
 
 func formatCheckFindings(findings []staticcheck.CheckFinding) string {

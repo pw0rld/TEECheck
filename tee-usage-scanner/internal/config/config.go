@@ -39,6 +39,13 @@ type Config struct {
 	MaxDialogRounds int
 	Target          string
 	Mode            string
+	// Samples is the number of independent planner passes to run
+	// per pipeline invocation. Default 1 = the legacy behavior.
+	// With samples > 1, each pass after the first is told which
+	// (file, symbol) pairs were already covered and asked to find
+	// different ones; the union is deduped and fed to the 4-agent
+	// downstream pipeline as a single case set.
+	Samples int
 }
 
 func Parse(args []string) (Config, error) {
@@ -71,10 +78,14 @@ func Parse(args []string) (Config, error) {
 		return parseVerifier(args[1:])
 	case "arbiter":
 		return parseArbiter(args[1:])
+	case "report":
+		return parseReport(args[1:])
 	case "curator":
 		return parseCurator(args[1:])
 	case "run":
 		return parseRun(args[1:])
+	case "plan":
+		return parsePlan(args[1:])
 	case "review":
 		return parseReview(args[1:])
 	case "feedback":
@@ -465,6 +476,35 @@ func parseCurator(args []string) (Config, error) {
 	return cfg, nil
 }
 
+func parseReport(args []string) (Config, error) {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	cfg := Config{
+		Command:       "report",
+		Mode:          "llm",
+		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
+	}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode: llm (synthesized) or heuristic (concatenated)")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
+	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("report requires --run-dir")
+	}
+	return cfg, nil
+}
+
 func parseReview(args []string) (Config, error) {
 	fs := flag.NewFlagSet("review", flag.ContinueOnError)
 	cfg := Config{
@@ -517,8 +557,10 @@ func parseRun(args []string) (Config, error) {
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		Samples:         1,
 	}
 	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Agent mode: heuristic or llm")
+	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")
@@ -563,6 +605,14 @@ func parseRun(args []string) (Config, error) {
 		return Config{}, fmt.Errorf("run requires a target (URL or local path)")
 	}
 	cfg.Target = target
+	// When multi-sample is requested, auto-scale max-cases so the
+	// downstream pipeline actually audits all discovered candidates
+	// instead of silently truncating to a single-pass cap. The user
+	// can still override with an explicit --max-cases value larger
+	// than the auto-scaled one.
+	if cfg.Samples > 1 && cfg.MaxCases <= 12 {
+		cfg.MaxCases = cfg.Samples * cfg.MaxCases
+	}
 	if cfg.Mode == "llm" {
 		cfg.ExpertMode = "llm"
 		cfg.ChallengeMode = "llm"
@@ -572,6 +622,38 @@ func parseRun(args []string) (Config, error) {
 		if err := validateProviderConfig(cfg, "run"); err != nil {
 			return Config{}, err
 		}
+	}
+	return cfg, nil
+}
+
+// parsePlan is the L3 planner-only entry point. It accepts the same
+// flags as "run" but always invokes the L3 LLM planner directly,
+// then hands the candidates off to the existing 4-agent audit
+// pipeline (cases/expert/challenger/verifier/arbiter).
+//
+// The only required argument is the target (URL or local path).
+// LLM mode is forced on for all downstream agents — the planner
+// whole point is to drive the LLM through an audit, heuristic mode
+// would defeat that.
+func parsePlan(args []string) (Config, error) {
+	// Force --mode=llm BEFORE parseRun sees the args so parseRun's
+	// internal "if Mode == llm { set submodes }" block fires.
+	args = append([]string{"--mode", "llm"}, args...)
+
+	cfg, err := parseRun(args)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Command = "plan"
+	// Belt + suspenders: explicitly force all agent submodes to llm
+	// in case parseRun's logic changes.
+	cfg.Mode = "llm"
+	cfg.ExpertMode = "llm"
+	cfg.ChallengeMode = "llm"
+	cfg.VerifierMode = "llm"
+	cfg.ArbiterMode = "llm"
+	if err := validateProviderConfig(cfg, "plan"); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }

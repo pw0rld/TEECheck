@@ -1,13 +1,33 @@
 package llm
 
-import "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+import (
+	"fmt"
+	"os"
+	"time"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+)
+
+// NewClient returns the configured provider client wrapped in a
+// retry layer. The retry layer transparently handles transient
+// server errors (5xx), connection resets, and timeouts with
+// exponential backoff, so upstream agents don't have to implement
+// their own retry logic.
 func NewClient(cfg config.Config) Client {
 	cfg = cfg.WithLLMProviderDefaults()
+	var inner Client
 	switch config.NormalizeLLMProvider(cfg.LLMProvider) {
 	case config.LLMProviderGLM:
-		return NewAnthropicClient(cfg)
+		inner = NewAnthropicClient(cfg)
 	default:
-		return NewOpenAIClient(cfg)
+		inner = NewOpenAIClient(cfg)
 	}
+	return NewRetryingClient(inner, RetryConfig{
+		MaxAttempts: 3,
+		BaseDelay:   5 * time.Second,
+		MaxDelay:    90 * time.Second,
+		Logger: func(attempt int, err error, wait time.Duration) {
+			fmt.Fprintf(os.Stderr, "[llm] attempt %d failed (transient): %v — retrying in %s\n", attempt, err, wait)
+		},
+	})
 }

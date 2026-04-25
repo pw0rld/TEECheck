@@ -1,5 +1,11 @@
 package artifacts
 
+import (
+	"encoding/json"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+)
+
 type Manifest struct {
 	SchemaVersion string            `json:"schema_version"`
 	RunID         string            `json:"run_id"`
@@ -159,6 +165,14 @@ type Hypothesis struct {
 	KnowledgeHints     []KnowledgeHint `json:"knowledge_hints,omitempty"`
 	Confidence         string          `json:"confidence"`
 	NeedsVerification  bool            `json:"needs_verification"`
+	// Cited is the byte-citation list backing this hypothesis. Each
+	// entry pins a region of source bytes the expert claims to be
+	// quoting; stats validates them against repo bytes to compute
+	// CitationRate / CitationValidityRate. Empty on legacy
+	// hypotheses written before the citation contract — those land
+	// in stats with a zero typed-citation rate, which is the right
+	// answer (they were not in fact citing).
+	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
 type Challenge struct {
@@ -182,6 +196,11 @@ type VerificationMemo struct {
 	ConfirmedFacts []string `json:"confirmed_facts,omitempty"`
 	Contradictions []string `json:"contradictions,omitempty"`
 	Notes          []string `json:"notes,omitempty"`
+	// Cited is the byte-citation list backing this verification.
+	// The verifier should re-anchor its judgment to specific source
+	// bytes; entries that fail Validate against the repo are
+	// excluded from typed-citation metrics.
+	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
 type ReviewRecord struct {
@@ -194,4 +213,88 @@ type ReviewRecord struct {
 	Notes         string   `json:"notes,omitempty"`
 	ReviewerID    string   `json:"reviewer_id,omitempty"`
 	ReviewedAt    string   `json:"reviewed_at"`
+}
+
+// EvidenceBundle is the top-level output of the L3 LLM planner.
+// It is the primary input to the cases stage in --mode llm runs.
+type EvidenceBundle struct {
+	SchemaVersion string         `json:"schema_version"`
+	RunID         string         `json:"run_id"`
+	Repo          RepoRef        `json:"repo"`
+	PlannerMeta   PlannerMeta    `json:"planner_meta"`
+	Candidates    []Candidate    `json:"candidates"`
+	SinksObserved []SinkHitGroup `json:"sinks_observed,omitempty"`
+	ProposedSinks []ProposedSink `json:"proposed_sinks,omitempty"`
+	Errors        []RoundError   `json:"errors,omitempty"`
+	FinalSummary  string         `json:"final_summary,omitempty"`
+}
+
+type PlannerMeta struct {
+	RoundsUsed        int    `json:"rounds_used"`
+	RoundsBudget      int    `json:"rounds_budget"`
+	TokensUsed        int    `json:"tokens_used"`
+	WallClockMs       int64  `json:"wall_clock_ms"`
+	TerminationReason string `json:"termination_reason"`
+	Truncated         bool   `json:"truncated"`
+}
+
+type Candidate struct {
+	ID           string   `json:"id"`
+	Kind         string   `json:"kind"`
+	Priority     string   `json:"priority"`
+	Paths        []string `json:"paths"`
+	Symbols      []string `json:"symbols,omitempty"`
+	WhySelected  []string `json:"why_selected"`
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+	SinkCategory string   `json:"sink_category,omitempty"`
+	Confidence   float64  `json:"confidence"`
+}
+
+type SinkHit struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+type SinkHitGroup struct {
+	Category string    `json:"category"`
+	Hits     []SinkHit `json:"hits"`
+}
+
+type ProposedSink struct {
+	CategoryIDSuggested string   `json:"category_id_suggested"`
+	Rationale           string   `json:"rationale"`
+	ExampleSymbols      []string `json:"example_symbols,omitempty"`
+}
+
+type RoundError struct {
+	Round  int    `json:"round"`
+	Action string `json:"action"`
+	Error  string `json:"error"`
+}
+
+// RoundRecord is written to 04_planner/rounds.jsonl (one per line).
+// Not fed back to the LLM; for debugging and post-hoc analysis only.
+type RoundRecord struct {
+	Round        int                `json:"round"`
+	Thought      string             `json:"thought,omitempty"`
+	Actions      []RoundAction      `json:"actions"`
+	Observations []RoundObservation `json:"observations"`
+	TokensIn     int                `json:"tokens_in"`
+	TokensOut    int                `json:"tokens_out"`
+	WallClockMs  int64              `json:"wall_clock_ms"`
+}
+
+type RoundAction struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+type RoundObservation struct {
+	Name       string `json:"name"`
+	OK         bool   `json:"ok"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	DurationMs int64  `json:"duration_ms"`
 }

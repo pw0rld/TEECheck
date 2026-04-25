@@ -1,0 +1,113 @@
+package planner_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
+)
+
+func TestBudget_DefaultsMatchSpec(t *testing.T) {
+	b := planner.NewDefaultBudget()
+	if b.MaxRounds != 8 {
+		t.Errorf("MaxRounds = %d, want 8", b.MaxRounds)
+	}
+	if b.MaxTokens != 120000 {
+		t.Errorf("MaxTokens = %d, want 120000", b.MaxTokens)
+	}
+	if b.PerActionTimeout != 30*time.Second {
+		t.Errorf("PerActionTimeout = %v, want 30s", b.PerActionTimeout)
+	}
+	if b.WallClock != 10*time.Minute {
+		t.Errorf("WallClock = %v, want 10m", b.WallClock)
+	}
+}
+
+func TestBudget_ConsumeRound(t *testing.T) {
+	b := planner.NewDefaultBudget()
+	b.ConsumeRound()
+	if b.RoundsUsed != 1 {
+		t.Errorf("RoundsUsed = %d, want 1", b.RoundsUsed)
+	}
+}
+
+func TestBudget_ConsumeTokens(t *testing.T) {
+	b := planner.NewDefaultBudget()
+	b.ConsumeTokens(500)
+	b.ConsumeTokens(1500)
+	if b.TokensUsed != 2000 {
+		t.Errorf("TokensUsed = %d, want 2000", b.TokensUsed)
+	}
+}
+
+func TestBudget_ExhaustedByRounds(t *testing.T) {
+	b := planner.Budget{MaxRounds: 2, MaxTokens: 100000, WallClock: time.Hour}
+	b.Start()
+	b.ConsumeRound()
+	if b.Exhausted() {
+		t.Fatal("should not be exhausted at 1/2")
+	}
+	b.ConsumeRound()
+	if !b.Exhausted() {
+		t.Fatal("should be exhausted at 2/2")
+	}
+}
+
+func TestBudget_ExhaustedByTokens(t *testing.T) {
+	b := planner.Budget{MaxRounds: 100, MaxTokens: 1000, WallClock: time.Hour}
+	b.Start()
+	b.ConsumeTokens(500)
+	if b.Exhausted() {
+		t.Fatal("should not be exhausted at 500/1000")
+	}
+	b.ConsumeTokens(600)
+	if !b.Exhausted() {
+		t.Fatal("should be exhausted at 1100/1000")
+	}
+}
+
+func TestBudget_ExhaustedByWallClock(t *testing.T) {
+	b := planner.Budget{MaxRounds: 100, MaxTokens: 100000, WallClock: 1 * time.Millisecond}
+	b.Start()
+	time.Sleep(5 * time.Millisecond)
+	if !b.Exhausted() {
+		t.Fatal("should be exhausted after wall clock window")
+	}
+}
+
+func TestBudget_TerminationReason(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func() planner.Budget
+		want  string
+	}{
+		{
+			name: "rounds",
+			setup: func() planner.Budget {
+				b := planner.Budget{MaxRounds: 1, MaxTokens: 100000, WallClock: time.Hour}
+				b.Start()
+				b.ConsumeRound()
+				return b
+			},
+			want: "max_rounds",
+		},
+		{
+			name: "tokens",
+			setup: func() planner.Budget {
+				b := planner.Budget{MaxRounds: 100, MaxTokens: 100, WallClock: time.Hour}
+				b.Start()
+				b.ConsumeTokens(200)
+				return b
+			},
+			want: "max_tokens",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := tt.setup()
+			if got := b.TerminationReason(); got != tt.want {
+				t.Errorf("TerminationReason = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
