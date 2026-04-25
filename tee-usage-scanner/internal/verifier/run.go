@@ -11,6 +11,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
@@ -66,6 +67,10 @@ func Run(cfg config.Config) error {
 		}
 
 		memo := buildMemo(pack, hypothesis, challenge, cfg.AgentID, scFindings)
+		// Even in heuristic mode (no LLM judgment), record the
+		// citation validation so downstream consumers see a
+		// consistent shape.
+		memo.ExpertCitationValidation = citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
 		target := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1))
 		if err := runfs.WriteJSON(target, memo); err != nil {
 			return fmt.Errorf("write verification memo %s: %w", memo.CaseID, err)
@@ -207,11 +212,18 @@ func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
 			}
 		}
 
+		// Validate expert's citations against the live repo BEFORE
+		// the verifier LLM sees them. Each expert fact is tagged
+		// valid / stale / unanchored / unresolved; the LLM gets the
+		// tags so it can weight expert claims accordingly.
+		expertValidation := citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
+
 		bus.ResetDialog(pack.CaseID)
-		memo, err := buildMemoLLM(context.Background(), client, bus, pack, hypothesis, challenge, cfg.AgentID, cfg.LLMTemp, scFindings)
+		memo, err := buildMemoLLM(context.Background(), client, bus, pack, hypothesis, challenge, cfg.AgentID, cfg.LLMTemp, scFindings, expertValidation)
 		if err != nil {
 			return fmt.Errorf("verifier llm for %s: %w", pack.CaseID, err)
 		}
+		memo.ExpertCitationValidation = expertValidation
 
 		target := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1))
 		if err := runfs.WriteJSON(target, memo); err != nil {
@@ -230,7 +242,7 @@ func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
 	return nil
 }
 
-func buildMemoLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, agentID string, temperature float64, scFindings []staticcheck.CheckFinding) (artifacts.VerificationMemo, error) {
+func buildMemoLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, agentID string, temperature float64, scFindings []staticcheck.CheckFinding, expertValidation []citations.CitationValidation) (artifacts.VerificationMemo, error) {
 	systemPrompt := `You are the Verifier Agent in TEECheck. Analyze static check results and code evidence to arbitrate between the Expert's hypothesis and the Challenger's objections.
 
 Return a JSON object with fields:
@@ -239,7 +251,19 @@ Return a JSON object with fields:
 - confirmed_facts: array of strings
 - contradictions: array of strings
 - notes: array of strings
-- queries: array of objects (optional, each with: to_agent, kind, question)`
+- queries: array of objects (optional, each with: to_agent, kind, question)
+
+When the user prompt includes an "EXPERT CITATION STATUS" section,
+treat each expert fact according to its tag:
+  [valid]      the cited bytes still match — claim is anchored
+  [stale]      cited bytes drifted — the specific evidence the
+               expert attached has moved or changed; do not treat
+               the claim as proven, but the underlying issue may
+               still be real
+  [unanchored] expert asserted without producing bytes; treat as
+               unverified and demand evidence before corroborating
+  [unresolved] live repo not available; you cannot verify; note
+               this in your output rather than guessing`
 
 	userMsg := fmt.Sprintf(`Case: %s (category: %s, priority: %s)
 Target files: %s
@@ -251,6 +275,9 @@ Expert hypothesis:
 - Missing obligations: %s
 - Supporting facts: %s
 - Confidence: %s
+
+EXPERT CITATION STATUS (validated against the live repo at the moment you began review):
+%s
 
 Challenger view:
 - Exploitability: %s
@@ -270,6 +297,7 @@ Static check findings (%d total):
 		strings.Join(hypothesis.MissingObligations, ", "),
 		strings.Join(hypothesis.SupportingFacts, " | "),
 		hypothesis.Confidence,
+		formatExpertCitationStatus(expertValidation),
 		challenge.Exploitability, challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
@@ -415,6 +443,31 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// formatExpertCitationStatus renders the per-fact validation list
+// as the prompt block the verifier reads. One line per fact:
+//   [<status>] <fact text> [optional: -- reason]
+// followed by indented citation references when available, so the
+// LLM can quote them verbatim if it decides to corroborate.
+func formatExpertCitationStatus(validation []citations.CitationValidation) string {
+	if len(validation) == 0 {
+		return "(no expert facts produced)"
+	}
+	var b strings.Builder
+	for i, v := range validation {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("- [%s] %s", v.Status, truncateStr(v.FactText, 200)))
+		if v.Reason != "" {
+			b.WriteString(fmt.Sprintf(" -- %s", truncateStr(v.Reason, 160)))
+		}
+		for _, c := range v.Cited {
+			b.WriteString(fmt.Sprintf("\n    cite: %s:%d-%d", c.File, c.StartLine, c.EndLine))
+		}
+	}
+	return b.String()
 }
 
 func writeDialogJSONL(path string, dialog *agentbus.Dialog) error {
