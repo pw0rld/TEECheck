@@ -219,6 +219,83 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 	}
 }
 
+// TestPlannerRun_RipgrepFailsCleanlyWhenExecutorMissing pins the
+// runtime contract for executor-backed actions: when RunConfig.Executor
+// is nil and the LLM requests an executor-backed handler, the planner
+// must (a) not panic, (b) record OK=false with an executor-mentioning
+// error in the round observation, and (c) keep going so a later round
+// can still emit done. Without this test, accidental regressions in
+// the wiring (pipeline forgets to pass Executor, or a new
+// executor-backed handler skips the nil-check) would only surface as
+// silent FP/FN at audit time.
+func TestPlannerRun_RipgrepFailsCleanlyWhenExecutorMissing(t *testing.T) {
+	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+
+	client := &mockLLM{scripts: []string{
+		`{"thought":"ripgrep","actions":[{"name":"ripgrep","args":{"pattern":"verify_quote","globs":["*.rs"]}}]}`,
+		`{"thought":"done","actions":[{"name":"done","args":{"summary":"ok","candidates":[{"id":"c1","kind":"attestation","priority":"high","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["forced done"],"confidence":0.5}]}}]}`,
+	}}
+	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+
+	// Intentionally NO Executor — this is the regression scenario.
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:       "test-no-exec",
+		RepoRoot:    repoRoot,
+		RunDir:      runDir,
+		Profile:     planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Client:      client,
+		Registry:    reg,
+		Budget:      defaultTestBudget(),
+		Temperature: 0,
+	})
+
+	// The planner must complete without surfacing a Go error.
+	if result.Err != nil {
+		t.Fatalf("planner returned err = %v; expected clean completion despite missing executor", result.Err)
+	}
+	if result.Bundle == nil {
+		t.Fatal("planner returned nil bundle")
+	}
+	if result.Bundle.PlannerMeta.TerminationReason != "llm_done" {
+		t.Errorf("termination=%q, want llm_done (planner should still reach done)", result.Bundle.PlannerMeta.TerminationReason)
+	}
+
+	// Round 1 (ripgrep) observation must be OK=false with an
+	// executor-mentioning error so the LLM can self-correct.
+	roundsData, err := os.ReadFile(filepath.Join(runDir, "04_planner", "rounds.jsonl"))
+	if err != nil {
+		t.Fatalf("read rounds.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(roundsData), "\n"), "\n")
+	if len(lines) < 1 {
+		t.Fatal("rounds.jsonl is empty")
+	}
+
+	var round1 struct {
+		Observations []struct {
+			Name  string `json:"name"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		} `json:"observations"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &round1); err != nil {
+		t.Fatalf("unmarshal round 1: %v", err)
+	}
+	if len(round1.Observations) != 1 {
+		t.Fatalf("round 1 observations = %d, want 1", len(round1.Observations))
+	}
+	obs := round1.Observations[0]
+	if obs.Name != "ripgrep" {
+		t.Errorf("observation name = %q, want ripgrep", obs.Name)
+	}
+	if obs.OK {
+		t.Error("ripgrep observation OK=true, want false (Executor was nil)")
+	}
+	if !strings.Contains(obs.Error, "executor") {
+		t.Errorf("observation error = %q, want it to mention 'executor'", obs.Error)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
