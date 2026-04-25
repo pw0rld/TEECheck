@@ -229,13 +229,23 @@ type VerificationMemo struct {
 	// field. Each entry pairs a confirmation claim with the byte
 	// regions backing it.
 	ConfirmedCitedFacts []citations.CitedFact `json:"confirmed_cited_facts,omitempty"`
+	// UntypedConfirmedFacts is the V1.1.2 polish C3 separation
+	// channel for LLM responses that returned legacy text-only
+	// confirmed_facts instead of the structured cited form. The
+	// text is preserved (so it shows up in human review packets)
+	// but tagged so it never silently joins the validated surface.
+	UntypedConfirmedFacts []string `json:"untyped_confirmed_facts,omitempty"`
 	// Contradictions holds the validated contradiction text. Same
 	// dual-field semantics as ConfirmedFacts.
 	Contradictions []string `json:"contradictions,omitempty"`
 	// ContradictedCitedFacts is the v1.1.2 canonical contradiction
 	// field with byte citations.
 	ContradictedCitedFacts []citations.CitedFact `json:"contradicted_cited_facts,omitempty"`
-	Notes                  []string              `json:"notes,omitempty"`
+	// UntypedContradictions is the contradiction equivalent of
+	// UntypedConfirmedFacts — legacy text-only contradictions kept
+	// separate from the validated surface.
+	UntypedContradictions []string `json:"untyped_contradictions,omitempty"`
+	Notes                 []string `json:"notes,omitempty"`
 	// ExpertCitationValidation records the per-fact result of
 	// running citations.ValidateFacts on hypothesis.CitedFacts at
 	// the moment the verifier saw them. Status is one of

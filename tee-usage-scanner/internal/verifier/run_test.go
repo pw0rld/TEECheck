@@ -244,9 +244,16 @@ func TestBuildMemoLLM_ResolvesAndFlattensVerifierFacts(t *testing.T) {
 	}
 }
 
-// ─── Backward compat: legacy text-only LLM response ─────────────────
+// ─── Legacy text-only LLM response → Untyped channels (V1.1.2 polish C3) ─
 
-func TestBuildMemoLLM_LegacyTextOnlyResponseStillWorks(t *testing.T) {
+func TestBuildMemoLLM_LegacyTextOnlyLandsInUntypedFields(t *testing.T) {
+	// LLM ignored the cited_facts schema and returned legacy
+	// text-only confirmed_facts/contradictions. Pre-polish, those
+	// strings were folded into memo.ConfirmedFacts/Contradictions
+	// (the validated text surface) and arbiter Evidence read them
+	// as if validated. Now they must land in
+	// UntypedConfirmedFacts / UntypedContradictions instead, with
+	// the validated surface staying empty.
 	repo, _ := repoFixture(t)
 	body := map[string]any{
 		"status":          "corroborated",
@@ -264,14 +271,29 @@ func TestBuildMemoLLM_LegacyTextOnlyResponseStillWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildMemoLLM: %v", err)
 	}
+	// Validated surface must NOT contain legacy text.
+	for _, s := range memo.ConfirmedFacts {
+		if strings.Contains(s, "legacy text-only") {
+			t.Errorf("legacy text leaked into ConfirmedFacts: %q", s)
+		}
+	}
+	for _, s := range memo.Contradictions {
+		if strings.Contains(s, "legacy contradiction") {
+			t.Errorf("legacy text leaked into Contradictions: %q", s)
+		}
+	}
+	// Untyped channels must preserve the text.
+	if len(memo.UntypedConfirmedFacts) != 1 ||
+		!strings.Contains(memo.UntypedConfirmedFacts[0], "legacy text-only") {
+		t.Errorf("UntypedConfirmedFacts: %v", memo.UntypedConfirmedFacts)
+	}
+	if len(memo.UntypedContradictions) != 1 ||
+		!strings.Contains(memo.UntypedContradictions[0], "legacy contradiction") {
+		t.Errorf("UntypedContradictions: %v", memo.UntypedContradictions)
+	}
+	// Structured fields stay empty as expected.
 	if len(memo.ConfirmedCitedFacts) != 0 {
 		t.Errorf("ConfirmedCitedFacts should be empty for legacy response, got %d", len(memo.ConfirmedCitedFacts))
-	}
-	if len(memo.ConfirmedFacts) != 1 || !strings.Contains(memo.ConfirmedFacts[0], "legacy text-only") {
-		t.Errorf("legacy confirmed_facts not preserved: %v", memo.ConfirmedFacts)
-	}
-	if len(memo.Contradictions) != 1 {
-		t.Errorf("legacy contradictions not preserved: %v", memo.Contradictions)
 	}
 }
 

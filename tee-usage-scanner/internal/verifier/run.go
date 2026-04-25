@@ -371,11 +371,10 @@ Static check findings (%d total):
 		}
 
 		if len(parsed.Queries) == 0 {
-			// Resolve verifier-produced citations against the repo,
-			// drop ones that fail. Same rule as expert: failed
-			// resolves keep the fact text but the citation list
-			// becomes empty, and the validated text is the only
-			// thing that flows into the legacy ConfirmedFacts /
+			// Resolve verifier-produced citations against the repo.
+			// Strict mode (V1.1.2 polish C1): a fact with any
+			// citation failure ends up with empty Cited and is NOT
+			// mirrored into the legacy ConfirmedFacts /
 			// Contradictions arrays.
 			confirmedCleaned, confirmedErrs := citations.ResolveFacts(parsed.ConfirmedCitedFacts, repoRoot)
 			contradictedCleaned, contradictedErrs := citations.ResolveFacts(parsed.ContradictedCitedFacts, repoRoot)
@@ -385,16 +384,12 @@ Static check findings (%d total):
 			confirmedText, confirmedPool := citations.FlattenFacts(confirmedCleaned)
 			contradictedText, contradictedPool := citations.FlattenFacts(contradictedCleaned)
 
-			// Back-compat: when LLM returned legacy text-only
-			// fields instead of the structured forms, fold those
-			// strings into the legacy fields as untyped entries.
-			if len(parsed.ConfirmedFacts) > 0 {
-				confirmedText = append(confirmedText, parsed.ConfirmedFacts...)
-			}
-			if len(parsed.Contradictions) > 0 {
-				contradictedText = append(contradictedText, parsed.Contradictions...)
-			}
-
+			// V1.1.2 polish C3: LLM legacy text-only fields land in
+			// dedicated untyped channels. Mixing them into the
+			// validated text fields would let unanchored claims
+			// reach arbiter Evidence as if they were citation-backed
+			// — same contract violation we just fixed on the expert
+			// side (C2).
 			pool := append(confirmedPool, contradictedPool...)
 			return artifacts.VerificationMemo{
 				SchemaVersion:          "teecheck.verification_memo.v1",
@@ -404,8 +399,10 @@ Static check findings (%d total):
 				ChecksRun:              parsed.ChecksRun,
 				ConfirmedFacts:         confirmedText,
 				ConfirmedCitedFacts:    confirmedCleaned,
+				UntypedConfirmedFacts:  parsed.ConfirmedFacts,
 				Contradictions:         contradictedText,
 				ContradictedCitedFacts: contradictedCleaned,
+				UntypedContradictions:  parsed.Contradictions,
 				Notes:                  parsed.Notes,
 				Cited:                  pool,
 			}, nil

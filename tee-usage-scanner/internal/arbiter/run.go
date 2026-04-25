@@ -103,8 +103,9 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 
 // buildFindingEvidence assembles the Evidence []string for a
 // finding. Validated (citation-backed) supporting facts and
-// confirmed facts go in unprefixed; UntypedFacts and (future)
-// untyped verifier fields go in with an explicit "[unanchored]"
+// confirmed facts go in unprefixed; untyped fields from both the
+// expert (UntypedFacts) and the verifier (UntypedConfirmedFacts /
+// UntypedContradictions) go in with an explicit "[unanchored]"
 // prefix so the human reviewer can tell at a glance which evidence
 // items the agents actually anchored to source bytes.
 //
@@ -112,11 +113,18 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 func buildFindingEvidence(hypothesis artifacts.Hypothesis, memo artifacts.VerificationMemo) []string {
 	out := make([]string, 0,
 		len(hypothesis.SupportingFacts)+len(memo.ConfirmedFacts)+
-			len(hypothesis.UntypedFacts))
+			len(hypothesis.UntypedFacts)+len(memo.UntypedConfirmedFacts)+
+			len(memo.UntypedContradictions))
 	out = append(out, hypothesis.SupportingFacts...)
 	out = append(out, memo.ConfirmedFacts...)
 	for _, u := range hypothesis.UntypedFacts {
 		out = append(out, "[unanchored] "+u)
+	}
+	for _, u := range memo.UntypedConfirmedFacts {
+		out = append(out, "[unanchored verifier confirm] "+u)
+	}
+	for _, u := range memo.UntypedContradictions {
+		out = append(out, "[unanchored verifier contradict] "+u)
 	}
 	return out
 }
