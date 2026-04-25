@@ -185,8 +185,8 @@ func Run(cfg config.Config) (runDir string, err error) {
 		if err := challenger.Run(stageCfg); err != nil {
 			return "", fmt.Errorf("challenger: %w", err)
 		}
-		if err := verifier.RunWithBus(stageCfg, bus); err != nil {
-			return "", fmt.Errorf("verifier: %w", err)
+		if err := verifier.RunWithBusAndEvents(stageCfg, bus, rec); err != nil {
+			return runDir, fmt.Errorf("verifier: %w", err)
 		}
 
 		// === Agent 3: Auditor ===
