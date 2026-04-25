@@ -161,17 +161,31 @@ type Hypothesis struct {
 	Summary            string          `json:"summary"`
 	SuspectedIssue     string          `json:"suspected_issue"`
 	MissingObligations []string        `json:"missing_obligations,omitempty"`
-	SupportingFacts    []string        `json:"supporting_facts,omitempty"`
-	KnowledgeHints     []KnowledgeHint `json:"knowledge_hints,omitempty"`
-	Confidence         string          `json:"confidence"`
-	NeedsVerification  bool            `json:"needs_verification"`
-	// Cited is the byte-citation list backing this hypothesis. Each
-	// entry pins a region of source bytes the expert claims to be
-	// quoting; stats validates them against repo bytes to compute
-	// CitationRate / CitationValidityRate. Empty on legacy
-	// hypotheses written before the citation contract — those land
-	// in stats with a zero typed-citation rate, which is the right
-	// answer (they were not in fact citing).
+	// SupportingFacts holds the validated free-text claims —
+	// the Text of every CitedFact whose citations all resolved
+	// against the live repo. Legacy hypotheses (pre-v1.1.1) used
+	// this as the only fact field. v1.1.1+ should prefer CitedFacts
+	// and treat SupportingFacts as a display fallback. Facts whose
+	// citations failed to resolve are intentionally NOT mirrored
+	// here, so consumers can distinguish "asserted + validated"
+	// from "asserted only" at a glance.
+	SupportingFacts []string `json:"supporting_facts,omitempty"`
+	// CitedFacts is the v1.1.1 canonical fact field: each entry is
+	// a free-text claim plus the byte regions backing it.
+	// expert.Run calls citations.Resolve on each citation before
+	// persistence and drops citations that fail. A fact may end up
+	// with an empty Cited list — that's an acknowledged "asserted
+	// but could not anchor" case, not promoted to SupportingFacts.
+	CitedFacts []citations.CitedFact `json:"cited_facts,omitempty"`
+	KnowledgeHints []KnowledgeHint    `json:"knowledge_hints,omitempty"`
+	Confidence     string             `json:"confidence"`
+	NeedsVerification bool            `json:"needs_verification"`
+	// Cited is the flat hypothesis-level citation pool. v1.1.1
+	// populates it as the union of every citation across CitedFacts
+	// (de-duplicated) so the older "Cited" reading path
+	// (report rendering, legacy stats) keeps working during the
+	// migration. Stats prefers CitedFacts when present; the Cited
+	// field is the fallback for legacy hypotheses.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 

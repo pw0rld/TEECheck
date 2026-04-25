@@ -147,8 +147,8 @@ func Run(cfg config.Config) (runDir string, err error) {
 	}
 
 	stageCfg.AgentID = "scanner-001"
-	if err := expert.Run(stageCfg); err != nil {
-		return "", fmt.Errorf("expert: %w", err)
+	if err := expert.RunWithEvents(stageCfg, rec, blobs); err != nil {
+		return runDir, fmt.Errorf("expert: %w", err)
 	}
 
 	// === Agent 2: Reviewer ===

@@ -8,13 +8,28 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/tools"
 )
 
+// Run is the standalone entry point used by the `expert` subcommand
+// when invoked manually against an existing run dir. It delegates to
+// RunWithEvents with no event sink, so manual reruns do not pollute
+// (or revive) an events.jsonl that the original pipeline owned.
 func Run(cfg config.Config) error {
+	return RunWithEvents(cfg, nil, nil)
+}
+
+// RunWithEvents is the pipeline-facing entry point. The recorder and
+// blob store are the same instances the planner/executor use, so
+// claim_emitted events line up on the same seq stream as upstream
+// stages. Either argument may be nil — emission is skipped silently
+// in that case (Nop pattern, matching planner.RunConfig).
+func RunWithEvents(cfg config.Config, rec events.Recorder, blobs *events.BlobStore) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -52,10 +67,95 @@ func Run(cfg config.Config) error {
 		if err := runfs.WriteJSON(target, hypothesis); err != nil {
 			return fmt.Errorf("write hypothesis %s: %w", hypothesis.CaseID, err)
 		}
+
+		// Emit one claim_emitted event per CitedFact so consumers
+		// can correlate claims with downstream verifier judgments
+		// without having to re-read hypothesis-*.json. Events fire
+		// even when Cited is empty (the agent asserted something
+		// it could not anchor); downstream filtering decides what
+		// to do with citation-less claims.
+		if rec != nil {
+			emitClaimEvents(rec, manifest.RunID, cfg.AgentID, hypothesis)
+		}
+
 		count++
 	}
 	fmt.Printf("Wrote %d hypothesis file(s) to %s\n", count, runfs.ExpertDir(cfg.RunDir))
 	return nil
+}
+
+// emitClaimEvents writes one claim_emitted event per CitedFact in
+// the hypothesis. claim_id is deterministic so reruns produce
+// stable correlation keys (caseID-fact-NNN).
+func emitClaimEvents(rec events.Recorder, runID, agentID string, h artifacts.Hypothesis) {
+	for i, f := range h.CitedFacts {
+		claimID := fmt.Sprintf("%s-fact-%03d", h.CaseID, i+1)
+		_ = rec.Emit(events.ClaimEmitted(runID, agentID, h.CaseID, claimID, f.Text, f.Cited))
+	}
+}
+
+// resolveCitedFacts iterates over the LLM-produced cited facts,
+// resolves each citation against the repo, drops citations that
+// fail, and returns the cleaned list. Facts that lose ALL their
+// citations stay in the result with an empty Cited slice — the
+// caller decides how to surface "asserted but unanchored" claims.
+//
+// Returns the cleaned facts and a side-channel slice of resolution
+// errors for telemetry / logging. The error slice is informational;
+// callers do NOT abort on resolution failure.
+func resolveCitedFacts(in []citations.CitedFact, repoRoot string) (out []citations.CitedFact, resolveErrors []string) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out = make([]citations.CitedFact, 0, len(in))
+	for _, f := range in {
+		text := strings.TrimSpace(f.Text)
+		if text == "" {
+			continue
+		}
+		var kept []citations.CitedBytes
+		for _, c := range f.Cited {
+			resolved, err := citations.Resolve(c, repoRoot)
+			if err != nil {
+				resolveErrors = append(resolveErrors, fmt.Sprintf("%s:%d-%d: %v",
+					c.File, c.StartLine, c.EndLine, err))
+				continue
+			}
+			kept = append(kept, resolved)
+		}
+		out = append(out, citations.CitedFact{Text: text, Cited: kept})
+	}
+	return out, resolveErrors
+}
+
+// flattenCitedFacts produces the legacy fields from the structured
+// CitedFacts list:
+//   - SupportingFacts: text of every fact whose citations resolved
+//     cleanly. Asserted-but-unanchored facts are intentionally
+//     excluded so SupportingFacts means "validated".
+//   - Cited: union of every resolved citation across all facts,
+//     deduplicated by (file, start_byte, end_byte, sha256). Keeps
+//     legacy "Cited"-reading code working through the migration.
+func flattenCitedFacts(facts []citations.CitedFact) (supporting []string, pool []citations.CitedBytes) {
+	seen := map[string]bool{}
+	for _, f := range facts {
+		if !f.HasValidCitation() {
+			continue
+		}
+		supporting = append(supporting, f.Text)
+		for _, c := range f.Cited {
+			if !c.Resolved() {
+				continue
+			}
+			key := fmt.Sprintf("%s:%d:%d:%s", c.File, c.StartByte, c.EndByte, c.SHA256)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			pool = append(pool, c)
+		}
+	}
+	return supporting, pool
 }
 
 func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, agentID string, temperature float64) (artifacts.Hypothesis, error) {
@@ -64,15 +164,44 @@ func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tool
 		return artifacts.Hypothesis{}, err
 	}
 
-	system := "You are the Expert Agent in TEECheck. Analyze the bounded case pack and return exactly one JSON object."
+	system := `You are the Expert Agent in TEECheck. Analyze the bounded case pack and return exactly one JSON object.
+
+Every claim you make about the code MUST be anchored to a specific
+range of source bytes. Use the cited_facts field for this — it is
+how downstream agents validate that your claims still hold against
+the live repo. Claims you cannot anchor are still allowed (use
+cited_facts with an empty cited list), but they will be treated as
+unverified by the verifier.`
 	user := fmt.Sprintf(`Return a JSON object with fields:
 - title
 - summary
 - suspected_issue
 - missing_obligations (array of strings)
-- supporting_facts (array of strings)
+- cited_facts (array of objects, see below)
 - confidence ("low"|"medium"|"high")
 - needs_verification (boolean)
+
+cited_facts format — each entry is:
+  {
+    "text":  "concise claim about the code",
+    "cited": [
+      { "file": "<repo-relative path>",
+        "start_line": <1-indexed inclusive>,
+        "end_line":   <1-indexed inclusive, >= start_line> }
+    ]
+  }
+
+Rules:
+- Pick the smallest line range that contains the evidence — do not
+  cite an entire file when a 5-line region suffices.
+- Only cite paths that appear in the snippets / tool hits below, or
+  that you have other concrete reason to believe exist; the system
+  will discard citations whose files cannot be opened.
+- One claim may have multiple cited regions if the evidence spans
+  separate locations. Prefer multiple small citations over one wide
+  citation.
+- A fact you cannot anchor: include it with "cited": []. It will be
+  flagged as unverified, not silently dropped.
 
 Case:
 - case_id: %s
@@ -112,13 +241,40 @@ Snippets:
 		Summary            string   `json:"summary"`
 		SuspectedIssue     string   `json:"suspected_issue"`
 		MissingObligations []string `json:"missing_obligations"`
-		SupportingFacts    []string `json:"supporting_facts"`
+		// CitedFacts is the v1.1.1 canonical shape. SupportingFacts
+		// is accepted as a transitional fallback for prompt
+		// versions that don't ask for cited_facts (e.g. the
+		// heuristic path or a model that ignores instructions).
+		CitedFacts []citations.CitedFact `json:"cited_facts"`
+		SupportingFacts []string `json:"supporting_facts"`
 		Confidence         string   `json:"confidence"`
 		NeedsVerification  bool     `json:"needs_verification"`
 	}
 	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
 		return artifacts.Hypothesis{}, fmt.Errorf("parse expert json: %w | raw=%s", err, truncate(resp.Text, 400))
 	}
+
+	// Resolve every citation against the repo: drop ones that fail,
+	// keep the fact text either way. Resolution errors are logged
+	// to stdout (not fatal) so a single bad path does not poison
+	// the whole hypothesis.
+	cleanedFacts, resolveErrors := resolveCitedFacts(parsed.CitedFacts, repoRoot)
+	if len(resolveErrors) > 0 {
+		fmt.Printf("[expert] %s: %d citation(s) failed to resolve: %s\n",
+			pack.CaseID, len(resolveErrors), strings.Join(resolveErrors, "; "))
+	}
+	supportingFacts, citedPool := flattenCitedFacts(cleanedFacts)
+
+	// Back-compat: when the LLM returned legacy supporting_facts
+	// instead of cited_facts (older prompts or non-compliant
+	// models), fold those strings into SupportingFacts as
+	// untyped/unvalidated entries. They will not appear in the
+	// CitedFacts list, so consumers can still distinguish them
+	// from validated claims.
+	if len(parsed.SupportingFacts) > 0 {
+		supportingFacts = append(supportingFacts, parsed.SupportingFacts...)
+	}
+	supportingFacts = append(supportingFacts, flattenToolHits(toolHits)...)
 
 	return artifacts.Hypothesis{
 		SchemaVersion:      "teecheck.hypothesis.v1",
@@ -128,7 +284,9 @@ Snippets:
 		Summary:            firstNonEmpty(parsed.Summary, "The expert agent found a bounded concern that needs follow-up review."),
 		SuspectedIssue:     firstNonEmpty(parsed.SuspectedIssue, pack.Category+" obligations may be incompletely enforced."),
 		MissingObligations: uniq(parsed.MissingObligations),
-		SupportingFacts:    uniq(append(parsed.SupportingFacts, flattenToolHits(toolHits)...)),
+		SupportingFacts:    uniq(supportingFacts),
+		CitedFacts:         cleanedFacts,
+		Cited:              citedPool,
 		KnowledgeHints:     pack.KnowledgeHints,
 		Confidence:         normalizeConfidence(parsed.Confidence),
 		NeedsVerification:  parsed.NeedsVerification,

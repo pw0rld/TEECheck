@@ -57,3 +57,36 @@ func (c CitedBytes) Valid() bool {
 func (c CitedBytes) Resolved() bool {
 	return c.SHA256 != "" && c.EndByte > c.StartByte
 }
+
+// CitedFact pairs a free-text claim with the source bytes the agent
+// is anchoring it to. v1.1.1 introduces this as a parallel field on
+// Hypothesis (CitedFacts) and (later) VerificationMemo — the
+// existing string-only fact arrays remain for legacy artifacts and
+// display fallback.
+//
+// Semantics:
+//   - Cited may be empty: the agent stated a claim but did not
+//     produce a citation, OR every citation it produced failed to
+//     Resolve against the live repo. Such facts MUST NOT be
+//     replicated into SupportingFacts (which becomes reserved for
+//     facts whose citations resolved cleanly), so consumers can
+//     distinguish "validated" from "asserted-without-evidence" at
+//     a glance.
+//   - Each entry in Cited is a fully-resolved CitedBytes (StartByte
+//     / EndByte / SHA256 populated) — writers call citations.Resolve
+//     before persistence and drop citations that fail.
+type CitedFact struct {
+	Text  string       `json:"text"`
+	Cited []CitedBytes `json:"cited,omitempty"`
+}
+
+// HasValidCitation reports whether at least one Cited entry is
+// resolved and intact. Useful for filtering at report time.
+func (f CitedFact) HasValidCitation() bool {
+	for _, c := range f.Cited {
+		if c.Resolved() {
+			return true
+		}
+	}
+	return false
+}
