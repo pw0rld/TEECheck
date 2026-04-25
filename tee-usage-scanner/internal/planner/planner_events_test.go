@@ -207,8 +207,14 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 			if e.Network == "" {
 				t.Error("ripgrep started event missing Network metadata")
 			}
+			if e.Write == "" {
+				t.Error("ripgrep started event missing Write metadata")
+			}
 			if e.TimeoutMs == 0 {
 				t.Error("ripgrep started event missing TimeoutMs")
+			}
+			if e.MaxOutputBytes == 0 {
+				t.Error("ripgrep started event missing MaxOutputBytes")
 			}
 		}
 		if e.ToolName == "done" {
@@ -216,6 +222,88 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 				t.Errorf("done is in-process but carries Network=%q", e.Network)
 			}
 		}
+	}
+
+	// Executor-backed completed event must carry tool_exit_code.
+	// The ripgrep run in this test searches for "verify_quote" in
+	// the fixture which contains it, so exit code is 0 (matches).
+	// Hand-rolled in-process actions (done) leave it absent.
+	for _, e := range es {
+		if e.Type != events.TypeToolCallCompleted {
+			continue
+		}
+		if e.ToolName == "ripgrep" {
+			// exit code 0 is the happy path; the JSON omits it
+			// (omitempty), so we only require the corresponding OK
+			// flag and absence of an error.
+			if !e.ToolOK {
+				t.Errorf("ripgrep completed not OK; error=%q", e.Error)
+			}
+			if e.Error != "" {
+				t.Errorf("ripgrep completed has Error=%q (want empty for exit 0)", e.Error)
+			}
+		}
+	}
+}
+
+// TestPlannerRun_RipgrepNoMatchSurfacesExitCodeInEvent verifies the
+// "rg exit 1 = no matches" path surfaces the non-zero exit code in
+// the completed event. The happy-path test cannot exercise this
+// because exit 0 is omitempty'd out of the JSON. Exit 1 is the
+// scenario where downstream consumers most need to distinguish
+// "tool said no" from a real failure — making sure that signal
+// reaches events.jsonl is the v1 smoke we care about.
+func TestPlannerRun_RipgrepNoMatchSurfacesExitCodeInEvent(t *testing.T) {
+	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+
+	client := &mockLLM{scripts: []string{
+		// Search for a string that is NOT in the fixture → exit 1.
+		`{"thought":"ripgrep","actions":[{"name":"ripgrep","args":{"pattern":"definitely_not_in_fixture","globs":["*.rs"]}}]}`,
+		`{"thought":"done","actions":[{"name":"done","args":{"summary":"none","candidates":[{"id":"c1","kind":"attestation","priority":"low","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["nothing matched"],"confidence":0.1}]}}]}`,
+	}}
+	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+
+	eventsPath := filepath.Join(runDir, "events.jsonl")
+	rec, err := events.NewJSONLRecorder(eventsPath)
+	if err != nil {
+		t.Fatalf("rec: %v", err)
+	}
+	exec := &executor.LocalExecutor{Recorder: rec}
+
+	planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "test-no-match",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Profile:  planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Client:   client,
+		Registry: reg,
+		Budget:   defaultTestBudget(),
+		Events:   rec,
+		Executor: exec,
+	})
+	rec.Close()
+
+	es := readEventsJSONL(t, eventsPath)
+	var rgCompleted *events.Event
+	for i, e := range es {
+		if e.Type == events.TypeToolCallCompleted && e.ToolName == "ripgrep" {
+			rgCompleted = &es[i]
+			break
+		}
+	}
+	if rgCompleted == nil {
+		t.Fatal("no ripgrep tool_call_completed event found")
+	}
+
+	// rg exit 1 = no matches. The handler maps this to ActionResult
+	// OK=true (a normal "no matches" outcome is not a failure), but
+	// the executor's completed event records the raw exit code so
+	// downstream consumers can audit what actually happened.
+	if rgCompleted.ToolExitCode != 1 {
+		t.Errorf("ripgrep ToolExitCode=%d, want 1 (no-match scenario)", rgCompleted.ToolExitCode)
+	}
+	if rgCompleted.Error != "" {
+		t.Errorf("ripgrep Error=%q, want empty (clean process exit, just non-zero)", rgCompleted.Error)
 	}
 }
 
