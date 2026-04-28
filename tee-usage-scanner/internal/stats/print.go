@@ -95,8 +95,8 @@ func Print(w io.Writer, rs *RunStats) {
 		fmt.Fprintf(w, "\nReview (human ground truth)\n")
 		fmt.Fprintf(w, "  total_reviewed=%d  TP=%d  FP=%d  NMC=%d  skip=%d  fp_rate=%.2f\n",
 			r.TotalReviewed, r.TPCount, r.FPCount, r.NMCCount, r.SkipCount, r.FPRate)
-		if len(r.FPReasons) > 0 {
-			fmt.Fprintf(w, "  fp_reasons=%s\n", formatMapInt(r.FPReasons))
+		if len(r.ReasonCodes) > 0 {
+			fmt.Fprintf(w, "  reason_codes=%s\n", formatMapInt(r.ReasonCodes))
 		}
 		if len(r.ByArbiterStatus) > 0 {
 			fmt.Fprintln(w, "  by_arbiter_status:")

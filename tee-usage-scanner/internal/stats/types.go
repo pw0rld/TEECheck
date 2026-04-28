@@ -124,22 +124,26 @@ type ArbiterStats struct {
 }
 
 // ReviewStats aggregates human ground-truth labels from
-// 08_review/review_records.jsonl (Phase 1). Empty / Present=false
-// when the run has not been reviewed yet — the typical state for
-// fresh dogfood data.
+// 08_review/review_records.jsonl. Empty / Present=false when the
+// run has not been reviewed yet — the typical state for fresh
+// dogfood data.
 //
-// FPRate is fp_count / (tp_count + fp_count) — it excludes
-// needs_more_context and skip because those are not definitive
-// labels.
+// C1 keeps the Phase 1 shape (TPCount/FPCount/NMCCount/SkipCount +
+// FPRate) so the schema swap stays a no-op refactor. C3 replaces
+// these with verdict_counts + three explicit rate metrics
+// (fp_rate_definitive / fp_rate_reviewed / non_tp_rate_reviewed)
+// and switches by_citation_validity to a 5-bucket discriminator.
 //
 // Slices: ByCategory keys are the case category fields
 // (attestation / authorization / boundary / ...). ByArbiterStatus
 // keys are findings.json status values (no_issue_observed /
 // needs_review / likely_issue / confirmed_candidate).
-// ByCitationValidity buckets are "validated" (finding had at least
-// one anchored CitedFact) and "unanchored" (finding had no
-// resolved citations). FPReasons counts the distribution of FP
-// reason taxonomy codes among false-positive verdicts.
+// ByCitationValidity buckets are currently "validated" / "unanchored"
+// — the 5-bucket cross-tab arrives in C3.
+//
+// ReasonCodes counts the reason_code distribution. C1 reads it from
+// ReviewRecord.EffectiveReasonCode() so legacy fp_reason values
+// keep flowing through unchanged.
 type ReviewStats struct {
 	Present              bool                       `json:"present"`
 	TotalReviewed        int                        `json:"total_reviewed"`
@@ -151,7 +155,7 @@ type ReviewStats struct {
 	ByCategory           map[string]ReviewBucketAgg `json:"by_category,omitempty"`
 	ByArbiterStatus      map[string]ReviewBucketAgg `json:"by_arbiter_status,omitempty"`
 	ByCitationValidity   map[string]ReviewBucketAgg `json:"by_citation_validity,omitempty"`
-	FPReasons            map[string]int             `json:"fp_reasons,omitempty"`
+	ReasonCodes          map[string]int             `json:"reason_codes,omitempty"`
 }
 
 // ReviewBucketAgg is the per-slice TP/FP/NMC count for one bucket.

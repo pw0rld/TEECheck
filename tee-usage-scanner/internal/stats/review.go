@@ -61,7 +61,7 @@ func collectReview(runDir string) ReviewStats {
 	s.ByCategory = map[string]ReviewBucketAgg{}
 	s.ByArbiterStatus = map[string]ReviewBucketAgg{}
 	s.ByCitationValidity = map[string]ReviewBucketAgg{}
-	s.FPReasons = map[string]int{}
+	s.ReasonCodes = map[string]int{}
 
 	for _, rec := range records {
 		v := artifacts.NormalizeVerdict(rec.Verdict)
@@ -70,13 +70,17 @@ func collectReview(runDir string) ReviewStats {
 			s.TPCount++
 		case artifacts.VerdictFalsePositive:
 			s.FPCount++
-			if rec.FPReason != "" {
-				s.FPReasons[rec.FPReason]++
-			}
-		case artifacts.VerdictNeedsMoreContext:
+		case artifacts.VerdictNeedsContext:
 			s.NMCCount++
 		case artifacts.VerdictSkip:
 			s.SkipCount++
+		}
+		// reason_code applies to any non-TP verdict; legacy fp_reason
+		// only on FP. EffectiveReasonCode collapses the two.
+		if v != artifacts.VerdictTruePositive {
+			if code := rec.EffectiveReasonCode(); code != "" {
+				s.ReasonCodes[code]++
+			}
 		}
 		s.TotalReviewed++
 
@@ -153,7 +157,7 @@ func bucketAdd(m map[string]ReviewBucketAgg, key, verdict string) {
 		b.TP++
 	case artifacts.VerdictFalsePositive:
 		b.FP++
-	case artifacts.VerdictNeedsMoreContext:
+	case artifacts.VerdictNeedsContext:
 		b.NMC++
 	}
 	m[key] = b

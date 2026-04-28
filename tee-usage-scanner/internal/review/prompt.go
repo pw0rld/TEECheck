@@ -9,13 +9,18 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
-// PromptVerdict prompts for the Phase 1 verdict vocabulary:
-//   t/true_positive, f/false_positive, n/needs_more_context,
-//   s/skip, q/quit
+// PromptVerdict prompts for the verdict vocabulary. C1 still ships
+// the Phase 1 4-verdict surface (TP / FP / needs_context / skip) —
+// the design_risk and no_issue_observed options arrive in C2 along
+// with the universal reason prompt.
+//
+// The "n / needs more context" shortcut keeps Phase 1 muscle memory;
+// it now resolves to VerdictNeedsContext (Phase 1.5 string).
+//
 // Returns one of artifacts.Verdict* constants, or the special
 // sentinel "quit" to stop the review session entirely.
 func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
-	fmt.Fprint(w, "Verdict? [t]rue positive / [f]alse positive / [n]eeds more context / [s]kip / [q]uit: ")
+	fmt.Fprint(w, "Verdict? [t]rue positive / [f]alse positive / [n]eeds context / [s]kip / [q]uit: ")
 	if !r.Scan() {
 		return "quit"
 	}
@@ -24,8 +29,9 @@ func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
 		return artifacts.VerdictTruePositive
 	case "f", "fp", "false_positive", "false positive":
 		return artifacts.VerdictFalsePositive
-	case "n", "nmc", "needs_more_context", "needs more context":
-		return artifacts.VerdictNeedsMoreContext
+	case "n", "nc", "nmc", "needs_context", "needs context",
+		"needs_more_context", "needs more context":
+		return artifacts.VerdictNeedsContext
 	case "s", "skip":
 		return artifacts.VerdictSkip
 	default:
@@ -33,45 +39,42 @@ func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
 	}
 }
 
-// PromptFPReason is shown only when verdict == VerdictFalsePositive.
-// Returns one of artifacts.FP* constants. Free-form input is
+// PromptFPReason is shown only when verdict == VerdictFalsePositive
+// (universalization to all non-TP verdicts arrives in C2 — at which
+// point this function will be renamed PromptReasonCode).
+//
+// Returns one of artifacts.Reason* constants. Free-form input is
 // accepted and stored verbatim, so the taxonomy can grow without
 // code changes.
 func PromptFPReason(r *bufio.Scanner, w io.Writer) string {
-	fmt.Fprintln(w, "FP reason:")
-	fmt.Fprintln(w, "  1. wrong_layer            (low-level missing → high-level claim)")
-	fmt.Fprintln(w, "  2. insufficient_evidence  (absence-of-evidence reasoning)")
-	fmt.Fprintln(w, "  3. architectural_remark   (observation, not bug)")
-	fmt.Fprintln(w, "  4. upper_layer_invariant  (enforced elsewhere)")
-	fmt.Fprintln(w, "  5. target_not_in_snippet  (claim from absent code)")
-	fmt.Fprintln(w, "  6. already_dismissed      (arbiter said no_issue, leaked)")
-	fmt.Fprintln(w, "  7. duplicate              (same root cause filed elsewhere)")
-	fmt.Fprintln(w, "  8. out_of_scope           (true but outside focus)")
-	fmt.Fprintln(w, "  9. other                  (Notes explains)")
-	fmt.Fprint(w, "Choose [1-9 or full name]: ")
+	fmt.Fprintln(w, "Reason code:")
+	fmt.Fprintln(w, "  1. outer_validation_missed       (signature/timestamp/quote/TCB enforced upstream)")
+	fmt.Fprintln(w, "  2. wrapper_policy_split          (policy enforced jointly by wrapper + inner)")
+	fmt.Fprintln(w, "  3. snippet_truncation            (relevant code path not in cited snippet)")
+	fmt.Fprintln(w, "  4. protocol_semantics_missed     (handshake / message-kind / TLS state)")
+	fmt.Fprintln(w, "  5. cfg_context_missed            (cfg(...) gate excludes flagged path)")
+	fmt.Fprintln(w, "  6. feature_flag_context_missed   (runtime flag disables flagged path)")
+	fmt.Fprintln(w, "  7. other                         (Notes explains)")
+	fmt.Fprint(w, "Choose [1-7 or full name]: ")
 	if !r.Scan() {
 		return ""
 	}
 	raw := strings.ToLower(strings.TrimSpace(r.Text()))
 	switch raw {
 	case "1":
-		return artifacts.FPWrongLayer
+		return artifacts.ReasonOuterValidationMissed
 	case "2":
-		return artifacts.FPInsufficientEvidence
+		return artifacts.ReasonWrapperPolicySplit
 	case "3":
-		return artifacts.FPArchitecturalRemark
+		return artifacts.ReasonSnippetTruncation
 	case "4":
-		return artifacts.FPUpperLayerInvariant
+		return artifacts.ReasonProtocolSemanticsMissed
 	case "5":
-		return artifacts.FPTargetNotInSnippet
+		return artifacts.ReasonCfgContextMissed
 	case "6":
-		return artifacts.FPAlreadyDismissed
-	case "7":
-		return artifacts.FPDuplicate
-	case "8":
-		return artifacts.FPOutOfScope
-	case "9", "other":
-		return artifacts.FPOther
+		return artifacts.ReasonFeatureFlagContextMissed
+	case "7", "other":
+		return artifacts.ReasonOther
 	}
 	return raw // free-form / new vocabulary; stored verbatim
 }

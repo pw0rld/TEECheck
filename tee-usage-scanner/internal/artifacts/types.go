@@ -261,23 +261,30 @@ type VerificationMemo struct {
 }
 
 // ReviewRecord is the human ground-truth label attached to one
-// arbiter finding. Phase 1 expanded the schema so reviewer judgment
-// (true_positive / false_positive / needs_more_context) is
-// distinct from the arbiter's own status, and false-positive
-// reasons are recorded with a closed taxonomy (see FP* constants
-// in review.go) to make precision metrics meaningful.
+// arbiter finding. Phase 1.5 widened the verdict vocabulary to five
+// non-skip values (TP / FP / needs_context / design_risk /
+// no_issue_observed) and split the legacy FPReason field into a
+// universal ReasonCode (applies to any non-TP verdict, see
+// review.go).
 type ReviewRecord struct {
 	SchemaVersion string   `json:"schema_version"`
 	CaseID        string   `json:"case_id"`
 	FindingID     string   `json:"finding_id"`
 
 	// Verdict is one of the Verdict* constants. NormalizeVerdict
-	// accepts legacy values ("confirmed"/"dismissed"/"inconclusive").
+	// accepts legacy values ("confirmed"/"dismissed"/"inconclusive"
+	// /"needs_more_context").
 	Verdict string `json:"verdict"`
 
-	// FPReason is a taxonomy code (FP* constants) populated only
-	// when Verdict == VerdictFalsePositive. Unknown codes are
-	// stored verbatim for extensibility.
+	// ReasonCode is a Reason* taxonomy code explaining the failure
+	// mode behind a non-TP verdict. Empty for TP and skip. Unknown
+	// codes are stored verbatim for extensibility.
+	ReasonCode string `json:"reason_code,omitempty"`
+
+	// FPReason is the legacy Phase 1 field — kept for read
+	// back-compat with any review_records.jsonl written between
+	// 8ec877e and the Phase 1.5 schema bump. New writes use
+	// ReasonCode; consumers should read EffectiveReasonCode().
 	FPReason string `json:"fp_reason,omitempty"`
 
 	// CorrectedSeverity is the reviewer's adjustment to the

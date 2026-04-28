@@ -525,8 +525,8 @@ func TestCollect_ReviewLabels(t *testing.T) {
 	enc := json.NewEncoder(f)
 	for _, rec := range []artifacts.ReviewRecord{
 		{CaseID: "case-001", FindingID: "case-001", Verdict: artifacts.VerdictTruePositive, ReviewedAt: "t"},
-		{CaseID: "case-002", FindingID: "case-002", Verdict: artifacts.VerdictFalsePositive, FPReason: artifacts.FPWrongLayer, ReviewedAt: "t"},
-		{CaseID: "case-003", FindingID: "case-003", Verdict: artifacts.VerdictNeedsMoreContext, ReviewedAt: "t"},
+		{CaseID: "case-002", FindingID: "case-002", Verdict: artifacts.VerdictFalsePositive, ReasonCode: artifacts.ReasonOuterValidationMissed, ReviewedAt: "t"},
+		{CaseID: "case-003", FindingID: "case-003", Verdict: artifacts.VerdictNeedsContext, ReviewedAt: "t"},
 	} {
 		_ = enc.Encode(rec)
 	}
@@ -546,8 +546,8 @@ func TestCollect_ReviewLabels(t *testing.T) {
 	if r.FPRate != 0.5 {
 		t.Errorf("FPRate=%v want 0.5", r.FPRate)
 	}
-	if r.FPReasons[artifacts.FPWrongLayer] != 1 {
-		t.Errorf("FPReasons[wrong_layer]=%d want 1", r.FPReasons[artifacts.FPWrongLayer])
+	if r.ReasonCodes[artifacts.ReasonOuterValidationMissed] != 1 {
+		t.Errorf("ReasonCodes[outer_validation_missed]=%d want 1", r.ReasonCodes[artifacts.ReasonOuterValidationMissed])
 	}
 	if att := r.ByCategory["attestation"]; att.Total != 2 || att.TP != 1 {
 		t.Errorf("ByCategory[attestation]=%+v", att)

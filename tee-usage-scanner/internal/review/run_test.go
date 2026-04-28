@@ -45,8 +45,8 @@ func TestReviewFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Phase 1 prompt order:
-	//   verdict, [fp_reason if FP], severity_override,
+	// Prompt order (Phase 1.5 — same shape as Phase 1):
+	//   verdict, [reason_code if FP], severity_override,
 	//   confidence_override, tags, notes
 	// Inputs: t (true_positive), keep severity, keep confidence,
 	// tag "attestation", note "Looks real".
@@ -115,7 +115,7 @@ func TestReviewFlow_FalsePositive(t *testing.T) {
 
 	// Inputs:
 	//   verdict="f" (false_positive)
-	//   fp_reason="1" (wrong_layer)
+	//   reason_code="1" (outer_validation_missed)
 	//   severity_override="low"
 	//   confidence_override=""  (keep)
 	//   tags=""
@@ -141,8 +141,8 @@ func TestReviewFlow_FalsePositive(t *testing.T) {
 	if rec.Verdict != artifacts.VerdictFalsePositive {
 		t.Errorf("Verdict=%q want %q", rec.Verdict, artifacts.VerdictFalsePositive)
 	}
-	if rec.FPReason != artifacts.FPWrongLayer {
-		t.Errorf("FPReason=%q want %q", rec.FPReason, artifacts.FPWrongLayer)
+	if rec.ReasonCode != artifacts.ReasonOuterValidationMissed {
+		t.Errorf("ReasonCode=%q want %q", rec.ReasonCode, artifacts.ReasonOuterValidationMissed)
 	}
 	if rec.CorrectedSeverity != "low" {
 		t.Errorf("CorrectedSeverity=%q want low", rec.CorrectedSeverity)

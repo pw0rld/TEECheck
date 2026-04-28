@@ -63,9 +63,9 @@ func RunWithIO(cfg config.Config, input io.Reader, output io.Writer, now time.Ti
 			continue
 		}
 
-		var fpReason string
+		var reasonCode string
 		if verdict == artifacts.VerdictFalsePositive {
-			fpReason = PromptFPReason(scanner, output)
+			reasonCode = PromptFPReason(scanner, output)
 		}
 		correctedSeverity := PromptSeverityOverride(scanner, output, item.Severity)
 		confidenceOverride := PromptConfidenceOverride(scanner, output, item.Confidence)
@@ -77,7 +77,7 @@ func RunWithIO(cfg config.Config, input io.Reader, output io.Writer, now time.Ti
 			CaseID:             item.FindingID,
 			FindingID:          item.FindingID,
 			Verdict:            verdict,
-			FPReason:           fpReason,
+			ReasonCode:         reasonCode,
 			CorrectedSeverity:  correctedSeverity,
 			ConfidenceOverride: confidenceOverride,
 			Tags:               tags,
