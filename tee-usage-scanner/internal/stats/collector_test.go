@@ -685,6 +685,231 @@ func TestCollect_ReviewLabels_FiveBucketCoverage(t *testing.T) {
 	}
 }
 
+// TestCollect_Review_OasisCoreFixture_JSONSnapshot is a wire-format
+// guardrail. It builds a synthetic mini-run-dir from the 6 oasis-core
+// findings transcribed from examples/oasis-core-scan/REPORT.md, runs
+// Collect, and asserts the marshaled ReviewStats JSON matches a
+// frozen snapshot byte-for-byte.
+//
+// This is NOT a real dogfood result — examples/oasis-core-scan/ ships
+// with REPORT.md only and lacks the stage artifacts needed to drive
+// teecheck review/stats end-to-end. The verdicts encoded here are the
+// expected reviewer labels (recorded in
+// docs/superpowers/specs/2026-04-28-phase1.5-dogfood-deferred.md) used
+// purely as fixture data so any future change to ReviewStats wire
+// shape, rate denominators, or bucket logic surfaces as a snapshot
+// diff. Real dogfood will happen on a fresh oasis-core run later.
+func TestCollect_Review_OasisCoreFixture_JSONSnapshot(t *testing.T) {
+	dir := t.TempDir()
+
+	// 6 findings: short IDs for fixture readability, original
+	// IDs preserved as comments. Status mirrors REPORT.md.
+	findings := artifacts.Findings{
+		Findings: []artifacts.FindingItem{
+			// 1. attestation:004 — IAS quote verification (confirmed_candidate)
+			{FindingID: "oc-ias", SliceID: "oc-ias", Status: "confirmed_candidate"},
+			// 2. authorization:006 — Policy::check_allowed (needs_review)
+			{FindingID: "oc-policy", SliceID: "oc-policy", Status: "needs_review"},
+			// 3. boundary:002 — AttestationHandler (needs_review)
+			{FindingID: "oc-attest", SliceID: "oc-attest", Status: "needs_review"},
+			// 4. attestation:003 — QuoteBundle::verify (needs_review)
+			{FindingID: "oc-qbundle", SliceID: "oc-qbundle", Status: "needs_review"},
+			// 5. boundary:005 — Dispatcher::dispatch_txn (needs_review)
+			{FindingID: "oc-dispatch", SliceID: "oc-dispatch", Status: "needs_review"},
+			// 6. attestation:001 — Identity::set_quote (no_issue_observed)
+			{FindingID: "oc-identity", SliceID: "oc-identity", Status: "no_issue_observed"},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "07_arbiter", "findings.json"), findings)
+
+	// Cases — categories drive ByCategory bucketing.
+	for _, c := range []struct{ id, cat string }{
+		{"oc-ias", "attestation"},
+		{"oc-policy", "authorization"},
+		{"oc-attest", "boundary"},
+		{"oc-qbundle", "attestation"},
+		{"oc-dispatch", "boundary"},
+		{"oc-identity", "attestation"},
+	} {
+		writeJSON(t, filepath.Join(dir, "03_cases", "case-"+c.id+".json"),
+			artifacts.CasePack{CaseID: c.id, Category: c.cat})
+	}
+
+	// Memos — ExpertCitationValidation drives ByCitationValidity.
+	// IAS, AttestationHandler, Identity have full byte-level
+	// citations in REPORT.md → all_valid. Policy and Dispatcher
+	// have target symbols not in snippet → unanchored. QuoteBundle
+	// is partial (some bytes resolved, some truncated) → partially_valid.
+	memoStatuses := []struct {
+		statuses []string
+	}{
+		{[]string{citations.StatusValid}},                            // oc-ias       all_valid
+		{[]string{citations.StatusUnanchored}},                       // oc-policy    unanchored
+		{[]string{citations.StatusValid}},                            // oc-attest    all_valid
+		{[]string{citations.StatusValid, citations.StatusUnresolved}}, // oc-qbundle  partially_valid
+		{[]string{citations.StatusUnanchored}},                       // oc-dispatch  unanchored
+		{[]string{citations.StatusValid}},                            // oc-identity  all_valid
+	}
+	for i, m := range memoStatuses {
+		var validations []citations.CitationValidation
+		for _, s := range m.statuses {
+			validations = append(validations, citations.CitationValidation{Status: s})
+		}
+		writeJSON(t, filepath.Join(dir, "06_verifier", "verify-00"+itoa(i+1)+".json"),
+			artifacts.VerificationMemo{ExpertCitationValidation: validations})
+	}
+
+	// Review records — the expected reviewer labels for these 6
+	// findings (also recorded in the deferred-dogfood doc).
+	jsonlPath := filepath.Join(dir, "08_review", "review_records.jsonl")
+	_ = os.MkdirAll(filepath.Dir(jsonlPath), 0o755)
+	f, _ := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	enc := json.NewEncoder(f)
+	for _, rec := range []artifacts.ReviewRecord{
+		// IAS: scanner missed the outer QuotePolicy.verify(...) call
+		{CaseID: "oc-ias", FindingID: "oc-ias",
+			Verdict: artifacts.VerdictFalsePositive, ReasonCode: artifacts.ReasonOuterValidationMissed,
+			ReviewedAt: "t"},
+		// Policy: target symbol not in snippet
+		{CaseID: "oc-policy", FindingID: "oc-policy",
+			Verdict: artifacts.VerdictNeedsContext, ReasonCode: artifacts.ReasonSnippetTruncation,
+			ReviewedAt: "t"},
+		// AttestationHandler: defense-in-depth observation, Host trait covers it
+		{CaseID: "oc-attest", FindingID: "oc-attest",
+			Verdict: artifacts.VerdictDesignRisk, ReasonCode: artifacts.ReasonWrapperPolicySplit,
+			ReviewedAt: "t"},
+		// QuoteBundle: snippet truncated at L80, freshness check unseen
+		{CaseID: "oc-qbundle", FindingID: "oc-qbundle",
+			Verdict: artifacts.VerdictNeedsContext, ReasonCode: artifacts.ReasonSnippetTruncation,
+			ReviewedAt: "t"},
+		// Dispatcher: target function not in snippet
+		{CaseID: "oc-dispatch", FindingID: "oc-dispatch",
+			Verdict: artifacts.VerdictNeedsContext, ReasonCode: artifacts.ReasonSnippetTruncation,
+			ReviewedAt: "t"},
+		// Identity: scanner self-rejected correctly; reviewer ratifies
+		{CaseID: "oc-identity", FindingID: "oc-identity",
+			Verdict: artifacts.VerdictNoIssueObserved, ReviewedAt: "t"},
+	} {
+		_ = enc.Encode(rec)
+	}
+	_ = f.Close()
+
+	rs, err := stats.Collect(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := json.MarshalIndent(rs.Review, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Frozen snapshot. To regenerate after an intentional schema
+	// change, run `go test -run OasisCoreFixture` and copy the
+	// printed `got` block. Do NOT regenerate to make a failing
+	// test pass without understanding what changed in the wire.
+	want := `{
+  "present": true,
+  "total_labeled": 6,
+  "candidate_labeled": 5,
+  "verdict_counts": {
+    "design_risk": 1,
+    "false_positive": 1,
+    "needs_context": 3,
+    "no_issue_observed": 1
+  },
+  "fp_rate_definitive": {
+    "value": 1,
+    "numerator": 1,
+    "denominator": 1
+  },
+  "fp_rate_reviewed": {
+    "value": 0.2,
+    "numerator": 1,
+    "denominator": 5
+  },
+  "non_positive_rate": {
+    "value": 1,
+    "numerator": 5,
+    "denominator": 5
+  },
+  "by_category": {
+    "attestation": {
+      "total": 3,
+      "verdict_counts": {
+        "false_positive": 1,
+        "needs_context": 1,
+        "no_issue_observed": 1
+      }
+    },
+    "authorization": {
+      "total": 1,
+      "verdict_counts": {
+        "needs_context": 1
+      }
+    },
+    "boundary": {
+      "total": 2,
+      "verdict_counts": {
+        "design_risk": 1,
+        "needs_context": 1
+      }
+    }
+  },
+  "by_arbiter_status": {
+    "confirmed_candidate": {
+      "total": 1,
+      "verdict_counts": {
+        "false_positive": 1
+      }
+    },
+    "needs_review": {
+      "total": 4,
+      "verdict_counts": {
+        "design_risk": 1,
+        "needs_context": 3
+      }
+    },
+    "no_issue_observed": {
+      "total": 1,
+      "verdict_counts": {
+        "no_issue_observed": 1
+      }
+    }
+  },
+  "by_citation_validity": {
+    "all_valid": {
+      "total": 3,
+      "verdict_counts": {
+        "design_risk": 1,
+        "false_positive": 1,
+        "no_issue_observed": 1
+      }
+    },
+    "partially_valid": {
+      "total": 1,
+      "verdict_counts": {
+        "needs_context": 1
+      }
+    },
+    "unanchored": {
+      "total": 2,
+      "verdict_counts": {
+        "needs_context": 2
+      }
+    }
+  },
+  "reason_codes": {
+    "outer_validation_missed": 1,
+    "snippet_truncation": 3,
+    "wrapper_policy_split": 1
+  }
+}`
+	if string(got) != want {
+		t.Errorf("review JSON snapshot drift.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 func TestCollect_ReviewAbsent(t *testing.T) {
 	rs, err := stats.Collect(t.TempDir(), "")
 	if err != nil {
