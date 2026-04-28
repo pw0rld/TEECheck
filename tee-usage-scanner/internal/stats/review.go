@@ -138,7 +138,7 @@ func collectReview(runDir string) ReviewStats {
 	// preserved so consumers can detect low-sample rates.
 	s.FPRateDefinitive = newRate(fp, tp+fp)
 	s.FPRateReviewed = newRate(fp, s.CandidateLabeled)
-	s.NonTPRateReviewed = newRate(fp+nc+dr, s.CandidateLabeled)
+	s.NonPositiveRate = newRate(fp+nc+dr, s.CandidateLabeled)
 
 	return s
 }

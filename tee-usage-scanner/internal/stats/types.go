@@ -132,12 +132,15 @@ type ArbiterStats struct {
 // reviewer-facing rates coexist instead of a single ambiguous
 // "fp_rate":
 //
-//   - FPRateDefinitive  = FP / (TP + FP)             "of the
+//   - FPRateDefinitive = FP / (TP + FP)            "of the
 //     decisions where I was certain, how often was scanner wrong?"
-//   - FPRateReviewed    = FP / candidate_labeled     "of all
+//   - FPRateReviewed   = FP / candidate_labeled    "of all
 //     candidates I evaluated, how often did scanner outright miss?"
-//   - NonTPRateReviewed = (FP+NC+DR) / candidate     "what fraction
+//   - NonPositiveRate  = (FP+NC+DR) / candidate    "what fraction
 //     of the scanner's candidates failed to convert to TP?"
+//
+// "Non-positive" rather than "non-TP" — the latter is fuzzy because
+// NIO is also not TP but lives outside the candidate denominator.
 //
 // candidate_labeled is the sum of TP, FP, NC and DR — it excludes
 // no_issue_observed (scanner self-rejected, never a real candidate)
@@ -175,9 +178,9 @@ type ReviewStats struct {
 	CandidateLabeled int            `json:"candidate_labeled"`
 	VerdictCounts    map[string]int `json:"verdict_counts,omitempty"`
 
-	FPRateDefinitive   RateMetric `json:"fp_rate_definitive"`
-	FPRateReviewed     RateMetric `json:"fp_rate_reviewed"`
-	NonTPRateReviewed  RateMetric `json:"non_tp_rate_reviewed"`
+	FPRateDefinitive RateMetric `json:"fp_rate_definitive"`
+	FPRateReviewed   RateMetric `json:"fp_rate_reviewed"`
+	NonPositiveRate  RateMetric `json:"non_positive_rate"`
 
 	ByCategory         map[string]ReviewBucketAgg `json:"by_category,omitempty"`
 	ByArbiterStatus    map[string]ReviewBucketAgg `json:"by_arbiter_status,omitempty"`

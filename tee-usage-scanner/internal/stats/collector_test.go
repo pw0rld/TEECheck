@@ -573,8 +573,8 @@ func TestCollect_ReviewLabels(t *testing.T) {
 	if v := r.FPRateReviewed; v.Value == nil || !approx(*v.Value, 1.0/3.0) || v.Numerator != 1 || v.Denominator != 3 {
 		t.Errorf("fp_rate_reviewed=%+v want 0.333 (1/3)", v)
 	}
-	if v := r.NonTPRateReviewed; v.Value == nil || !approx(*v.Value, 2.0/3.0) || v.Numerator != 2 || v.Denominator != 3 {
-		t.Errorf("non_tp_rate_reviewed=%+v want 0.667 (2/3)", v)
+	if v := r.NonPositiveRate; v.Value == nil || !approx(*v.Value, 2.0/3.0) || v.Numerator != 2 || v.Denominator != 3 {
+		t.Errorf("non_positive_rate=%+v want 0.667 (2/3)", v)
 	}
 	if r.ReasonCodes[artifacts.ReasonOuterValidationMissed] != 1 {
 		t.Errorf("ReasonCodes[outer_validation_missed]=%d want 1", r.ReasonCodes[artifacts.ReasonOuterValidationMissed])

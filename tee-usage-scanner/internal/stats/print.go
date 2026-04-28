@@ -98,8 +98,8 @@ func Print(w io.Writer, rs *RunStats) {
 			fmt.Fprintf(w, "  verdict_counts=%s\n", formatMapInt(r.VerdictCounts))
 		}
 		fmt.Fprintf(w, "  fp_rate_definitive=%s   (FP / TP+FP)\n", formatRate(r.FPRateDefinitive))
-		fmt.Fprintf(w, "  fp_rate_reviewed=%s    (FP / candidate_labeled)\n", formatRate(r.FPRateReviewed))
-		fmt.Fprintf(w, "  non_tp_rate_reviewed=%s (FP+NC+DR / candidate_labeled)\n", formatRate(r.NonTPRateReviewed))
+		fmt.Fprintf(w, "  fp_rate_reviewed=%s     (FP / candidate_labeled)\n", formatRate(r.FPRateReviewed))
+		fmt.Fprintf(w, "  non_positive_rate=%s    (FP+NC+DR / candidate_labeled)\n", formatRate(r.NonPositiveRate))
 		if len(r.ReasonCodes) > 0 {
 			fmt.Fprintf(w, "  reason_codes=%s\n", formatMapInt(r.ReasonCodes))
 		}
