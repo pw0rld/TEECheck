@@ -63,9 +63,13 @@ func RunWithIO(cfg config.Config, input io.Reader, output io.Writer, now time.Ti
 			continue
 		}
 
+		// reason_code is asked for every non-TP verdict. TP doesn't
+		// need a code (the scanner was right). Skip is filtered above
+		// so won't reach here. Reviewers can press enter to leave the
+		// code empty if no taxonomy entry fits.
 		var reasonCode string
-		if verdict == artifacts.VerdictFalsePositive {
-			reasonCode = PromptFPReason(scanner, output)
+		if verdict != artifacts.VerdictTruePositive {
+			reasonCode = PromptReasonCode(scanner, output)
 		}
 		correctedSeverity := PromptSeverityOverride(scanner, output, item.Severity)
 		confidenceOverride := PromptConfidenceOverride(scanner, output, item.Confidence)

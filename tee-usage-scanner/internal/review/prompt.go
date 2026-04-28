@@ -9,18 +9,23 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
-// PromptVerdict prompts for the verdict vocabulary. C1 still ships
-// the Phase 1 4-verdict surface (TP / FP / needs_context / skip) —
-// the design_risk and no_issue_observed options arrive in C2 along
-// with the universal reason prompt.
-//
-// The "n / needs more context" shortcut keeps Phase 1 muscle memory;
-// it now resolves to VerdictNeedsContext (Phase 1.5 string).
+// PromptVerdict prompts for the Phase 1.5 5-verdict vocabulary plus
+// skip/quit. The five non-skip verdicts encode meaningfully different
+// reviewer judgments and downstream metric denominators differ
+// accordingly — see IsDefinitiveVerdict / IsCandidateVerdict.
 //
 // Returns one of artifacts.Verdict* constants, or the special
 // sentinel "quit" to stop the review session entirely.
 func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
-	fmt.Fprint(w, "Verdict? [t]rue positive / [f]alse positive / [n]eeds context / [s]kip / [q]uit: ")
+	fmt.Fprintln(w, "Verdict?")
+	fmt.Fprintln(w, "  [t] true_positive       — scanner was right, real bug")
+	fmt.Fprintln(w, "  [f] false_positive      — scanner was wrong, no bug here")
+	fmt.Fprintln(w, "  [n] needs_context       — cannot tell from snippet alone")
+	fmt.Fprintln(w, "  [d] design_risk         — architectural concern, not a bug")
+	fmt.Fprintln(w, "  [o] no_issue_observed   — scanner self-rejected this finding")
+	fmt.Fprintln(w, "  [s] skip                — defer this finding")
+	fmt.Fprintln(w, "  [q] quit                — end review session")
+	fmt.Fprint(w, "> ")
 	if !r.Scan() {
 		return "quit"
 	}
@@ -32,6 +37,10 @@ func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
 	case "n", "nc", "nmc", "needs_context", "needs context",
 		"needs_more_context", "needs more context":
 		return artifacts.VerdictNeedsContext
+	case "d", "dr", "design_risk", "design risk":
+		return artifacts.VerdictDesignRisk
+	case "o", "nio", "no_issue", "no_issue_observed", "no issue observed":
+		return artifacts.VerdictNoIssueObserved
 	case "s", "skip":
 		return artifacts.VerdictSkip
 	default:
@@ -39,14 +48,15 @@ func PromptVerdict(r *bufio.Scanner, w io.Writer) string {
 	}
 }
 
-// PromptFPReason is shown only when verdict == VerdictFalsePositive
-// (universalization to all non-TP verdicts arrives in C2 — at which
-// point this function will be renamed PromptReasonCode).
+// PromptReasonCode is shown for every non-TP verdict (FP, needs_context,
+// design_risk, no_issue_observed). The taxonomy describes scanner
+// failure modes — the levers downstream prompt / planner / verifier
+// improvements hook onto.
 //
 // Returns one of artifacts.Reason* constants. Free-form input is
 // accepted and stored verbatim, so the taxonomy can grow without
 // code changes.
-func PromptFPReason(r *bufio.Scanner, w io.Writer) string {
+func PromptReasonCode(r *bufio.Scanner, w io.Writer) string {
 	fmt.Fprintln(w, "Reason code:")
 	fmt.Fprintln(w, "  1. outer_validation_missed       (signature/timestamp/quote/TCB enforced upstream)")
 	fmt.Fprintln(w, "  2. wrapper_policy_split          (policy enforced jointly by wrapper + inner)")
@@ -55,12 +65,14 @@ func PromptFPReason(r *bufio.Scanner, w io.Writer) string {
 	fmt.Fprintln(w, "  5. cfg_context_missed            (cfg(...) gate excludes flagged path)")
 	fmt.Fprintln(w, "  6. feature_flag_context_missed   (runtime flag disables flagged path)")
 	fmt.Fprintln(w, "  7. other                         (Notes explains)")
-	fmt.Fprint(w, "Choose [1-7 or full name]: ")
+	fmt.Fprint(w, "Choose [1-7 or full name, enter to skip]: ")
 	if !r.Scan() {
 		return ""
 	}
 	raw := strings.ToLower(strings.TrimSpace(r.Text()))
 	switch raw {
+	case "":
+		return ""
 	case "1":
 		return artifacts.ReasonOuterValidationMissed
 	case "2":

@@ -154,3 +154,110 @@ func TestReviewFlow_FalsePositive(t *testing.T) {
 		t.Errorf("Notes=%q", rec.Notes)
 	}
 }
+
+// TestReviewFlow_NeedsContextAsksReason locks in the C2 change:
+// reason_code is prompted for every non-TP verdict, not just FP. A
+// reviewer who chooses needs_context now gets a reason prompt where
+// Phase 1 would have skipped it.
+func TestReviewFlow_NeedsContextAsksReason(t *testing.T) {
+	runDir := t.TempDir()
+	findings := artifacts.Findings{
+		SchemaVersion: "teecheck.findings.v2",
+		RunID:         "test-nc",
+		Findings: []artifacts.FindingItem{
+			{
+				FindingID: "case-001", SliceID: "case-001",
+				Status: "needs_review", Severity: "medium", Confidence: "low",
+				Files: []string{"f.rs"}, Summary: "Maybe missing TCB check",
+			},
+		},
+	}
+	if err := runfs.WriteJSON(runfs.ArbiterFindingsPath(runDir), findings); err != nil {
+		t.Fatal(err)
+	}
+
+	// verdict="n" (needs_context), reason="3" (snippet_truncation),
+	// severity kept, confidence kept, tags empty, notes.
+	input := "n\n3\n\n\n\nneed to see caller\n"
+	cfg := config.Config{Command: "review", RunDir: runDir}
+	err := review.RunWithIO(cfg, strings.NewReader(input), &bytes.Buffer{},
+		time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(runfs.ReviewDir(runDir), "review-001.json"))
+	var rec artifacts.ReviewRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if rec.Verdict != artifacts.VerdictNeedsContext {
+		t.Errorf("Verdict=%q want %q", rec.Verdict, artifacts.VerdictNeedsContext)
+	}
+	if rec.ReasonCode != artifacts.ReasonSnippetTruncation {
+		t.Errorf("ReasonCode=%q want %q (NC must prompt for reason in Phase 1.5)",
+			rec.ReasonCode, artifacts.ReasonSnippetTruncation)
+	}
+}
+
+// TestReviewFlow_DesignRiskAndNoIssueObserved exercises the two new
+// Phase 1.5 verdicts. Design risk is a real reviewer judgment;
+// no_issue_observed is the verdict for findings the scanner itself
+// downgraded but that still surfaced to review.
+func TestReviewFlow_DesignRiskAndNoIssueObserved(t *testing.T) {
+	runDir := t.TempDir()
+	findings := artifacts.Findings{
+		SchemaVersion: "teecheck.findings.v2",
+		RunID:         "test-dr-nio",
+		Findings: []artifacts.FindingItem{
+			{FindingID: "case-001", SliceID: "case-001", Status: "needs_review",
+				Severity: "high", Confidence: "medium", Files: []string{"a.rs"},
+				Summary: "Cross-cutting design observation"},
+			{FindingID: "case-002", SliceID: "case-002", Status: "no_issue_observed",
+				Severity: "low", Confidence: "low", Files: []string{"b.rs"},
+				Summary: "Already self-rejected"},
+		},
+	}
+	if err := runfs.WriteJSON(runfs.ArbiterFindingsPath(runDir), findings); err != nil {
+		t.Fatal(err)
+	}
+
+	// First finding: design_risk + reason 7 (other) + notes.
+	// Second finding: no_issue_observed + skip reason (enter) + notes.
+	// Each finding consumes 6 lines after the verdict prompt:
+	//   verdict, reason, severity, confidence, tags, notes
+	input := "d\n7\n\n\n\nlayered concern\n" +
+		"o\n\n\n\n\nscanner already dismissed\n"
+	cfg := config.Config{Command: "review", RunDir: runDir}
+	err := review.RunWithIO(cfg, strings.NewReader(input), &bytes.Buffer{},
+		time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	// First record: design_risk + ReasonOther
+	data1, _ := os.ReadFile(filepath.Join(runfs.ReviewDir(runDir), "review-001.json"))
+	var r1 artifacts.ReviewRecord
+	if err := json.Unmarshal(data1, &r1); err != nil {
+		t.Fatalf("parse 1: %v", err)
+	}
+	if r1.Verdict != artifacts.VerdictDesignRisk {
+		t.Errorf("rec 1 Verdict=%q want %q", r1.Verdict, artifacts.VerdictDesignRisk)
+	}
+	if r1.ReasonCode != artifacts.ReasonOther {
+		t.Errorf("rec 1 ReasonCode=%q want %q", r1.ReasonCode, artifacts.ReasonOther)
+	}
+
+	// Second record: no_issue_observed + empty reason (reviewer
+	// pressed enter — the prompt allowed it)
+	data2, _ := os.ReadFile(filepath.Join(runfs.ReviewDir(runDir), "review-002.json"))
+	var r2 artifacts.ReviewRecord
+	if err := json.Unmarshal(data2, &r2); err != nil {
+		t.Fatalf("parse 2: %v", err)
+	}
+	if r2.Verdict != artifacts.VerdictNoIssueObserved {
+		t.Errorf("rec 2 Verdict=%q want %q", r2.Verdict, artifacts.VerdictNoIssueObserved)
+	}
+	if r2.ReasonCode != "" {
+		t.Errorf("rec 2 ReasonCode=%q want empty (reviewer skipped)", r2.ReasonCode)
+	}
+}
