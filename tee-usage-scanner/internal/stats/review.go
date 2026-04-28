@@ -3,25 +3,32 @@ package stats
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
-// collectReview reads 08_review/review_records.jsonl (the Phase 1
-// ground-truth labels) and produces TP/FP/NMC counts plus three
-// slicings: by case category, by arbiter status, by citation
-// validity bucket. Returns Present=false when the file is absent
-// — the run has not been reviewed yet.
+// collectReview reads 08_review/review_records.jsonl and produces
+// the Phase 1.5 ground-truth metrics: a verdict_counts distribution,
+// three explicit rate metrics, three slicings, and a reason_code
+// distribution. Returns Present=false when the file is absent — the
+// run has not been reviewed yet.
 //
-// The collector also reads case packs and the arbiter findings.json
-// so it can map each review record to its category (from the case)
-// and its arbiter status (from the finding). When a record cannot
-// be paired with a case or finding, the unknowns drop into "?"
-// buckets so the totals still reconcile.
+// The collector walks sidecar artifacts to enrich each record:
+//   - 03_cases/case-NNN.json    → category for ByCategory
+//   - 07_arbiter/findings.json  → status for ByArbiterStatus
+//   - 06_verifier/verify-NNN.json → ExpertCitationValidation, the
+//     authoritative source for ByCitationValidity bucketing
+//   - 04_expert/hypothesis-NNN.json → fallback when memo is legacy
+//     and lacks ExpertCitationValidation
+//
+// Records that cannot be paired with a finding fall into "?" buckets
+// so the totals still reconcile.
 func collectReview(runDir string) ReviewStats {
 	var s ReviewStats
 	jsonlPath := runfs.ReviewRecordsPath(runDir)
@@ -36,8 +43,7 @@ func collectReview(runDir string) ReviewStats {
 	}
 	s.Present = true
 
-	// Sidecar: case_id → category, finding_id → status, finding has
-	// any anchored citation.
+	// Sidecar 1: case_id → category
 	categoryByCase := map[string]string{}
 	for _, p := range globOrEmpty(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json")) {
 		var pack artifacts.CasePack
@@ -45,35 +51,54 @@ func collectReview(runDir string) ReviewStats {
 			categoryByCase[pack.CaseID] = pack.Category
 		}
 	}
+
+	// Sidecar 2: arbiter findings (status + index → finding lookup)
 	statusByFinding := map[string]string{}
-	anchoredByFinding := map[string]bool{}
+	indexByFinding := map[string]int{}
 	var findings artifacts.Findings
 	if err := runfs.ReadJSON(runfs.ArbiterFindingsPath(runDir), &findings); err == nil {
-		for _, f := range findings.Findings {
+		for i, f := range findings.Findings {
 			if f.FindingID == "" {
 				continue
 			}
 			statusByFinding[f.FindingID] = f.Status
-			anchoredByFinding[f.FindingID] = findingHasAnchoredEvidence(f)
+			indexByFinding[f.FindingID] = i
 		}
 	}
 
+	// Sidecar 3: verify-NNN.json + hypothesis-NNN.json (per
+	// finding index) for citation_validity bucketing
+	memos := make([]artifacts.VerificationMemo, len(findings.Findings))
+	hyps := make([]artifacts.Hypothesis, len(findings.Findings))
+	for i := range findings.Findings {
+		_ = runfs.ReadJSON(filepath.Join(runfs.VerifierDir(runDir), fmt.Sprintf("verify-%03d.json", i+1)), &memos[i])
+		_ = runfs.ReadJSON(filepath.Join(runfs.ExpertDir(runDir), fmt.Sprintf("hypothesis-%03d.json", i+1)), &hyps[i])
+	}
+
+	s.VerdictCounts = map[string]int{}
 	s.ByCategory = map[string]ReviewBucketAgg{}
 	s.ByArbiterStatus = map[string]ReviewBucketAgg{}
 	s.ByCitationValidity = map[string]ReviewBucketAgg{}
 	s.ReasonCodes = map[string]int{}
 
+	var tp, fp, nc, dr, nio, skip int
+
 	for _, rec := range records {
 		v := artifacts.NormalizeVerdict(rec.Verdict)
+		s.VerdictCounts[v]++
 		switch v {
 		case artifacts.VerdictTruePositive:
-			s.TPCount++
+			tp++
 		case artifacts.VerdictFalsePositive:
-			s.FPCount++
+			fp++
 		case artifacts.VerdictNeedsContext:
-			s.NMCCount++
+			nc++
+		case artifacts.VerdictDesignRisk:
+			dr++
+		case artifacts.VerdictNoIssueObserved:
+			nio++
 		case artifacts.VerdictSkip:
-			s.SkipCount++
+			skip++
 		}
 		// reason_code applies to any non-TP verdict; legacy fp_reason
 		// only on FP. EffectiveReasonCode collapses the two.
@@ -82,7 +107,7 @@ func collectReview(runDir string) ReviewStats {
 				s.ReasonCodes[code]++
 			}
 		}
-		s.TotalReviewed++
+		s.TotalLabeled++
 
 		// Category bucket
 		category := categoryByCase[rec.CaseID]
@@ -98,32 +123,90 @@ func collectReview(runDir string) ReviewStats {
 		}
 		bucketAdd(s.ByArbiterStatus, status, v)
 
-		// Citation validity bucket
-		validity := "unanchored"
-		if anchoredByFinding[rec.FindingID] {
-			validity = "validated"
+		// Citation validity bucket — drive off ExpertCitationValidation
+		// when present, fall back to evidence-anchoring otherwise.
+		validity := "no_citations"
+		if idx, ok := indexByFinding[rec.FindingID]; ok && idx < len(memos) {
+			validity = classifyCitationValidity(memos[idx], hyps[idx], findings.Findings[idx])
 		}
 		bucketAdd(s.ByCitationValidity, validity, v)
 	}
 
-	// Finalize FP rate (definitive labels only).
-	denom := s.TPCount + s.FPCount
-	if denom > 0 {
-		s.FPRate = float64(s.FPCount) / float64(denom)
-	}
-	for k, b := range s.ByCategory {
-		b.FPRate = bucketFPRate(b)
-		s.ByCategory[k] = b
-	}
-	for k, b := range s.ByArbiterStatus {
-		b.FPRate = bucketFPRate(b)
-		s.ByArbiterStatus[k] = b
-	}
-	for k, b := range s.ByCitationValidity {
-		b.FPRate = bucketFPRate(b)
-		s.ByCitationValidity[k] = b
-	}
+	s.CandidateLabeled = tp + fp + nc + dr
+
+	// Three explicit rates. Numerators and denominators are
+	// preserved so consumers can detect low-sample rates.
+	s.FPRateDefinitive = newRate(fp, tp+fp)
+	s.FPRateReviewed = newRate(fp, s.CandidateLabeled)
+	s.NonTPRateReviewed = newRate(fp+nc+dr, s.CandidateLabeled)
+
 	return s
+}
+
+// classifyCitationValidity determines the 5-bucket discriminator:
+//
+//   no_citations    — hypothesis carried no CitedFacts
+//   all_valid       — every validation entry is StatusValid
+//   partially_valid — at least one valid + at least one not
+//   unanchored      — none valid; all entries are StatusUnanchored
+//   unresolved      — none valid; mixed unresolved/stale or all
+//                     unresolved/stale (the worst-case bucket)
+//
+// The bucket is computed from VerificationMemo.ExpertCitationValidation
+// when present (V1.1.2+ memos). For pre-V1.1.2 memos that carry no
+// validation array, the function falls back to inspecting the
+// FindingItem.Evidence list — a coarse anchored/unanchored split.
+func classifyCitationValidity(memo artifacts.VerificationMemo, hyp artifacts.Hypothesis, f artifacts.FindingItem) string {
+	// Modern path: V1.1.2 verifier populates ExpertCitationValidation.
+	if len(memo.ExpertCitationValidation) > 0 {
+		var valid, unanchored, unresolved, stale int
+		for _, cv := range memo.ExpertCitationValidation {
+			switch cv.Status {
+			case citations.StatusValid:
+				valid++
+			case citations.StatusUnanchored:
+				unanchored++
+			case citations.StatusUnresolved:
+				unresolved++
+			case citations.StatusStale:
+				stale++
+			}
+		}
+		total := len(memo.ExpertCitationValidation)
+		switch {
+		case valid == total:
+			return "all_valid"
+		case valid > 0:
+			return "partially_valid"
+		case unanchored == total:
+			return "unanchored"
+		default:
+			// Pure unresolved, pure stale, or any mix that has no
+			// valid entries. Bucket as "unresolved" — the most
+			// pessimistic non-unanchored failure mode.
+			return "unresolved"
+		}
+	}
+
+	// Legacy fallback: no validation array on the memo. If the
+	// hypothesis declares CitedFacts but the verifier didn't
+	// validate them, infer from the arbiter Evidence list.
+	if len(hyp.CitedFacts) == 0 {
+		return "no_citations"
+	}
+	if findingHasAnchoredEvidence(f) {
+		return "all_valid"
+	}
+	return "unanchored"
+}
+
+func newRate(numerator, denominator int) RateMetric {
+	rm := RateMetric{Numerator: numerator, Denominator: denominator}
+	if denominator > 0 {
+		v := float64(numerator) / float64(denominator)
+		rm.Value = &v
+	}
+	return rm
 }
 
 func loadReviewRecords(path string) ([]artifacts.ReviewRecord, bool) {
@@ -149,31 +232,25 @@ func loadReviewRecords(path string) ([]artifacts.ReviewRecord, bool) {
 	return out, true
 }
 
+// bucketAdd accumulates a verdict into a named bucket. The bucket
+// keeps the full verdict_counts cross-tab — top-level rates carry
+// the rate definitions, so per-bucket rates aren't computed (they
+// would invite definition drift).
 func bucketAdd(m map[string]ReviewBucketAgg, key, verdict string) {
 	b := m[key]
+	if b.VerdictCounts == nil {
+		b.VerdictCounts = map[string]int{}
+	}
 	b.Total++
-	switch verdict {
-	case artifacts.VerdictTruePositive:
-		b.TP++
-	case artifacts.VerdictFalsePositive:
-		b.FP++
-	case artifacts.VerdictNeedsContext:
-		b.NMC++
-	}
+	b.VerdictCounts[verdict]++
 	m[key] = b
-}
-
-func bucketFPRate(b ReviewBucketAgg) float64 {
-	denom := b.TP + b.FP
-	if denom == 0 {
-		return 0
-	}
-	return float64(b.FP) / float64(denom)
 }
 
 // findingHasAnchoredEvidence returns true iff the finding has at
 // least one Evidence entry that is NOT prefixed with [unanchored.
-// Mirrors arbiter.buildFindingEvidence's tagging convention.
+// Mirrors arbiter.buildFindingEvidence's tagging convention. Used
+// only as a fallback for pre-V1.1.2 memos that carry no
+// ExpertCitationValidation array.
 func findingHasAnchoredEvidence(f artifacts.FindingItem) bool {
 	for _, e := range f.Evidence {
 		if !strings.HasPrefix(e, "[unanchored") {

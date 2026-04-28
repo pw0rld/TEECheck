@@ -89,12 +89,17 @@ func Print(w io.Writer, rs *RunStats) {
 			formatMapInt(a.SeverityDistribution), formatMapInt(a.ConfidenceDistribution))
 	}
 
-	// Review (Phase 1 ground truth)
+	// Review (human ground truth — Phase 1.5)
 	if rs.Review.Present {
 		r := rs.Review
 		fmt.Fprintf(w, "\nReview (human ground truth)\n")
-		fmt.Fprintf(w, "  total_reviewed=%d  TP=%d  FP=%d  NMC=%d  skip=%d  fp_rate=%.2f\n",
-			r.TotalReviewed, r.TPCount, r.FPCount, r.NMCCount, r.SkipCount, r.FPRate)
+		fmt.Fprintf(w, "  total_labeled=%d  candidate_labeled=%d\n", r.TotalLabeled, r.CandidateLabeled)
+		if len(r.VerdictCounts) > 0 {
+			fmt.Fprintf(w, "  verdict_counts=%s\n", formatMapInt(r.VerdictCounts))
+		}
+		fmt.Fprintf(w, "  fp_rate_definitive=%s   (FP / TP+FP)\n", formatRate(r.FPRateDefinitive))
+		fmt.Fprintf(w, "  fp_rate_reviewed=%s    (FP / candidate_labeled)\n", formatRate(r.FPRateReviewed))
+		fmt.Fprintf(w, "  non_tp_rate_reviewed=%s (FP+NC+DR / candidate_labeled)\n", formatRate(r.NonTPRateReviewed))
 		if len(r.ReasonCodes) > 0 {
 			fmt.Fprintf(w, "  reason_codes=%s\n", formatMapInt(r.ReasonCodes))
 		}
@@ -130,9 +135,19 @@ func printReviewBuckets(w io.Writer, m map[string]ReviewBucketAgg) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		b := m[k]
-		fmt.Fprintf(w, "    %-22s tp=%d fp=%d nmc=%d  fp_rate=%.2f\n",
-			k, b.TP, b.FP, b.NMC, b.FPRate)
+		fmt.Fprintf(w, "    %-22s total=%d  %s\n",
+			k, b.Total, formatMapInt(b.VerdictCounts))
 	}
+}
+
+// formatRate renders a RateMetric as "value (n/d)", using "n/a" when
+// the denominator is 0. Numerator/denominator are always shown so
+// reviewers can spot low-sample rates at a glance.
+func formatRate(r RateMetric) string {
+	if r.Value == nil {
+		return fmt.Sprintf("n/a (%d/%d)", r.Numerator, r.Denominator)
+	}
+	return fmt.Sprintf("%.2f (%d/%d)", *r.Value, r.Numerator, r.Denominator)
 }
 
 func formatMapInt(m map[string]int) string {

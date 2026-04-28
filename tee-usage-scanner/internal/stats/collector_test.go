@@ -486,9 +486,16 @@ func TestCollect_TypedCitationsWithoutRepoIsZero(t *testing.T) {
 	}
 }
 
-// TestCollect_ReviewLabels exercises Phase 1 review-labels:
-// review_records.jsonl drives TP/FP/NMC counts, and case packs +
-// findings.json supply the slicing dimensions.
+// TestCollect_ReviewLabels exercises Phase 1.5 review-labels with
+// V1.1.2+ memos that carry ExpertCitationValidation. Three findings
+// across two categories, three verdicts, two citation buckets.
+//
+// Expected:
+//   verdict_counts = {TP:1, FP:1, NC:1}
+//   total_labeled=3, candidate_labeled=3
+//   fp_rate_definitive = 1/(1+1) = 0.5
+//   fp_rate_reviewed   = 1/3 ≈ 0.333
+//   non_tp_rate_reviewed = (1+1)/3 ≈ 0.667
 func TestCollect_ReviewLabels(t *testing.T) {
 	dir := t.TempDir()
 	repo := t.TempDir()
@@ -517,6 +524,18 @@ func TestCollect_ReviewLabels(t *testing.T) {
 	}
 	writeJSON(t, filepath.Join(dir, "07_arbiter", "findings.json"), findings)
 
+	// Memos drive citation_validity bucketing. F1 + F3 are
+	// all_valid (single citation each, status=valid). F2 is
+	// unanchored (no bytes resolved).
+	for i, status := range []string{citations.StatusValid, citations.StatusUnanchored, citations.StatusValid} {
+		memo := artifacts.VerificationMemo{
+			ExpertCitationValidation: []citations.CitationValidation{
+				{FactText: "claim", Status: status},
+			},
+		}
+		writeJSON(t, filepath.Join(dir, "06_verifier", "verify-00"+itoa(i+1)+".json"), memo)
+	}
+
 	jsonlPath := filepath.Join(dir, "08_review", "review_records.jsonl")
 	if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -540,29 +559,129 @@ func TestCollect_ReviewLabels(t *testing.T) {
 	if !r.Present {
 		t.Fatal("Review not present")
 	}
-	if r.TotalReviewed != 3 || r.TPCount != 1 || r.FPCount != 1 || r.NMCCount != 1 {
-		t.Errorf("counts: total=%d TP=%d FP=%d NMC=%d", r.TotalReviewed, r.TPCount, r.FPCount, r.NMCCount)
+	if r.TotalLabeled != 3 || r.CandidateLabeled != 3 {
+		t.Errorf("totals: total_labeled=%d candidate_labeled=%d", r.TotalLabeled, r.CandidateLabeled)
 	}
-	if r.FPRate != 0.5 {
-		t.Errorf("FPRate=%v want 0.5", r.FPRate)
+	if r.VerdictCounts[artifacts.VerdictTruePositive] != 1 ||
+		r.VerdictCounts[artifacts.VerdictFalsePositive] != 1 ||
+		r.VerdictCounts[artifacts.VerdictNeedsContext] != 1 {
+		t.Errorf("verdict_counts=%v", r.VerdictCounts)
+	}
+	if v := r.FPRateDefinitive; v.Value == nil || *v.Value != 0.5 || v.Numerator != 1 || v.Denominator != 2 {
+		t.Errorf("fp_rate_definitive=%+v want 0.5 (1/2)", v)
+	}
+	if v := r.FPRateReviewed; v.Value == nil || !approx(*v.Value, 1.0/3.0) || v.Numerator != 1 || v.Denominator != 3 {
+		t.Errorf("fp_rate_reviewed=%+v want 0.333 (1/3)", v)
+	}
+	if v := r.NonTPRateReviewed; v.Value == nil || !approx(*v.Value, 2.0/3.0) || v.Numerator != 2 || v.Denominator != 3 {
+		t.Errorf("non_tp_rate_reviewed=%+v want 0.667 (2/3)", v)
 	}
 	if r.ReasonCodes[artifacts.ReasonOuterValidationMissed] != 1 {
 		t.Errorf("ReasonCodes[outer_validation_missed]=%d want 1", r.ReasonCodes[artifacts.ReasonOuterValidationMissed])
 	}
-	if att := r.ByCategory["attestation"]; att.Total != 2 || att.TP != 1 {
+	att := r.ByCategory["attestation"]
+	if att.Total != 2 || att.VerdictCounts[artifacts.VerdictTruePositive] != 1 ||
+		att.VerdictCounts[artifacts.VerdictNeedsContext] != 1 {
 		t.Errorf("ByCategory[attestation]=%+v", att)
 	}
-	if bnd := r.ByCategory["boundary"]; bnd.FP != 1 || bnd.FPRate != 1.0 {
+	bnd := r.ByCategory["boundary"]
+	if bnd.Total != 1 || bnd.VerdictCounts[artifacts.VerdictFalsePositive] != 1 {
 		t.Errorf("ByCategory[boundary]=%+v", bnd)
 	}
-	if nr := r.ByArbiterStatus["needs_review"]; nr.TP != 1 || nr.FP != 1 || nr.FPRate != 0.5 {
+	nr := r.ByArbiterStatus["needs_review"]
+	if nr.Total != 2 || nr.VerdictCounts[artifacts.VerdictTruePositive] != 1 ||
+		nr.VerdictCounts[artifacts.VerdictFalsePositive] != 1 {
 		t.Errorf("ByArbiterStatus[needs_review]=%+v", nr)
 	}
-	if val := r.ByCitationValidity["validated"]; val.TP != 1 || val.NMC != 1 {
-		t.Errorf("ByCitationValidity[validated]=%+v", val)
+	allValid := r.ByCitationValidity["all_valid"]
+	if allValid.Total != 2 || allValid.VerdictCounts[artifacts.VerdictTruePositive] != 1 ||
+		allValid.VerdictCounts[artifacts.VerdictNeedsContext] != 1 {
+		t.Errorf("ByCitationValidity[all_valid]=%+v", allValid)
 	}
-	if una := r.ByCitationValidity["unanchored"]; una.FP != 1 || una.FPRate != 1.0 {
-		t.Errorf("ByCitationValidity[unanchored]=%+v want FP=1 rate=1.0", una)
+	una := r.ByCitationValidity["unanchored"]
+	if una.Total != 1 || una.VerdictCounts[artifacts.VerdictFalsePositive] != 1 {
+		t.Errorf("ByCitationValidity[unanchored]=%+v want total=1 FP=1", una)
+	}
+}
+
+func approx(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}
+
+// TestCollect_ReviewLabels_FiveBucketCoverage forces every
+// citation_validity bucket via crafted ExpertCitationValidation
+// shapes: all_valid / partially_valid / unanchored / unresolved /
+// no_citations. Each finding is labeled false_positive so the
+// bucket's verdict_counts cleanly reflect placement.
+func TestCollect_ReviewLabels_FiveBucketCoverage(t *testing.T) {
+	dir := t.TempDir()
+
+	// Five findings, one per bucket.
+	findings := artifacts.Findings{
+		Findings: []artifacts.FindingItem{
+			{FindingID: "f-all", SliceID: "f-all", Status: "needs_review"},
+			{FindingID: "f-part", SliceID: "f-part", Status: "needs_review"},
+			{FindingID: "f-un", SliceID: "f-un", Status: "needs_review"},
+			{FindingID: "f-unr", SliceID: "f-unr", Status: "needs_review"},
+			{FindingID: "f-none", SliceID: "f-none", Status: "needs_review"},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "07_arbiter", "findings.json"), findings)
+
+	memos := []artifacts.VerificationMemo{
+		// f-all: two valid → all_valid
+		{ExpertCitationValidation: []citations.CitationValidation{
+			{Status: citations.StatusValid}, {Status: citations.StatusValid},
+		}},
+		// f-part: one valid + one unanchored → partially_valid
+		{ExpertCitationValidation: []citations.CitationValidation{
+			{Status: citations.StatusValid}, {Status: citations.StatusUnanchored},
+		}},
+		// f-un: all unanchored → unanchored
+		{ExpertCitationValidation: []citations.CitationValidation{
+			{Status: citations.StatusUnanchored}, {Status: citations.StatusUnanchored},
+		}},
+		// f-unr: stale + unresolved (any non-valid mix that isn't
+		// pure unanchored) → unresolved
+		{ExpertCitationValidation: []citations.CitationValidation{
+			{Status: citations.StatusStale}, {Status: citations.StatusUnresolved},
+		}},
+		// f-none: empty validation array, empty hyp → no_citations
+		{ExpertCitationValidation: nil},
+	}
+	for i, m := range memos {
+		writeJSON(t, filepath.Join(dir, "06_verifier", "verify-00"+itoa(i+1)+".json"), m)
+	}
+
+	// All five labeled FP for clean bucket assertions.
+	jsonlPath := filepath.Join(dir, "08_review", "review_records.jsonl")
+	_ = os.MkdirAll(filepath.Dir(jsonlPath), 0o755)
+	f, _ := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY, 0o644)
+	enc := json.NewEncoder(f)
+	for _, fid := range []string{"f-all", "f-part", "f-un", "f-unr", "f-none"} {
+		_ = enc.Encode(artifacts.ReviewRecord{
+			CaseID: fid, FindingID: fid,
+			Verdict:    artifacts.VerdictFalsePositive,
+			ReasonCode: artifacts.ReasonSnippetTruncation,
+			ReviewedAt: "t",
+		})
+	}
+	_ = f.Close()
+
+	rs, err := stats.Collect(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bv := rs.Review.ByCitationValidity
+	for _, want := range []string{"all_valid", "partially_valid", "unanchored", "unresolved", "no_citations"} {
+		b := bv[want]
+		if b.Total != 1 || b.VerdictCounts[artifacts.VerdictFalsePositive] != 1 {
+			t.Errorf("bucket %q = %+v want total=1 FP=1", want, b)
+		}
 	}
 }
 
@@ -587,11 +706,11 @@ func TestCollect_ReviewLegacyVerdicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rs.Review.TPCount != 1 {
-		t.Errorf("legacy 'confirmed' should map to TP, got %d", rs.Review.TPCount)
+	if rs.Review.VerdictCounts[artifacts.VerdictTruePositive] != 1 {
+		t.Errorf("legacy 'confirmed' should map to TP, got %v", rs.Review.VerdictCounts)
 	}
-	if rs.Review.FPCount != 1 {
-		t.Errorf("legacy 'dismissed' should map to FP, got %d", rs.Review.FPCount)
+	if rs.Review.VerdictCounts[artifacts.VerdictFalsePositive] != 1 {
+		t.Errorf("legacy 'dismissed' should map to FP, got %v", rs.Review.VerdictCounts)
 	}
 }
 
