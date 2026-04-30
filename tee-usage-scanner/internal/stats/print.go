@@ -89,6 +89,34 @@ func Print(w io.Writer, rs *RunStats) {
 			formatMapInt(a.SeverityDistribution), formatMapInt(a.ConfidenceDistribution))
 	}
 
+	// Review (human ground truth — Phase 1.5)
+	if rs.Review.Present {
+		r := rs.Review
+		fmt.Fprintf(w, "\nReview (human ground truth)\n")
+		fmt.Fprintf(w, "  total_labeled=%d  candidate_labeled=%d\n", r.TotalLabeled, r.CandidateLabeled)
+		if len(r.VerdictCounts) > 0 {
+			fmt.Fprintf(w, "  verdict_counts=%s\n", formatMapInt(r.VerdictCounts))
+		}
+		fmt.Fprintf(w, "  fp_rate_definitive=%s   (FP / TP+FP)\n", formatRate(r.FPRateDefinitive))
+		fmt.Fprintf(w, "  fp_rate_reviewed=%s     (FP / candidate_labeled)\n", formatRate(r.FPRateReviewed))
+		fmt.Fprintf(w, "  non_positive_rate=%s    (FP+NC+DR / candidate_labeled)\n", formatRate(r.NonPositiveRate))
+		if len(r.ReasonCodes) > 0 {
+			fmt.Fprintf(w, "  reason_codes=%s\n", formatMapInt(r.ReasonCodes))
+		}
+		if len(r.ByArbiterStatus) > 0 {
+			fmt.Fprintln(w, "  by_arbiter_status:")
+			printReviewBuckets(w, r.ByArbiterStatus)
+		}
+		if len(r.ByCategory) > 0 {
+			fmt.Fprintln(w, "  by_category:")
+			printReviewBuckets(w, r.ByCategory)
+		}
+		if len(r.ByCitationValidity) > 0 {
+			fmt.Fprintln(w, "  by_citation_validity:")
+			printReviewBuckets(w, r.ByCitationValidity)
+		}
+	}
+
 	// Overall
 	o := rs.Overall
 	fmt.Fprintf(w, "\nOverall\n")
@@ -97,6 +125,29 @@ func Print(w io.Writer, rs *RunStats) {
 	fmt.Fprintf(w, "  dropoff: candidates=%d cases=%d hypotheses=%d challenges=%d verifies=%d findings=%d corroborated=%d\n",
 		o.Dropoff.Candidates, o.Dropoff.Cases, o.Dropoff.Hypotheses,
 		o.Dropoff.Challenges, o.Dropoff.Verifies, o.Dropoff.Findings, o.Dropoff.Corroborated)
+}
+
+func printReviewBuckets(w io.Writer, m map[string]ReviewBucketAgg) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b := m[k]
+		fmt.Fprintf(w, "    %-22s total=%d  %s\n",
+			k, b.Total, formatMapInt(b.VerdictCounts))
+	}
+}
+
+// formatRate renders a RateMetric as "value (n/d)", using "n/a" when
+// the denominator is 0. Numerator/denominator are always shown so
+// reviewers can spot low-sample rates at a glance.
+func formatRate(r RateMetric) string {
+	if r.Value == nil {
+		return fmt.Sprintf("n/a (%d/%d)", r.Numerator, r.Denominator)
+	}
+	return fmt.Sprintf("%.2f (%d/%d)", *r.Value, r.Numerator, r.Denominator)
 }
 
 func formatMapInt(m map[string]int) string {

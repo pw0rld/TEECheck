@@ -1,0 +1,306 @@
+{
+  "schema_version": "teecheck.example_finding_labels.v1",
+  "reviewed_at": "2026-04-28",
+  "labels": [
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:001",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "needs_context",
+      "secondary_verdict": "design_risk",
+      "reason_code": "protocol_semantics_missed",
+      "notes": "ClientAuthRequestInput discards payload, but the path uses Noise HandshakeNX. Vulnerability depends on whether clients are intended to attest."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:006",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "design_risk",
+      "reason_code": "wrapper_policy_split",
+      "notes": "verify_report is a thin sgx_verify_report wrapper; issue requires call-site evidence that callers treat it as full policy verification."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:005",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "snippet_truncation",
+      "notes": "Target implementation was absent from the packet."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:authorization:002",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "snippet_truncation",
+      "notes": "Target implementation was absent from the packet."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "delegated_policy_unresolved",
+      "notes": "Requires get_verifier implementation and call-flow review."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:007",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Nonce lifecycle must be verified at call sites."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:009",
+      "scanner_status": "no_issue_observed",
+      "human_verdict": "no_issue_observed",
+      "notes": "Scanner rejected the issue."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:attestation:010",
+      "scanner_status": "no_issue_observed",
+      "human_verdict": "no_issue_observed",
+      "notes": "Scanner rejected the issue."
+    },
+    {
+      "example": "mobilecoin-l3-v22-scan",
+      "finding_id": "mobilecoin@59a52d3:tee:key_management:011",
+      "scanner_status": "no_issue_observed",
+      "human_verdict": "no_issue_observed",
+      "notes": "Scanner rejected the issue."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:attestation:004",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "false_positive",
+      "reason_code": "outer_validation_missed",
+      "notes": "IAS verify path checks AVR signature, timestamp, status, GID, debug flag, TCB eval number, and returns verified identity for upper-layer policy."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:authorization:006",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Needs call-site and consensus/runtime policy flow."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:boundary:002",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Depends on Host trait and RPC boundary guarantees."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:attestation:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Requires full caller review for replay protection."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:boundary:005",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "snippet_truncation",
+      "notes": "Packet was affected by truncated context."
+    },
+    {
+      "example": "oasis-core-scan",
+      "finding_id": "oasis-core@e650c8e:tee:attestation:001",
+      "scanner_status": "no_issue_observed",
+      "human_verdict": "no_issue_observed",
+      "notes": "Scanner rejected the issue."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:attestation:001",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "deployment_context_required",
+      "notes": "opt_out_enabled path exists, but impact depends on production config and confidence_level handling."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:attestation:002",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "false_positive",
+      "reason_code": "outer_validation_missed",
+      "notes": "Report inspected verify_signature in isolation and missed validate_ias_report policy checks."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:attestation:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "true_positive",
+      "secondary_verdict": "needs_context",
+      "notes": "DCAP verifier explicitly skips misc_select and attributes verification. Impact depends on production trust policy."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:key_management:005",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "true_positive",
+      "secondary_verdict": "design_risk",
+      "notes": "Master key seal/unseal path uses expect/assert and can panic on corrupted sealed data or failed integrity checks."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:boundary:004",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Requires full implementation and entrypoint review."
+    },
+    {
+      "example": "phala-blockchain-scan",
+      "finding_id": "phala-blockchain@654b1b6:tee:attestation:006",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "delegated_policy_unresolved",
+      "notes": "Requires full sgx_attestation::dcap path and collateral trust policy."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:attestation:001",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "design_risk",
+      "reason_code": "feature_flag_context_missed",
+      "notes": "dangerous_verify_with_tcb_override is real but behind non-default danger-allow-tcb-override feature."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:attestation:005",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "parser_verifier_split",
+      "notes": "Parser-only API risk depends on call-site use before verification."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:attestation:004",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "caller_context_missing",
+      "notes": "Caller-provided time is common in libraries; impact depends on caller trust boundary."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:boundary:002",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "snippet_truncation",
+      "notes": "Original packet lacked implementation lines."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:boundary:006",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "snippet_truncation",
+      "notes": "Requires PyQuote::parse review."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:attestation:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "parser_verifier_split",
+      "notes": "Valid separation if verifier is mandatory before trust decisions."
+    },
+    {
+      "example": "phala-dcap-qvl-scan",
+      "finding_id": "dcap-qvl@90c4c9f:tee:attestation:007",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "parser_verifier_split",
+      "notes": "Type-state hardening suggestion, not a proven vulnerability."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:attestation:001",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "true_positive",
+      "secondary_verdict": "needs_context",
+      "notes": "Attestation generation passes nonce: None. Exploitability depends on relying-party freshness requirements."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:attestation:002",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "false_positive",
+      "reason_code": "cfg_context_missed",
+      "notes": "validate_manifest uses attestation_doc in cfg(not(feature = \"mock\")) block."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:attestation:006",
+      "scanner_status": "confirmed_candidate",
+      "human_verdict": "true_positive",
+      "secondary_verdict": "design_risk",
+      "notes": "timestamp_ms parses a nonce-less attestation document with unsafe_attestation_doc_from_der and returns only the timestamp."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:key_management:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "caller_context_missing",
+      "notes": "Requires RPC/transport call graph."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:key_management:004",
+      "scanner_status": "needs_review",
+      "human_verdict": "false_positive",
+      "reason_code": "snippet_truncation",
+      "notes": "The implementation is visible in source and uses attestation_doc in non-mock builds."
+    },
+    {
+      "example": "quorumos-scan",
+      "finding_id": "qos@df1e355:tee:boundary:005",
+      "scanner_status": "needs_review",
+      "human_verdict": "design_risk",
+      "reason_code": "boundary_assumption_unproven",
+      "notes": "Trait abstraction and OS ACL assumptions should be documented, but this is not a proven vulnerability."
+    },
+    {
+      "example": "oasis-sdk-scan",
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:001",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "test_code_boundary_overclassification",
+      "notes": "Test runtime AppId accessor is not enough to establish a runtime boundary flaw."
+    },
+    {
+      "example": "oasis-sdk-scan",
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:002",
+      "scanner_status": "no_issue_observed",
+      "human_verdict": "no_issue_observed",
+      "notes": "Procedural macro error derivation is not direct runtime ingress."
+    },
+    {
+      "example": "oasis-sdk-scan",
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:003",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "macro_boundary_overclassification",
+      "notes": "Macro helper utilities are not enough to establish runtime boundary ownership."
+    },
+    {
+      "example": "oasis-sdk-scan",
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:004",
+      "scanner_status": "needs_review",
+      "human_verdict": "needs_context",
+      "reason_code": "macro_boundary_overclassification",
+      "notes": "Macro scaffolding may generate boundary code, but the packet does not show a missing runtime control."
+    }
+  ]
+}

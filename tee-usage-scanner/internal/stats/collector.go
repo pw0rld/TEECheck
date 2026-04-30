@@ -46,6 +46,7 @@ func Collect(runDir, repoRoot string) (*RunStats, error) {
 	rs.Challenger = collectChallenger(runDir)
 	rs.Verifier = collectVerifier(runDir)
 	rs.Arbiter = collectArbiter(runDir, rs.Verifier.MemoCount)
+	rs.Review = collectReview(runDir)
 	rs.Overall = computeOverall(rs)
 	rs.Source = computeOverallSource(rs)
 	return rs, nil
@@ -311,8 +312,23 @@ func collectExpert(runDir, repoRoot string) ExpertStats {
 		lengths = append(lengths, len(strings.Fields(body)))
 		factCounts = append(factCounts, len(h.SupportingFacts))
 
+		// Prefer the structured CitedFacts when present (v1.1.1+).
+		// Fall back to the flat Cited pool for legacy hypotheses
+		// or for heuristic-mode runs that did not populate the
+		// per-fact list. The two paths produce identical numbers
+		// when CitedFacts is correctly flattened into Cited (which
+		// expert.RunWithEvents does), but the explicit branch
+		// avoids double-counting when both fields are present.
+		var citePool []citations.CitedBytes
+		if len(h.CitedFacts) > 0 {
+			for _, f := range h.CitedFacts {
+				citePool = append(citePool, f.Cited...)
+			}
+		} else {
+			citePool = h.Cited
+		}
 		hadValid := false
-		for _, c := range h.Cited {
+		for _, c := range citePool {
 			allCitations++
 			if !canValidate {
 				continue

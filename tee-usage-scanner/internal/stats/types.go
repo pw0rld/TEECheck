@@ -28,6 +28,7 @@ type RunStats struct {
 	Challenger ChallengerStats `json:"challenger"`
 	Verifier   VerifierStats   `json:"verifier"`
 	Arbiter    ArbiterStats    `json:"arbiter"`
+	Review     ReviewStats     `json:"review,omitempty"`
 	Overall    OverallStats    `json:"overall"`
 }
 
@@ -120,6 +121,92 @@ type ArbiterStats struct {
 	SeverityDistribution  map[string]int `json:"severity_distribution"`
 	VerifierAgreementRate float64        `json:"verifier_agreement_rate"`
 	PacketWordcountP50    int            `json:"packet_wordcount_p50"`
+}
+
+// ReviewStats aggregates human ground-truth labels from
+// 08_review/review_records.jsonl. Empty / Present=false when the
+// run has not been reviewed yet — the typical state for fresh
+// dogfood data.
+//
+// Phase 1.5 expanded the metric vocabulary so multiple
+// reviewer-facing rates coexist instead of a single ambiguous
+// "fp_rate":
+//
+//   - FPRateDefinitive = FP / (TP + FP)            "of the
+//     decisions where I was certain, how often was scanner wrong?"
+//   - FPRateReviewed   = FP / candidate_labeled    "of all
+//     candidates I evaluated, how often did scanner outright miss?"
+//   - NonPositiveRate  = (FP+NC+DR) / candidate    "what fraction
+//     of the scanner's candidates failed to convert to TP?"
+//
+// "Non-positive" rather than "non-TP" — the latter is fuzzy because
+// NIO is also not TP but lives outside the candidate denominator.
+//
+// candidate_labeled is the sum of TP, FP, NC and DR — it excludes
+// no_issue_observed (scanner self-rejected, never a real candidate)
+// and skip (reviewer abstained). Use IsCandidateVerdict /
+// IsDefinitiveVerdict from the artifacts package to keep the
+// classification logic in one place.
+//
+// All three rates are reported as RateMetric so consumers can see
+// the underlying numerator/denominator and treat low-sample rates
+// (e.g. 1/1 = 1.0) with appropriate caution.
+//
+// Slices: ByCategory keys are case category fields (attestation /
+// authorization / boundary / ...). ByArbiterStatus keys are
+// findings.json status values (no_issue_observed / needs_review /
+// likely_issue / confirmed_candidate). ByCitationValidity keys are
+// the five Phase 1.5 buckets:
+//
+//   - "all_valid"        — every expert citation resolved cleanly
+//   - "partially_valid"  — at least one valid + at least one not
+//   - "unanchored"       — citations exist but none anchor to bytes
+//   - "unresolved"       — citations exist but failed to resolve
+//                          (file moved, hash mismatch, repo root
+//                          missing, or mixed-failure)
+//   - "no_citations"     — hypothesis carried no CitedFacts at all
+//
+// Each bucket carries the cross-tab VerdictCounts so the reviewer
+// can answer "do anchored citations actually correlate with TP?"
+//
+// ReasonCodes counts the reason_code distribution. Reads via
+// ReviewRecord.EffectiveReasonCode() so legacy fp_reason values
+// keep flowing through unchanged.
+type ReviewStats struct {
+	Present          bool           `json:"present"`
+	TotalLabeled     int            `json:"total_labeled"`
+	CandidateLabeled int            `json:"candidate_labeled"`
+	VerdictCounts    map[string]int `json:"verdict_counts,omitempty"`
+
+	FPRateDefinitive RateMetric `json:"fp_rate_definitive"`
+	FPRateReviewed   RateMetric `json:"fp_rate_reviewed"`
+	NonPositiveRate  RateMetric `json:"non_positive_rate"`
+
+	ByCategory         map[string]ReviewBucketAgg `json:"by_category,omitempty"`
+	ByArbiterStatus    map[string]ReviewBucketAgg `json:"by_arbiter_status,omitempty"`
+	ByCitationValidity map[string]ReviewBucketAgg `json:"by_citation_validity,omitempty"`
+	ReasonCodes        map[string]int             `json:"reason_codes,omitempty"`
+}
+
+// ReviewBucketAgg is the per-slice cross-tab. Total is the row
+// total; VerdictCounts is verdict→count for everything that landed
+// in this bucket. The bucket-level rate is intentionally not
+// pre-computed — the three top-level RateMetric values cover the
+// useful definitions, and computing yet another rate at the bucket
+// granularity would invite definition drift.
+type ReviewBucketAgg struct {
+	Total         int            `json:"total"`
+	VerdictCounts map[string]int `json:"verdict_counts,omitempty"`
+}
+
+// RateMetric carries a rate together with its underlying
+// numerator and denominator so consumers can spot low-sample rates
+// (e.g. 1/1 = 1.0) without recomputing. Value is nil when the
+// denominator is 0 — the rate is undefined for that sample.
+type RateMetric struct {
+	Value       *float64 `json:"value,omitempty"`
+	Numerator   int      `json:"numerator"`
+	Denominator int      `json:"denominator"`
 }
 
 // OverallStats ties the stage counts together.

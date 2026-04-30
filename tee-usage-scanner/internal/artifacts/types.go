@@ -161,17 +161,41 @@ type Hypothesis struct {
 	Summary            string          `json:"summary"`
 	SuspectedIssue     string          `json:"suspected_issue"`
 	MissingObligations []string        `json:"missing_obligations,omitempty"`
-	SupportingFacts    []string        `json:"supporting_facts,omitempty"`
-	KnowledgeHints     []KnowledgeHint `json:"knowledge_hints,omitempty"`
-	Confidence         string          `json:"confidence"`
-	NeedsVerification  bool            `json:"needs_verification"`
-	// Cited is the byte-citation list backing this hypothesis. Each
-	// entry pins a region of source bytes the expert claims to be
-	// quoting; stats validates them against repo bytes to compute
-	// CitationRate / CitationValidityRate. Empty on legacy
-	// hypotheses written before the citation contract — those land
-	// in stats with a zero typed-citation rate, which is the right
-	// answer (they were not in fact citing).
+	// SupportingFacts holds the validated free-text claims —
+	// the Text of every CitedFact whose citations all resolved
+	// against the live repo. Legacy hypotheses (pre-v1.1.1) used
+	// this as the only fact field. v1.1.1+ should prefer CitedFacts
+	// and treat SupportingFacts as a display fallback. Facts whose
+	// citations failed to resolve are intentionally NOT mirrored
+	// here, so consumers can distinguish "asserted + validated"
+	// from "asserted only" at a glance.
+	SupportingFacts []string `json:"supporting_facts,omitempty"`
+	// CitedFacts is the v1.1.1 canonical fact field: each entry is
+	// a free-text claim plus the byte regions backing it.
+	// expert.Run calls citations.Resolve on each citation before
+	// persistence and drops citations that fail. A fact may end up
+	// with an empty Cited list — that's an acknowledged "asserted
+	// but could not anchor" case, not promoted to SupportingFacts.
+	CitedFacts []citations.CitedFact `json:"cited_facts,omitempty"`
+	// UntypedFacts holds free-text context that was NOT validated:
+	//   - legacy supporting_facts returned by an LLM that ignored
+	//     the cited_facts schema
+	//   - flattened tool hits (ripgrep matches injected by the
+	//     expert pipeline) — useful context but not citation-anchored
+	// V1.1.2 polish C2: kept separate from SupportingFacts so the
+	// "validated facts" surface remains honest. Verifier prompt and
+	// arbiter Evidence render these with an explicit [unanchored]
+	// tag; they never silently merge with cited claims.
+	UntypedFacts []string `json:"untyped_facts,omitempty"`
+	KnowledgeHints []KnowledgeHint    `json:"knowledge_hints,omitempty"`
+	Confidence     string             `json:"confidence"`
+	NeedsVerification bool            `json:"needs_verification"`
+	// Cited is the flat hypothesis-level citation pool. v1.1.1
+	// populates it as the union of every citation across CitedFacts
+	// (de-duplicated) so the older "Cited" reading path
+	// (report rendering, legacy stats) keeps working during the
+	// migration. Stats prefers CitedFacts when present; the Cited
+	// field is the fallback for legacy hypotheses.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
@@ -188,31 +212,106 @@ type Challenge struct {
 }
 
 type VerificationMemo struct {
-	SchemaVersion  string   `json:"schema_version"`
-	CaseID         string   `json:"case_id"`
-	AgentID        string   `json:"agent_id"`
-	Status         string   `json:"status"`
-	ChecksRun      []string `json:"checks_run,omitempty"`
+	SchemaVersion string `json:"schema_version"`
+	CaseID        string `json:"case_id"`
+	AgentID       string `json:"agent_id"`
+	Status        string `json:"status"`
+	ChecksRun     []string `json:"checks_run,omitempty"`
+	// ConfirmedFacts holds the validated free-text claims produced
+	// by the verifier — the Text of every ConfirmedCitedFacts entry
+	// whose citations all resolved against the live repo. Legacy
+	// memos used this as the only confirmed-fact field. v1.1.2+
+	// should prefer ConfirmedCitedFacts and treat ConfirmedFacts
+	// as a display fallback. Same exclusion rule as expert: facts
+	// whose citations failed are NOT mirrored here.
 	ConfirmedFacts []string `json:"confirmed_facts,omitempty"`
+	// ConfirmedCitedFacts is the v1.1.2 canonical confirmed-fact
+	// field. Each entry pairs a confirmation claim with the byte
+	// regions backing it.
+	ConfirmedCitedFacts []citations.CitedFact `json:"confirmed_cited_facts,omitempty"`
+	// UntypedConfirmedFacts is the V1.1.2 polish C3 separation
+	// channel for LLM responses that returned legacy text-only
+	// confirmed_facts instead of the structured cited form. The
+	// text is preserved (so it shows up in human review packets)
+	// but tagged so it never silently joins the validated surface.
+	UntypedConfirmedFacts []string `json:"untyped_confirmed_facts,omitempty"`
+	// Contradictions holds the validated contradiction text. Same
+	// dual-field semantics as ConfirmedFacts.
 	Contradictions []string `json:"contradictions,omitempty"`
-	Notes          []string `json:"notes,omitempty"`
-	// Cited is the byte-citation list backing this verification.
-	// The verifier should re-anchor its judgment to specific source
-	// bytes; entries that fail Validate against the repo are
-	// excluded from typed-citation metrics.
+	// ContradictedCitedFacts is the v1.1.2 canonical contradiction
+	// field with byte citations.
+	ContradictedCitedFacts []citations.CitedFact `json:"contradicted_cited_facts,omitempty"`
+	// UntypedContradictions is the contradiction equivalent of
+	// UntypedConfirmedFacts — legacy text-only contradictions kept
+	// separate from the validated surface.
+	UntypedContradictions []string `json:"untyped_contradictions,omitempty"`
+	Notes                 []string `json:"notes,omitempty"`
+	// ExpertCitationValidation records the per-fact result of
+	// running citations.ValidateFacts on hypothesis.CitedFacts at
+	// the moment the verifier saw them. Status is one of
+	// citations.StatusValid / Stale / Unanchored / Unresolved.
+	// Persisted so report / arbiter / human review can later see
+	// which expert claims still held when the verifier reviewed.
+	ExpertCitationValidation []citations.CitationValidation `json:"expert_citation_validation,omitempty"`
+	// Cited is the flat verifier-level citation pool. v1.1.2
+	// populates it as the deduplicated union of every citation
+	// across ConfirmedCitedFacts and ContradictedCitedFacts.
+	// Legacy memos that read Cited directly stay functional.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
 }
 
+// ReviewRecord is the human ground-truth label attached to one
+// arbiter finding. Phase 1.5 widened the verdict vocabulary to five
+// non-skip values (TP / FP / needs_context / design_risk /
+// no_issue_observed) and split the legacy FPReason field into a
+// universal ReasonCode (applies to any non-TP verdict, see
+// review.go).
 type ReviewRecord struct {
 	SchemaVersion string   `json:"schema_version"`
 	CaseID        string   `json:"case_id"`
 	FindingID     string   `json:"finding_id"`
-	Verdict       string   `json:"verdict"`
-	Severity      string   `json:"severity"`
-	Tags          []string `json:"tags,omitempty"`
-	Notes         string   `json:"notes,omitempty"`
-	ReviewerID    string   `json:"reviewer_id,omitempty"`
-	ReviewedAt    string   `json:"reviewed_at"`
+
+	// Verdict is one of the Verdict* constants. NormalizeVerdict
+	// accepts legacy values ("confirmed"/"dismissed"/"inconclusive"
+	// /"needs_more_context").
+	Verdict string `json:"verdict"`
+
+	// ReasonCode is a Reason* taxonomy code explaining the failure
+	// mode behind a non-TP verdict. Empty for TP and skip. Unknown
+	// codes are stored verbatim for extensibility.
+	ReasonCode string `json:"reason_code,omitempty"`
+
+	// FPReason is the legacy Phase 1 field — kept for read
+	// back-compat with any review_records.jsonl written between
+	// 8ec877e and the Phase 1.5 schema bump. New writes use
+	// ReasonCode; consumers should read EffectiveReasonCode().
+	FPReason string `json:"fp_reason,omitempty"`
+
+	// CorrectedSeverity is the reviewer's adjustment to the
+	// arbiter's severity. Empty means "keep arbiter's value".
+	CorrectedSeverity string `json:"corrected_severity,omitempty"`
+
+	// ConfidenceOverride is the reviewer's adjustment to the
+	// arbiter's confidence. Empty means "keep arbiter's value".
+	ConfidenceOverride string `json:"confidence_override,omitempty"`
+
+	// ReviewedEvidence is the subset of finding.Evidence the
+	// reviewer affirmed they actually inspected. Empty means
+	// "did not record per-evidence inspection".
+	ReviewedEvidence []string `json:"reviewed_evidence,omitempty"`
+
+	Tags    []string `json:"tags,omitempty"`
+	Notes   string   `json:"notes,omitempty"`
+
+	// Severity is preserved for backward compatibility with old
+	// review_records.jsonl. New writes set CorrectedSeverity
+	// instead. Readers that want the human-corrected severity
+	// should prefer CorrectedSeverity, falling back to Severity
+	// for legacy records.
+	Severity string `json:"severity,omitempty"`
+
+	ReviewerID string `json:"reviewer_id,omitempty"`
+	ReviewedAt string `json:"reviewed_at"`
 }
 
 // EvidenceBundle is the top-level output of the L3 LLM planner.
