@@ -20,6 +20,7 @@ from tee_audit.patterns.tee_signals import (
     TRUST_ARTIFACT_PATTERNS,
     WEB3_ROLE_PATTERNS,
 )
+from tee_audit.utils.manifest_parsers import parse_all_manifests
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,28 @@ def run_fingerprint(repo_path: Path) -> Stage0Output:
     # Find critical paths
     critical_paths = _find_critical_paths(repo_path)
 
+    # Parse TEE manifests for authoritative zone classification
+    manifest_trusted_files: list[str] = []
+    manifest_entry_points: list[dict[str, str]] = []
+    manifest_source = ""
+    manifest_platform = ""
+    try:
+        manifest = parse_all_manifests(repo_path)
+        if manifest:
+            manifest_trusted_files = manifest.trusted_files
+            manifest_entry_points = [
+                {"function": ep.function, "file": ep.file, "entry_type": ep.entry_type, "zone": ep.zone}
+                for ep in manifest.entry_points
+            ]
+            manifest_source = manifest.source
+            manifest_platform = manifest.platform
+            logger.info(
+                "Manifest parsed: %s — %d trusted files, %d entry points",
+                manifest.source, len(manifest.trusted_files), len(manifest.entry_points),
+            )
+    except Exception:
+        logger.debug("Manifest parsing failed", exc_info=True)
+
     fingerprint = Fingerprint(
         repo_root=str(repo_path),
         top_extensions=top_extensions,
@@ -153,6 +176,10 @@ def run_fingerprint(repo_path: Path) -> Stage0Output:
         trust_artifacts=trust_artifacts,
         build_flags=build_flags,
         critical_paths=critical_paths,
+        manifest_trusted_files=manifest_trusted_files,
+        manifest_entry_points=manifest_entry_points,
+        manifest_source=manifest_source,
+        manifest_platform=manifest_platform,
     )
 
     logger.info(

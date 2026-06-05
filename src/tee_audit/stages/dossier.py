@@ -20,13 +20,14 @@ class DossierResponse(BaseModel):
     """Wrapper for LLM dossier response (Anthropic tool-use requires object, not bare string)."""
 
     executive_summary: str
+    parties_and_roles: str
     architecture_overview: str
     trust_boundary_description: str
     key_components: list[str]
     sections: dict[str, str]
 
 
-def run_dossier(input_data: Stage1Input, client: LLMClient, results_dir: Path | None = None) -> Stage1Output:
+def run_dossier(input_data: Stage1Input, client: LLMClient, results_dir: Path | None = None, temperature: float = 0.0) -> Stage1Output:
     """Run Stage 1: Generate architecture dossier via LLM."""
     logger.info("Stage 1: Generating dossier for %s", input_data.repo_path)
 
@@ -55,7 +56,7 @@ def run_dossier(input_data: Stage1Input, client: LLMClient, results_dir: Path | 
     # Call LLM with structured output
     response = parse_with_retry(
         client, system_prompt, prompt, DossierResponse,
-        error_save_dir=results_dir,
+        error_save_dir=results_dir, temperature=temperature,
     )
 
     # Assemble full dossier text
@@ -68,7 +69,7 @@ def run_dossier(input_data: Stage1Input, client: LLMClient, results_dir: Path | 
         dossier_text += f"- {comp}\n"
 
     logger.info("Stage 1 complete: dossier generated (%d chars)", len(dossier_text))
-    return Stage1Output(dossier=dossier_text, sections=response.sections)
+    return Stage1Output(dossier=dossier_text, sections=response.sections, key_components=response.key_components)
 
 
 def _build_repo_structure(repo_path: Path, max_depth: int = 2, max_entries: int = 30) -> str:

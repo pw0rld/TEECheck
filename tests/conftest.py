@@ -42,8 +42,12 @@ def tmp_repo(tmp_path: Path) -> Path:
     att.write_text("fn verify_report() -> bool { true }\n")
 
     # .git directory so commit hash detection works
-    git_dir = repo / ".git"
-    git_dir.mkdir()
+    import subprocess
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=False)
 
     return repo
 

@@ -28,6 +28,8 @@ class GradedFinding(BaseModel):
     code_location: str  # file:line
     snippet: str | None = None
     message: str | None = None
+    is_tee_relevant: bool = True
+    tee_confidence: str = "high"  # "high", "low", or "none"
 
 
 class PositiveGuard(BaseModel):
@@ -36,6 +38,7 @@ class PositiveGuard(BaseModel):
     id: str  # e.g., "PG-01"
     invariant_refs: list[str]  # e.g., ["INV-01", "INV-02"]
     trust_path_tier: TrustPathTier
+    title: str = ""  # concise label, e.g. "Root CA cert chain validation"
     description: str
     code_evidence: str
     completeness_status: str  # "complete" or "partial"

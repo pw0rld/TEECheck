@@ -32,7 +32,7 @@ class TestClassifyConfidence:
         assert grade == Grade.CONFIRMED_ISSUE
         assert conf == Confidence.CONFIRMED
 
-    def test_unknown_defaults_to_manual(self):
+    def test_unknown_defaults_to_agent_validation(self):
         grade, conf = _classify_confidence("unknown-rule", "Something happened")
         assert grade == Grade.NEEDS_MANUAL_VALIDATION
         assert conf == Confidence.NEEDS_MANUAL

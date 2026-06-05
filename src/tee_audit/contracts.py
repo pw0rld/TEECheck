@@ -28,6 +28,7 @@ class Stage1Input(BaseModel):
 class Stage1Output(BaseModel):
     dossier: str
     sections: dict[str, str]
+    key_components: list[str] = []
 
 
 # Stage 2: Invariants
@@ -54,6 +55,7 @@ class Stage3Output(BaseModel):
 class Stage4Input(BaseModel):
     repo_path: Path
     invariants: list[Invariant]
+    manifest_entry_points: list[str] = []  # ECALL/OCALL names from manifest parsing
 
 
 class Stage4Output(BaseModel):
@@ -78,6 +80,7 @@ class Stage5bInput(BaseModel):
     graded_findings: list[GradedFinding]
     invariants: list[Invariant]
     repo_path: Path
+    fingerprint: Fingerprint | None = None
 
 
 class Stage5bOutput(BaseModel):
@@ -92,8 +95,24 @@ class Stage6Input(BaseModel):
     findings: list[Finding]
     positive_guards: list[PositiveGuard]
     unknowns: list[Unknown]
+    dossier_sections: dict[str, str] = {}
+    key_components: list[str] = []
+    zone_map_path: Path | None = None
 
 
 class Stage6Output(BaseModel):
     report: Report
     report_path: Path
+
+
+# Stage 7: Report Review & Refinement (ralph loop)
+class Stage7Input(BaseModel):
+    stage6_output: Stage6Output
+    invariants: list[Invariant]
+    repo_path: Path
+
+
+class Stage7Output(BaseModel):
+    report: Report
+    report_path: Path
+    iterations_used: int

@@ -16,3 +16,7 @@ class Fingerprint(BaseModel):
     trust_artifacts: dict[str, list[str]]  # artifact type -> matched lines
     build_flags: dict[str, list[str]]  # flag type -> matched lines
     critical_paths: list[str]
+    manifest_trusted_files: list[str] = []  # files identified as trusted by TEE manifests
+    manifest_entry_points: list[dict[str, str]] = []  # [{function, file, entry_type, zone}]
+    manifest_source: str = ""  # e.g. "gramine_manifest, edl"
+    manifest_platform: str = ""  # e.g. "sgx", "gramine"

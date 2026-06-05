@@ -56,13 +56,15 @@ def check_codeql_version(codeql_path: Path) -> str:
         msg = f"CodeQL version check failed: {result.stderr}"
         raise RuntimeError(msg)
 
-    # Output format: "CodeQL command-line tool version X.Y.Z"
+    # Output format: "CodeQL command-line toolchain release X.Y.Z."
+    # Older format:   "CodeQL command-line tool version X.Y.Z"
     for line in result.stdout.splitlines():
-        if "version" in line.lower():
+        if "release" in line.lower() or "version" in line.lower():
             parts = line.split()
             for part in reversed(parts):
-                if part[0].isdigit():
-                    return part
+                cleaned = part.rstrip(".")
+                if cleaned and cleaned[0].isdigit():
+                    return cleaned
     msg = f"Could not parse CodeQL version from output: {result.stdout}"
     raise RuntimeError(msg)
 

@@ -13,31 +13,30 @@ from pydantic import BaseModel
 class AuditConfig(BaseModel):
     """Runtime configuration for the audit pipeline."""
 
-    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "glm", "codex"] = "anthropic"
     llm_api_key: str = ""
     llm_model: str = ""
+    llm_base_url: str = ""
     codeql_path: str = ""
-    artifact_root: str = "/tmp/tee-audit"
+    artifact_root: str = "output"
     verbose: bool = False
     no_color: bool = False
     max_concurrent_llm_calls: int = 3
+    no_escalate: bool = False
 
     @classmethod
     def load(cls, **overrides: object) -> AuditConfig:
-        """Load config with priority: CLI args > env vars > config file > defaults."""
+        """Load config with priority: CLI args > env vars > local config file > defaults."""
         data: dict = {}
 
-        # Load from config file
-        config_path = Path.home() / ".tee-audit" / "config.yaml"
+        # Load from local config file (./config.yaml in CWD)
+        config_path = Path.cwd() / "config.yaml"
         if config_path.exists():
             with open(config_path) as f:
-                file_data = yaml.safe_load(f) or {}
-            data.update(file_data)
+                data.update(yaml.safe_load(f) or {})
 
-        # Override with env vars
+        # Override with env vars (non-conflicting mappings only)
         env_map = {
-            "ANTHROPIC_API_KEY": "llm_api_key",
-            "OPENAI_API_KEY": "llm_api_key",
             "TEE_AUDIT_CODEQL_PATH": "codeql_path",
             "TEE_AUDIT_ARTIFACT_ROOT": "artifact_root",
         }
@@ -47,8 +46,29 @@ class AuditConfig(BaseModel):
                 data[config_key] = value
 
         # Auto-detect provider from which key is set
+        provider_key_env = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "glm": "GLM_API_KEY",
+            "codex": "CODEX_API_KEY",
+        }
+        # Detect provider from first available key
         if os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
             data.setdefault("llm_provider", "openai")
+        if os.environ.get("GLM_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            data.setdefault("llm_provider", "glm")
+        if os.environ.get("CODEX_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            data.setdefault("llm_provider", "codex")
+
+        # Select API key based on active provider
+        provider = data.get("llm_provider", "anthropic")
+        if provider in provider_key_env and not data.get("llm_api_key"):
+            data["llm_api_key"] = os.environ.get(provider_key_env[provider], "")
+
+        # Select base URL based on provider
+        provider_base_url_env = {"glm": "GLM_BASE_URL", "codex": "CODEX_BASE_URL"}
+        if provider in provider_base_url_env and not data.get("llm_base_url"):
+            data["llm_base_url"] = os.environ.get(provider_base_url_env[provider], "")
 
         # Override with explicit args
         data.update({k: v for k, v in overrides.items() if v is not None})

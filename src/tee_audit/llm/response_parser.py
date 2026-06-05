@@ -34,6 +34,7 @@ def parse_with_retry(
     schema: type[T],
     max_retries: int = MAX_RETRIES,
     error_save_dir: Path | None = None,
+    temperature: float = 0.0,
 ) -> T:
     """Attempt structured LLM completion with retry on parse failure.
 
@@ -45,7 +46,7 @@ def parse_with_retry(
 
     for attempt in range(max_retries):
         try:
-            result = client.complete_structured(system, user, schema, temperature=0)
+            result = client.complete_structured(system, user, schema, temperature=temperature)
             if attempt > 0:
                 logger.info("Parse succeeded on attempt %d", attempt + 1)
             return result
@@ -66,7 +67,7 @@ def parse_with_retry(
     # All retries exhausted
     raw_response = ""
     try:
-        raw_response = client.complete(system, user, temperature=0)
+        raw_response = client.complete(system, user, temperature=0)  # Fallback uses temp=0 for deterministic diagnostics
     except Exception as e:
         logger.debug("Fallback raw completion also failed: %s", str(e)[:200])
 

@@ -20,6 +20,20 @@ class SarifLocation(BaseModel):
     snippet: str | None = None
 
 
+class SarifCodeFlowLocation(BaseModel):
+    """A single location in a SARIF code flow (data flow path)."""
+
+    file: str
+    line: int | None = None
+    message: str = ""
+
+
+class SarifCodeFlow(BaseModel):
+    """A code flow (data flow path) from a SARIF path-problem result."""
+
+    locations: list[SarifCodeFlowLocation]
+
+
 class SarifResult(BaseModel):
     """A single result from a SARIF run."""
 
@@ -28,6 +42,7 @@ class SarifResult(BaseModel):
     locations: list[SarifLocation]
     severity: str | None = None
     confidence: str | None = None
+    code_flows: list[SarifCodeFlow] = []
 
 
 class SarifRun(BaseModel):
@@ -84,6 +99,7 @@ def parse_sarif(path: Path) -> SarifDocument:
                 locations=locations,
                 severity=r.get("level"),
                 confidence=None,
+                code_flows=_parse_code_flows(r),
             ))
 
         runs.append(SarifRun(tool_name=tool_name, results=results))
@@ -94,3 +110,37 @@ def parse_sarif(path: Path) -> SarifDocument:
 def extract_results(doc: SarifDocument) -> list[SarifResult]:
     """Extract all results from a SARIF document across all runs."""
     return [r for run in doc.runs for r in run.results]
+
+
+def _parse_code_flows(result: dict) -> list[SarifCodeFlow]:
+    """Extract code flows (data flow paths) from a SARIF result."""
+    flows: list[SarifCodeFlow] = []
+    for cf in result.get("codeFlows", []):
+        locations: list[SarifCodeFlowLocation] = []
+        for tf in cf.get("threadFlows", []):
+            for loc in tf.get("locations", []):
+                loc_data = loc.get("location", {})
+                phys = loc_data.get("physicalLocation", {})
+                artifact = phys.get("artifactLocation", {})
+                region = phys.get("region", {})
+                msg = loc_data.get("message", {}).get("text", "")
+                locations.append(SarifCodeFlowLocation(
+                    file=artifact.get("uri", "unknown"),
+                    line=region.get("startLine"),
+                    message=msg,
+                ))
+        if locations:
+            flows.append(SarifCodeFlow(locations=locations))
+    return flows
+
+
+def extract_code_flows_by_rule(doc: SarifDocument) -> dict[str, list[SarifCodeFlow]]:
+    """Extract code flows grouped by rule ID from a SARIF document.
+
+    Returns {rule_id: [code_flows]} for results that have code flows.
+    """
+    by_rule: dict[str, list[SarifCodeFlow]] = {}
+    for result in extract_results(doc):
+        if result.code_flows:
+            by_rule.setdefault(result.rule_id, []).extend(result.code_flows)
+    return by_rule

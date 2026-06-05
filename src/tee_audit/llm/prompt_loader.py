@@ -11,6 +11,18 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_PACKAGE = "tee_audit.prompts"
 
+# Cached taxonomy reference (loaded once)
+_taxonomy_cache: str | None = None
+
+
+def load_taxonomy() -> str:
+    """Load the shared TEE taxonomy reference (cached after first load)."""
+    global _taxonomy_cache
+    if _taxonomy_cache is None:
+        taxonomy_path = _find_template("tee_taxonomy")
+        _taxonomy_cache = taxonomy_path.read_text()
+    return _taxonomy_cache
+
 
 def load_prompt(name: str, **kwargs: str) -> str:
     """Load a prompt template and substitute variables.
@@ -29,14 +41,25 @@ def load_prompt(name: str, **kwargs: str) -> str:
     template = template_path.read_text()
 
     # Substitute {{variable}} placeholders
+    # Variables that can be longer (code, structured data)
+    _LONG_VARS = {
+        "code_context", "dossier", "fingerprint", "findings_summary",
+        "taxonomy_reference", "taint_specs", "taint_tracking_template",
+        "fingerprint_map", "zone_context", "call_chain",
+    }
+    _SHORT_LIMIT = 4000
+    _LONG_LIMIT = 24000
+
     def replacer(match: re.Match) -> str:
         var_name = match.group(1)
         if var_name in kwargs:
             value = kwargs[var_name]
-            # Sanitize: truncate long values to prevent context overflow
-            if len(value) > 2000:
-                logger.warning("Truncating prompt variable '%s' from %d to 2000 chars", var_name, len(value))
-                value = value[:2000] + "\n...[truncated]"
+            if not isinstance(value, str):
+                return str(value)
+            limit = _LONG_LIMIT if var_name in _LONG_VARS else _SHORT_LIMIT
+            if len(value) > limit:
+                logger.warning("Truncating prompt variable '%s' from %d to %d chars", var_name, len(value), limit)
+                value = value[:limit] + "\n...[truncated]"
             return value
         logger.warning("Prompt variable '%s' not provided, leaving placeholder", var_name)
         return match.group(0)

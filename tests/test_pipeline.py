@@ -44,19 +44,25 @@ class TestRunPipeline:
             run_pipeline(config, str(tmp_repo), stages=[1])
 
     def test_codeql_stage_without_binary(self, tmp_repo: Path):
-        config = AuditConfig(artifact_root=str(tmp_repo / "results"))
+        config = AuditConfig(artifact_root=str(tmp_repo / "results"), llm_api_key="fake-key")
         with patch("tee_audit.pipeline.find_codeql", return_value=None):
             with pytest.raises(PipelineError, match="CodeQL"):
                 run_pipeline(config, str(tmp_repo), stages=[4])
 
     def test_missing_prerequisite_raises(self, tmp_path: Path):
+        import subprocess
         config = AuditConfig(
             artifact_root=str(tmp_path / "results"),
             llm_api_key="fake-key",
         )
         repo = tmp_path / "repo"
         repo.mkdir()
-        (repo / ".git").mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=False)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=False)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=False)
+        (repo / "README.md").write_text("# test")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=False)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=False)
         with pytest.raises(PipelineError, match="Stage 0"):
             run_pipeline(config, str(repo), stages=[1])
 
@@ -71,8 +77,9 @@ class TestRunPipeline:
 class TestPipelineResume:
     def test_resume_from_saved_stage(self, tmp_repo: Path, sample_fingerprint):
         config = AuditConfig(artifact_root=str(tmp_repo / "results"))
-        results_dir = tmp_repo / "results"
-        results_dir.mkdir()
+        audit_dir = tmp_repo / "results" / "fake-project-audit"
+        results_dir = audit_dir / "results"
+        results_dir.mkdir(parents=True)
 
         from tee_audit.audit_context import AuditContext
         from tee_audit.contracts import Stage0Output

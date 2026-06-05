@@ -19,14 +19,19 @@ def main() -> None:
 @main.command()
 @click.option("--repo", required=True, help="Target repository URL or local path")
 @click.option("--stage", default=None, help="Run specific stage(s), e.g., '0-4' or '2'")
-@click.option("--llm-api", type=click.Choice(["anthropic", "openai"]), default=None, help="LLM provider")
+@click.option("--llm-api", type=click.Choice(["anthropic", "openai", "glm", "codex"]), default=None, help="LLM provider")
+@click.option("--base-url", default=None, help="Custom API base URL for LLM provider")
 @click.option("--output-dir", default=None, help="Output directory for results")
 @click.option("--verbose", is_flag=True, help="Enable verbose output")
-def scan(repo: str, stage: str | None, llm_api: str | None, output_dir: str | None, verbose: bool) -> None:
+def scan(repo: str, stage: str | None, llm_api: str | None, base_url: str | None, output_dir: str | None, verbose: bool) -> None:
     """Run the full TEE audit pipeline against a repository."""
     from tee_audit.config import AuditConfig
 
-    config = AuditConfig.load(llm_provider=llm_api, verbose=verbose, artifact_root=output_dir)
+    config = AuditConfig.load(llm_provider=llm_api, llm_base_url=base_url, verbose=verbose, artifact_root=output_dir)
+
+    # Configure logging based on verbose flag
+    from tee_audit.logging import configure_logging
+    configure_logging(verbose=config.verbose)
 
     # Parse stage range
     stages = None

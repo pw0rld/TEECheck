@@ -33,3 +33,14 @@
 - If the flow exists but the sink is test-only, mark as Info
 - If the value is transformed to a safe representation before the sink, mark as Info
 - When in doubt, mark as NeedsManual and explain why
+
+## TEE-Specific False-Positive Rules
+
+- **report_data in SGX/TDX quotes**: OUTPUT field, not input. Verifier extracts; caller checks.
+  "report_data not verified" is false positive unless the CALLING application also fails to check it.
+- **Test/example/benchmark code**: Code in `test/`, `tests/`, `examples/`, `benches/`, `bin/`,
+  or files matching `test_*.rs`, `*_test.rs` is NOT production attack surface. Dismiss or mark Info.
+- **Low-level API returning structured results**: A function like `verify_quote()` returning a result
+  struct is designed for the caller to inspect. Correct layering, not missing validation.
+- **CLI output/debug logging**: Debug output in CLI tools or test binaries is expected behavior.
+  Only flag if it leaks secrets (private keys, raw attestation keys), not status information.
