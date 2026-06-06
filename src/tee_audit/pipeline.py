@@ -380,6 +380,12 @@ def _run_single_stage(
             raise PipelineError("Stage 2 output required for invariant verification.")
         stage6 = Stage6Output.model_validate(stage6_data)
         stage2 = Stage2Output.model_validate(stage2_data)
+        # Load key_components for partition evidence
+        stage1_data = ctx.load_stage(1)
+        key_components: list[str] = []
+        if stage1_data:
+            stage1 = Stage1Output.model_validate(stage1_data)
+            key_components = stage1.key_components
         if llm_client is None:
             raise PipelineError("LLM client required for stage 7 but not configured")
         output = run_report_review(
@@ -389,6 +395,8 @@ def _run_single_stage(
             client=llm_client,
             results_dir=results_dir,
             temperature=STAGE_TEMPERATURES.get(7, 0.3),
+            zone_map_path=artifact_dir / "zone_map.json" if artifact_dir else None,
+            key_components=key_components,
         )
         ctx.save_stage(7, output)
 

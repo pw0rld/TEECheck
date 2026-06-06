@@ -799,6 +799,8 @@ def run_report_review(
     max_iterations: int = MAX_RALPH_ITERATIONS,
     max_concurrent: int = 3,
     temperature: float = 0.3,
+    zone_map_path: Path | None = None,
+    key_components: list[str] | None = None,
 ) -> Stage6Output:
     """Run the ralph loop: review, verify invariants, refine report.
 
@@ -810,6 +812,15 @@ def run_report_review(
     """
     report = stage6_output.report
     review = ReviewResponse()  # track across iterations
+
+    # Load zone_map for partition evidence in final render
+    _zone_map = None
+    if zone_map_path and zone_map_path.exists():
+        try:
+            from tee_audit.utils.call_graph import ZoneMap as _ZM
+            _zone_map = _ZM.model_validate_json(zone_map_path.read_text())
+        except Exception:
+            pass
 
     for iteration in range(max_iterations):
         logger.info("Ralph iteration %d/%d: reviewing report", iteration + 1, max_iterations)
@@ -983,7 +994,7 @@ def run_report_review(
 
     # LLM Correctness Review — validate report quality before final write
     try:
-        markdown_draft = _render_markdown_report(report)
+        markdown_draft = _render_markdown_report(report, zone_map=_zone_map, repo_path=repo_path, key_components=key_components)
         reviewed_markdown = _llm_correctness_review(client, markdown_draft, report)
         if reviewed_markdown:
             markdown_draft = reviewed_markdown
