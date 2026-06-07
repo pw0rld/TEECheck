@@ -514,34 +514,34 @@ MobileCoin's architecture centers on Intel SGX enclaves executing consensus vali
 
 ```mermaid
 flowchart TD
-    subgraph TZ ["\U0001F512 Trusted Zone -- SGX Enclave"]
-        CE[consensus/enclave\nTx Validation]
-        CA[crypto/ake\nAuth Key Exchange]
-        AK[account-keys\nWallet Key Mgmt]
-        DQ[dcap-ql\nQuote Generation]
-        AT[attest/trusted\nAttestation Logic]
-        CT[sgx-core-types\nTCB Type Bindings]
+    subgraph TZ ["🔒 Trusted Zone -- SGX Enclave"]
+        CE[consensus/enclave<br>Tx Validation]
+        CA[crypto/ake<br>Auth Key Exchange]
+        AK[account-keys<br>Wallet Key Mgmt]
+        DQ[dcap-ql<br>Quote Generation]
+        AT[attest/trusted<br>Attestation Logic]
+        CT[sgx-core-types<br>TCB Type Bindings]
     end
 
     subgraph UZ ["\u26A0\uFE0F Untrusted Zone -- Host OS"]
-        UR[sgx/urts\nEnclave Runtime]
-        CSS[sgx/css\nSigned Enclave Pkg]
-        RC[report-cache\nAttestation Cache]
-        QV[dcap-quoteverify\nQuote Verification]
-        API[api/protobuf\nNetwork API 35 proto]
-        CSC[consensus/scp\nConsensus Protocol]
-        CSV[consensus/service\nNode Service]
-        AV[attest/verifier\nVerify Logic]
+        UR[sgx/urts<br>Enclave Runtime]
+        CSS[sgx/css<br>Signed Enclave Pkg]
+        RC[report-cache<br>Attestation Cache]
+        QV[dcap-quoteverify<br>Quote Verification]
+        API[api/protobuf<br>Network API 35 proto]
+        CSC[consensus/scp<br>Consensus Protocol]
+        CSV[consensus/service<br>Node Service]
+        AV[attest/verifier<br>Verify Logic]
     end
 
-    subgraph NZ ["\U0001F310 External Network"]
-        EU[End Users\nWallet Clients]
-        PCCS[Intel PCCS\nDCAP Provisioning]
-        MOF[MC Foundation\nEnclave Signing]
+    subgraph NZ ["🌐 External Network"]
+        EU[End Users<br>Wallet Clients]
+        PCCS[Intel PCCS<br>DCAP Provisioning]
+        MOF[MC Foundation<br>Enclave Signing]
     end
 
-    subgraph CR ["\U0001F510 Crypto Boundary"]
-        CN[CryptoNote\nPrivacy Layer]
+    subgraph CR ["🔐 Crypto Boundary"]
+        CN[CryptoNote<br>Privacy Layer]
     end
 
     EU -->|Signed Tx Request| API
@@ -566,9 +566,9 @@ flowchart TD
     classDef extnet fill:#d1ecf1,stroke:#17a2b8,color:#1a1a2e
     classDef crypto fill:#e2d5f1,stroke:#6a4c93,color:#1a1a2e
 
-    class CE CA AK DQ AT CT trusted
-    class UR CSS RC QV API CSC CSV AV untrusted
-    class EU PCCS MOF extnet
+    class CE,CA,AK,DQ,AT,CT trusted
+    class UR,CSS,RC,QV,API,CSC,CSV,AV untrusted
+    class EU,PCCS,MOF extnet
     class CN crypto
 ```
 

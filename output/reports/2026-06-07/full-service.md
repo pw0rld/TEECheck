@@ -105,10 +105,10 @@ flowchart TD
 
     ENCL ---|Attestation Quote| DCAP
     CSS ---|Signed Measurement| ENCL
-    ENCL <--->|ECALLs / OCALLs| HOST
+    ENCL <-->|ECALLs / OCALLs| HOST
     HOST -->|Sealed Key Material| DB
     HOST -->|Tx Requests| API
-    HOST <-->|Ledger Sync (gRPC)| MIRROR
+    HOST <-->|Ledger Sync - gRPC| MIRROR
     MIRROR <-->|Block Data| NET
     API <-->|REST / JSON| CLIENT
     DCAP <-->|Verify Quote| PCCS
