@@ -82,7 +82,7 @@ Use [_TEMPLATE.md](_TEMPLATE.md) when manually adding or promoting a record.
 NVD/vendor candidate
   -> verify authoritative advisory
   -> identify vulnerable version and fix
-  -> classify TWE and benchmark role
+  -> classify benchmark role and vulnerability evidence
   -> build vulnerable/fixed fixture pair
   -> human-review oracle
   -> add to scored benchmark suite

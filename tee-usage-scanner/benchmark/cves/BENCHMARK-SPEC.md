@@ -21,7 +21,7 @@ oracle.yaml
 
 `case.yaml` pins the CVE, platform, repository, vulnerable revision, fixed
 revision, build command, analysis command, and fixture hashes. `oracle.yaml`
-records the expected verdict, TWE class, primary location, required evidence
+records the expected verdict, primary vulnerability location, required evidence
 path, and explicitly acceptable alternate locations.
 
 ## Case Classes
@@ -54,7 +54,7 @@ A case is `eligible` only if all of the following are true:
 2. Affected and fixed revisions or policy semantics are pinned.
 3. Positive and negative fixtures are present and deterministic.
 4. The oracle was written from advisory/patch evidence, not scanner output.
-5. The expected TWE class and evidence path are reviewed.
+5. The expected vulnerability location and evidence path are reviewed.
 6. The case builds or validates in an isolated test command.
 
 Every current documentation-only record remains `excluded` until a case
@@ -63,9 +63,20 @@ directory satisfies this gate.
 ## Metrics
 
 Report source and policy suites separately. For each suite report precision,
-recall, F1, evidence-path accuracy, TWE classification accuracy, and paired
-regression accuracy. Knowledge-only records are reported as corpus coverage and
+recall, F1, evidence-path accuracy, and paired regression accuracy.
+Knowledge-only records are reported as corpus coverage and
 must never be included in the scoring denominator.
+
+For source-pair cases, the unit of evaluation is the pair. The vulnerable side
+is a positive sample and the fixed side is its negative control. A pair passes
+only when the scanner finds oracle-matching evidence in the vulnerable tree and
+does not repeat that verdict in the fixed tree. Matching requires the oracle's
+primary file plus the vulnerable function name or at least one reviewed semantic
+term; arbitrary findings in the same file are not counted.
+
+Scanner execution failures and timeouts stop evaluation and are not silently
+converted into false negatives. This keeps availability failures separate from
+security accuracy.
 
 ## Leakage Controls
 

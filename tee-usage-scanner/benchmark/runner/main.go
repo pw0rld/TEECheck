@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type fileSpec struct {
@@ -39,16 +40,20 @@ type oracleSpec struct {
 	ID               string   `json:"id"`
 	Expected         string   `json:"expected"`
 	Weakness         string   `json:"weakness"`
-	TWE              []string `json:"twe"`
 	PrimaryFile      string   `json:"primary_file"`
 	PrimaryFunction  string   `json:"primary_function"`
+	MatchTerms       []string `json:"match_terms"`
 	RequiredEvidence []string `json:"required_evidence"`
 	FixedEvidence    []string `json:"fixed_evidence"`
 }
 
 func main() {
 	casesDir := flag.String("cases", "benchmark/cases", "benchmark cases directory")
+	mode := flag.String("mode", "validate", "validate, evaluate, or score")
 	list := flag.Bool("list", false, "list valid case identifiers")
+	resultsDir := flag.String("results", "benchmark/results", "scanner results and score reports directory")
+	scannerCommand := flag.String("scanner-command", "", "command template with {input}, {run_dir}, {case}, and {variant} placeholders")
+	timeout := flag.Duration("timeout", 30*time.Minute, "timeout for each scanner invocation")
 	flag.Parse()
 
 	entries, err := os.ReadDir(*casesDir)
@@ -67,6 +72,7 @@ func main() {
 	}
 
 	failed := false
+	var validCases []loadedCase
 	for _, name := range names {
 		dir := filepath.Join(*casesDir, name)
 		if err := validateCase(dir); err != nil {
@@ -74,14 +80,39 @@ func main() {
 			failed = true
 			continue
 		}
+		loaded, err := loadCase(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
+			failed = true
+			continue
+		}
+		validCases = append(validCases, loaded)
 		if *list {
 			fmt.Println(name)
-		} else {
+		} else if *mode == "validate" {
 			fmt.Printf("PASS %s\n", name)
 		}
 	}
 	if failed {
 		os.Exit(1)
+	}
+
+	switch *mode {
+	case "validate":
+		return
+	case "evaluate":
+		if strings.TrimSpace(*scannerCommand) == "" {
+			fatal(errors.New("evaluate mode requires -scanner-command"))
+		}
+		if err := evaluate(validCases, *resultsDir, *scannerCommand, *timeout); err != nil {
+			fatal(err)
+		}
+	case "score":
+		if err := scoreAndWrite(validCases, *resultsDir); err != nil {
+			fatal(err)
+		}
+	default:
+		fatal(fmt.Errorf("unsupported mode %q", *mode))
 	}
 }
 
@@ -109,7 +140,7 @@ func validateCase(dir string) error {
 	if o.Expected != "vulnerable_only" || o.Weakness == "" || o.PrimaryFile == "" || o.PrimaryFunction == "" {
 		return errors.New("oracle ground truth is incomplete")
 	}
-	if len(o.RequiredEvidence) == 0 || len(o.FixedEvidence) == 0 {
+	if len(o.MatchTerms) == 0 || len(o.RequiredEvidence) == 0 || len(o.FixedEvidence) == 0 {
 		return errors.New("oracle evidence is incomplete")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "patches", "fix.patch")); err != nil {

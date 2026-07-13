@@ -11,7 +11,6 @@
 - Benchmark role: `source_fixture | policy_fixture | knowledge_only`
 - Benchmark readiness: `candidate | specified | fixture_ready | scored`
 - Scoring status: `excluded | eligible`
-- Candidate TWE:
 
 ## Summary
 
@@ -44,7 +43,7 @@ Record the vendor mitigation and affected/patched versions when available.
 - Positive fixture: exact vulnerable revision or intentionally vulnerable minimal case
 - Negative fixture: exact patched revision or minimal case containing the required guard
 - Trigger/input: attacker-controlled input or policy evidence that reaches the defect
-- Oracle: expected finding location, TWE class, evidence path, and verdict
+- Oracle: expected vulnerability location, evidence path, and verdict
 - Required evidence: advisory, affected version, fix, and source/behavior correspondence
 - Scoring status: excluded until all required evidence and both fixtures are reviewed
 - Exclusion reason: state the concrete missing artifact; never use an implicit placeholder
@@ -56,7 +55,7 @@ Record the vendor mitigation and affected/patched versions when available.
 - [ ] Positive fixture reproduces the vulnerable behavior or code pattern
 - [ ] Negative fixture differs only by the security-relevant fix
 - [ ] Oracle reviewed independently of scanner output
-- [ ] Expected TWE and acceptable evidence path recorded
+- [ ] Expected vulnerability evidence and acceptable alternate paths recorded
 - [ ] Build/run instructions are deterministic
 
 ## Sources
