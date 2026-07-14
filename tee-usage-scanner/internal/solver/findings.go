@@ -79,7 +79,11 @@ func evidenceFiles(evidence []codeql.Result) []string {
 func evidenceLines(evidence []codeql.Result) []string {
 	var lines []string
 	for _, e := range evidence {
-		lines = append(lines, fmt.Sprintf("%s @ %s:%d", e.RuleID, e.Path, e.StartLine))
+		line := fmt.Sprintf("%s @ %s:%d", e.RuleID, e.Path, e.StartLine)
+		if e.Message != "" {
+			line += ": " + e.Message
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }

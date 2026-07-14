@@ -83,7 +83,9 @@ func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
 	b.WriteString("    fe.getEnclosingCallable() = f and\n")
 	fmt.Fprintf(&b, "    fe.getIdentifier().getText() = %q\n", field)
 	b.WriteString("  )\n")
-	fmt.Fprintf(&b, "select f, \"TWE-BIND-001: authority subject not bound to attested field '%s' (%s)\"\n", field, cand.SiteID)
+	// Surface the function name CodeQL resolved so downstream matching and
+	// review can name the code element, not just its location.
+	fmt.Fprintf(&b, "select f, \"TWE-BIND-001: \" + f.getName().getText() + \" grants authority without binding to attested field '%s' (%s)\"\n", field, cand.SiteID)
 	return b.String(), nil
 }
 

@@ -401,15 +401,22 @@ func scoreVariant(c loadedCase, variant, resultDir string) (variantScore, error)
 	return result, nil
 }
 
-// detectionStatuses are the arbiter verdicts that assert an issue. The
-// arbiter's vocabulary, in ascending confidence, is no_issue_observed <
-// needs_review < likely_issue < confirmed_candidate. Only the top two count
-// as a detection: needs_review means the scanner declined to commit, so on
-// the vulnerable side it is not credited as a find and on the fixed side it
-// is the correct quiet outcome rather than a false positive.
+// detectionStatuses are the verdicts that assert an issue, across both
+// pipelines. The legacy arbiter vocabulary (ascending confidence:
+// no_issue_observed < needs_review < likely_issue < confirmed_candidate) counts
+// only its top two. The deterministic TWE solver emits its own vocabulary; its
+// reported-issue statuses (confirmed, violated_candidate, configuration_dependent)
+// count too. needs_review / guarded_elsewhere / test_only etc. are not
+// detections: on the vulnerable side they are not credited, on the fixed side
+// they are the correct quiet outcome rather than a false positive.
 var detectionStatuses = map[string]bool{
+	// arbiter (LLM) vocabulary
 	"likely_issue":        true,
 	"confirmed_candidate": true,
+	// solver (deterministic TWE) vocabulary
+	"confirmed":               true,
+	"violated_candidate":      true,
+	"configuration_dependent": true,
 }
 
 func matchFinding(oracle oracleSpec, finding teecheckFinding) (bool, []string) {
