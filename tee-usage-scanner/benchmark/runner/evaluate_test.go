@@ -63,6 +63,61 @@ func TestMatchFindingRequiresSemanticEvidence(t *testing.T) {
 	}
 }
 
+func TestMatchFindingRejectsSingleGenericTerm(t *testing.T) {
+	// Find a case whose match_terms contain a term distinct from the
+	// primary function, so we can exercise the "one generic term" path.
+	var c loadedCase
+	var generic string
+	for _, cand := range loadRepositoryCases(t) {
+		for _, term := range cand.Oracle.MatchTerms {
+			if term != cand.Oracle.PrimaryFunction {
+				c, generic = cand, term
+				break
+			}
+		}
+		if generic != "" {
+			break
+		}
+	}
+	if generic == "" {
+		t.Skip("no case with a non-function match term")
+	}
+	matched, _ := matchFinding(c.Oracle, teecheckFinding{
+		Files:   []string{c.Oracle.PrimaryFile},
+		Summary: "the " + generic + " field is fine here",
+	})
+	if matched {
+		t.Fatalf("a single generic term %q on the right file must not match", generic)
+	}
+}
+
+func TestMatchFindingAcceptsTwoTerms(t *testing.T) {
+	var c loadedCase
+	var terms []string
+	for _, cand := range loadRepositoryCases(t) {
+		var distinct []string
+		for _, term := range cand.Oracle.MatchTerms {
+			if term != cand.Oracle.PrimaryFunction {
+				distinct = append(distinct, term)
+			}
+		}
+		if len(distinct) >= 2 {
+			c, terms = cand, distinct
+			break
+		}
+	}
+	if len(terms) < 2 {
+		t.Skip("no case with two non-function match terms")
+	}
+	matched, _ := matchFinding(c.Oracle, teecheckFinding{
+		Files:   []string{c.Oracle.PrimaryFile},
+		Summary: terms[0] + " combined with " + terms[1] + " triggers the issue",
+	})
+	if !matched {
+		t.Fatalf("two corroborating terms %v should match", terms[:2])
+	}
+}
+
 func TestMatchFindingIgnoresExplicitNoIssue(t *testing.T) {
 	c := loadRepositoryCases(t)[0]
 	matched, _ := matchFinding(c.Oracle, teecheckFinding{

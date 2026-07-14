@@ -22,9 +22,45 @@ cases/CVE-YYYY-NNNN/
 ```
 
 Only `fixture_ready` cases in this directory participate in executable scanner
-evaluation. There are currently 50 executable cases, producing 100 scan
-samples: 50 vulnerable and 50 fixed. Another 18 directories preserve
+evaluation. There are currently 52 executable cases, producing 104 scan
+samples: 52 vulnerable and 52 fixed. Another 18 directories preserve
 pending-source candidates but are excluded from scoring.
+
+Most executable cases pin a public CVE (`detection_surface: source`). A few are
+**synthetic** (`detection_surface: synthetic`, id prefix `TWE-<FAMILY>-NNNN`):
+hand-authored vulnerable/fixed pairs that do not track a CVE, used to cover TWE
+families the CVE corpus misses. Synthetic cases skip the upstream provenance
+checks (no repository revision or CVE record) but are held to every other
+requirement — fixture hashes, vulnerable != fixed, a fix patch, and a complete
+reviewed oracle.
+
+Each reviewed `oracle.yaml` also carries a TWE scope classification so the
+benchmark measures "can we find the CVEs we are designed to find" instead of
+penalising the scanner for weaknesses it was never meant to reach:
+
+```text
+twe_family    # Flow | Guard | Binding | State | Config | Design | Leakage, or "" if out of scope
+in_twe_scope  # true when twe_family != "" (derived, kept in sync by the validator)
+case_kind     # vulnerability | hardening (defensive-hardening commits are flagged, not hidden)
+scope_reason  # one-line justification for the family / out-of-scope decision
+```
+
+A case is **in TWE scope** when detecting it requires reasoning about a TEE
+trust relationship (untrusted↔trusted boundary data flow, attestation or
+signature validity, secret leakage, state rollback, or a debug/simulation
+config reaching production). It is **out of scope** when it is a generic
+memory-safety, arithmetic, resource, or concurrency bug that a sanitizer or
+fuzzer catches without any TEE-specific semantics. Out-of-scope cases are a
+known coverage gap of the TWE design, not a scanner failure.
+
+Current split of the 52 executable cases: 38 in scope, 14 out. In-scope
+families: Flow 16, Leakage 10, State 5, Guard 4, Binding 1, Config 1, Design 1.
+Binding and Config are seeded by synthetic fixtures only and remain the
+priority for new cases, since they are exactly the usage weaknesses (subject
+binding, simulated / debug attestation) most common in real audits. Add more by
+copying `TWE-BIND-0001` / `TWE-CONFIG-0001` and adapting the vulnerable/fixed
+pair — ideally lifted from a real repository such as dcap-qvl or an FPC audit
+finding.
 
 ### `cves/`
 
@@ -56,8 +92,18 @@ Supported modes:
 - `score`: score previously generated scanner results without rerunning scans.
 
 The evaluator reports TP, FP, FN, TN, precision, recall, F1, specificity, and
-paired pass rate. A case passes only when the vulnerable side is detected and
-the fixed side is not reported as the same vulnerability.
+paired pass rate on three tracks — `overall`, `in_twe_scope`, and
+`out_of_twe_scope` — plus a per-family breakdown of the in-scope track.
+**Read scanner capability off the `in_twe_scope` track**; the overall track
+dilutes it with out-of-scope cases the TWE pipeline does not target. A case
+passes only when the vulnerable side is detected and the fixed side is not
+reported as the same vulnerability.
+
+A finding matches an oracle only when it lands on the oracle's `primary_file`
+**and** either names the `primary_function` or corroborates with at least two
+distinct `match_terms`. A single generic term (for example `length` or `hash`)
+on the right file is not sufficient — that previously inflated true positives
+when a finding merely mentioned the file for an unrelated reason.
 
 ### `reports/`
 
@@ -102,11 +148,22 @@ directory.
 ## Current Scope
 
 - CVE research records: 186
-- Executable vulnerability cases: 50
-- Source samples: 100
+- Executable vulnerability cases: 52 (38 in TWE scope, 14 out; 2 synthetic)
+- Source samples: 104
 - Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, Linux KVM
   SEV/SEV-SNP, Linux TDX/confidential-VM support, Occlum, and `sgx_tstd`
 
 The CVE corpus measures collection coverage. The executable cases measure
 scanner accuracy. These numbers must not be combined into a single benchmark
 score.
+
+Two known limitations to keep in mind when reading results:
+
+- Scans run against the pinned `scan_paths` (the files the upstream fix
+  touched), so the executable track measures file-level detection, not
+  whole-repository triage. It answers "given the right file, does the scanner
+  recognise the weakness", not "can it find the needle in the repo".
+- The corpus skews toward Arm TrustZone / OP-TEE platform-implementation bugs.
+  Web3 / attestation-usage targets (the dcap-qvl / FPC style repositories the
+  tool is aimed at) are not yet represented and should be added as non-CVE
+  in-scope fixtures.

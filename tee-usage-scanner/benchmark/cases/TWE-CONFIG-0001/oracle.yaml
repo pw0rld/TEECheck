@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "TWE-CONFIG-0001",
+  "status": "reviewed",
+  "expected": "vulnerable_only",
+  "weakness": "CWE-489 Active Debug Code",
+  "primary_file": "src/attest.rs",
+  "primary_function": "verify_attestation",
+  "match_terms": [
+    "verify_attestation",
+    "Simulated",
+    "mode",
+    "simulation",
+    "verify_dcap"
+  ],
+  "trigger": "Submit evidence with Mode::Simulated to a production build",
+  "required_evidence": [
+    "verify_attestation accepts Mode::Simulated without real verification",
+    "the simulation branch is present unconditionally in production builds",
+    "accepted simulated evidence releases the sealed secret"
+  ],
+  "fixed_evidence": [
+    "fixed revision gates the simulation branch behind #[cfg(feature = \"simulation\")]",
+    "production builds return Error::SimulationRejected for Mode::Simulated"
+  ],
+  "twe_family": "Config",
+  "in_twe_scope": true,
+  "case_kind": "vulnerability",
+  "scope_reason": "simulation/debug attestation mode reaches production authority"
+}

@@ -1,0 +1,26 @@
+--- a/src/attest.rs
++++ b/src/attest.rs
+@@ -12,12 +12,19 @@
+ 
+ /// Verify attestation evidence before releasing a sealed secret.
+ ///
+-/// Simulated evidence is accepted unconditionally. The simulation branch is
+-/// compiled into every build, so a production deployment that is fed
+-/// `Mode::Simulated` evidence skips all real verification.
++/// Simulated evidence is only accepted when the `simulation` feature is
++/// compiled in. A production build (feature off) rejects `Mode::Simulated`
++/// outright, so the simulation path can never reach real authority.
+ pub fn verify_attestation(evidence: &Evidence) -> Result<(), Error> {
+     if evidence.mode == Mode::Simulated {
+-        return Ok(());
++        #[cfg(feature = "simulation")]
++        {
++            return Ok(());
++        }
++        #[cfg(not(feature = "simulation"))]
++        {
++            return Err(Error::SimulationRejected);
++        }
+     }
+     verify_dcap(&evidence.quote)
+ }

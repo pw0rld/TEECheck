@@ -48,6 +48,26 @@ type oracleSpec struct {
 	MatchTerms       []string `json:"match_terms"`
 	RequiredEvidence []string `json:"required_evidence"`
 	FixedEvidence    []string `json:"fixed_evidence"`
+	// TWEFamily is the TEE Weakness Entry family this CVE falls under
+	// (Flow, Guard, Binding, State, Config, Design, Leakage), or "" when
+	// the weakness is outside TWE scope (generic memory-safety, arithmetic,
+	// resource, or concurrency bugs that need no TEE trust reasoning).
+	TWEFamily string `json:"twe_family"`
+	// InTWEScope mirrors TWEFamily != "". A case out of scope is a known
+	// design gap, not a scanner failure, so it is scored on its own track.
+	InTWEScope bool `json:"in_twe_scope"`
+	// CaseKind distinguishes a real vulnerability from a defensive
+	// hardening commit (timing, register-state sanitization). Hardening
+	// cases are legitimate but harder ground truth; they are reported
+	// separately so they cannot silently depress headline recall.
+	CaseKind string `json:"case_kind"`
+	// ScopeReason is a one-line human justification for the scope/family.
+	ScopeReason string `json:"scope_reason"`
+}
+
+var validTWEFamilies = map[string]bool{
+	"": true, "Flow": true, "Guard": true, "Binding": true,
+	"State": true, "Config": true, "Design": true, "Leakage": true,
 }
 
 func main() {
@@ -143,20 +163,41 @@ func validateCase(dir string) error {
 		}
 		return nil
 	}
-	if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
-		return errors.New("repository revisions are incomplete")
-	}
-	if c.SourceRecord == "" {
-		return errors.New("source record is missing")
-	}
-	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(c.SourceRecord))); err != nil {
-		return fmt.Errorf("source record: %w", err)
+	// A synthetic case is a hand-authored vulnerable/fixed pair that does
+	// not track a public CVE (used to cover TWE families the CVE corpus
+	// misses, e.g. Binding and Config). It skips the upstream provenance
+	// checks — there is no repository revision or CVE record — but every
+	// substantive check below (fixture hashes, vulnerable != fixed, oracle
+	// completeness, TWE fields, patch) still applies.
+	synthetic := c.DetectionSurface == "synthetic"
+	if !synthetic {
+		if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
+			return errors.New("repository revisions are incomplete")
+		}
+		if c.SourceRecord == "" {
+			return errors.New("source record is missing")
+		}
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(c.SourceRecord))); err != nil {
+			return fmt.Errorf("source record: %w", err)
+		}
 	}
 	if len(c.Files) == 0 || len(c.ScanPaths) == 0 {
 		return errors.New("no fixture files or scan paths")
 	}
 	if o.Expected != "vulnerable_only" || o.Weakness == "" || o.PrimaryFile == "" || o.PrimaryFunction == "" {
 		return errors.New("oracle ground truth is incomplete")
+	}
+	if !validTWEFamilies[o.TWEFamily] {
+		return fmt.Errorf("unknown twe_family %q", o.TWEFamily)
+	}
+	if o.InTWEScope != (o.TWEFamily != "") {
+		return fmt.Errorf("in_twe_scope %v disagrees with twe_family %q", o.InTWEScope, o.TWEFamily)
+	}
+	if o.CaseKind != "vulnerability" && o.CaseKind != "hardening" {
+		return fmt.Errorf("case_kind must be vulnerability or hardening, got %q", o.CaseKind)
+	}
+	if o.ScopeReason == "" {
+		return errors.New("scope_reason is required")
 	}
 	if !containsPath(c.ScanPaths, o.PrimaryFile) {
 		return fmt.Errorf("oracle primary file %q is not included in scan_paths", o.PrimaryFile)

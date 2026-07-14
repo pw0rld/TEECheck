@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "TWE-CONFIG-0001",
+  "status": "fixture_ready",
+  "detection_surface": "synthetic",
+  "language": "rust",
+  "files": [
+    {
+      "path": "src/attest.rs",
+      "vulnerable_sha256": "e006913b0bf198a94d592abdaa0c5768c4f74fd658e940aee078353b752fc2a7",
+      "fixed_sha256": "859ccbf15e2e1de4283d50a7517ce1b142065451f7f2783c19780fab72b18d0d"
+    }
+  ],
+  "scan_paths": [
+    "src/attest.rs"
+  ],
+  "platform": "Intel SGX / DCAP (synthetic)",
+  "title": "Simulated attestation mode reaches production verification path"
+}

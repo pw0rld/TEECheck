@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "TWE-BIND-0001",
+  "status": "reviewed",
+  "expected": "vulnerable_only",
+  "weakness": "CWE-345 Insufficient Verification of Data Authenticity",
+  "primary_file": "src/registry.rs",
+  "primary_function": "register_worker",
+  "match_terms": [
+    "register_worker",
+    "verify_quote",
+    "report.pubkey",
+    "pubkey",
+    "binding"
+  ],
+  "trigger": "Register with a valid third-party attestation quote but an attacker-chosen pubkey",
+  "required_evidence": [
+    "attestation quote is verified before registration",
+    "the key granted authority is the caller-supplied pubkey, not report.pubkey",
+    "no relation binds the registered subject to the attested key"
+  ],
+  "fixed_evidence": [
+    "fixed revision rejects registration unless report.pubkey == pubkey"
+  ],
+  "twe_family": "Binding",
+  "in_twe_scope": true,
+  "case_kind": "vulnerability",
+  "scope_reason": "authority granted to a subject not bound to the attested key"
+}

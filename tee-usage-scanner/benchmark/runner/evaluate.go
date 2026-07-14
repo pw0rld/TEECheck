@@ -47,15 +47,67 @@ type variantScore struct {
 
 type caseScore struct {
 	CaseID     string       `json:"case_id"`
+	TWEFamily  string       `json:"twe_family"`
+	InTWEScope bool         `json:"in_twe_scope"`
+	CaseKind   string       `json:"case_kind"`
 	PairedPass bool         `json:"paired_pass"`
 	Vulnerable variantScore `json:"vulnerable"`
 	Fixed      variantScore `json:"fixed"`
 }
 
+// trackMetrics holds the confusion-matrix totals and derived metrics for
+// one slice of the corpus (the whole set, the in-scope subset, one TWE
+// family, etc.). Splitting the report this way keeps a scanner's real
+// ability from being averaged together with cases it was never designed
+// to catch.
+type trackMetrics struct {
+	Label        string      `json:"label"`
+	Cases        int         `json:"cases"`
+	Totals       scoreTotals `json:"totals"`
+	Precision    float64     `json:"precision"`
+	Recall       float64     `json:"recall"`
+	F1           float64     `json:"f1"`
+	Specificity  float64     `json:"specificity"`
+	PairedPasses int         `json:"paired_passes"`
+	PairedRate   float64     `json:"paired_pass_rate"`
+}
+
+func (t *trackMetrics) add(cs caseScore) {
+	t.Cases++
+	addClass(&t.Totals, cs.Vulnerable.Classification)
+	addClass(&t.Totals, cs.Fixed.Classification)
+	if cs.PairedPass {
+		t.PairedPasses++
+	}
+}
+
+func (t *trackMetrics) finalize() {
+	t.Precision = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FP)
+	t.Recall = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FN)
+	t.Specificity = ratio(t.Totals.TN, t.Totals.TN+t.Totals.FP)
+	if t.Precision+t.Recall > 0 {
+		t.F1 = 2 * t.Precision * t.Recall / (t.Precision + t.Recall)
+	}
+	t.PairedRate = ratio(t.PairedPasses, t.Cases)
+}
+
 type scoreReport struct {
-	Schema       string      `json:"schema"`
-	GeneratedAt  string      `json:"generated_at"`
-	Cases        []caseScore `json:"cases"`
+	Schema      string      `json:"schema"`
+	GeneratedAt string      `json:"generated_at"`
+	Cases       []caseScore `json:"cases"`
+
+	// Overall is every scored case. In-scope isolates the CVEs whose
+	// weakness TEECheck's TWE pipeline is designed to reach; out-of-scope
+	// collects the generic memory/arithmetic/resource bugs that are a
+	// known design gap, not a scanner failure. Headline capability should
+	// be read off InScope, not Overall.
+	Overall    trackMetrics            `json:"overall"`
+	InScope    trackMetrics            `json:"in_twe_scope"`
+	OutOfScope trackMetrics            `json:"out_of_twe_scope"`
+	ByFamily   map[string]trackMetrics `json:"by_family"`
+
+	// Flat overall fields retained for backward compatibility with earlier
+	// report consumers. They mirror Overall.
 	Totals       scoreTotals `json:"totals"`
 	Precision    float64     `json:"precision"`
 	Recall       float64     `json:"recall"`
@@ -161,23 +213,53 @@ func scoreAndWrite(cases []loadedCase, resultsDir string) error {
 	return nil
 }
 
+func trackRow(b *strings.Builder, t trackMetrics) {
+	fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %.4f | %.4f | %.4f | %.4f | %d/%d |\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN,
+		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
+}
+
 func renderMarkdown(report scoreReport) string {
 	var b strings.Builder
 	b.WriteString("# TEECheck Benchmark Score\n\n")
 	fmt.Fprintf(&b, "Generated: %s\n\n", report.GeneratedAt)
-	b.WriteString("| Case | Vulnerable | Fixed | Pair |\n")
-	b.WriteString("|---|---|---|---|\n")
+
+	b.WriteString("## Metrics by track\n\n")
+	b.WriteString("Read scanner capability off **in_twe_scope**. The out_of_twe_scope\n")
+	b.WriteString("track is a known design gap (generic memory/arithmetic/resource bugs the\n")
+	b.WriteString("TWE pipeline does not target), not a scanner failure.\n\n")
+	b.WriteString("| Track | Cases | TP | FP | FN | TN | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	trackRow(&b, report.Overall)
+	trackRow(&b, report.InScope)
+	trackRow(&b, report.OutOfScope)
+	b.WriteString("\n### In-scope by TWE family\n\n")
+	b.WriteString("| Family | Cases | TP | FP | FN | TN | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, fam := range []string{"Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"} {
+		if t, ok := report.ByFamily[fam]; ok {
+			trackRow(&b, t)
+		}
+	}
+
+	b.WriteString("\n## Per-case results\n\n")
+	b.WriteString("| Case | Family | Scope | Kind | Vulnerable | Fixed | Pair |\n")
+	b.WriteString("|---|---|---|---|---|---|---|\n")
 	for _, c := range report.Cases {
 		pair := "fail"
 		if c.PairedPass {
 			pair = "pass"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", c.CaseID, c.Vulnerable.Classification, c.Fixed.Classification, pair)
+		scope := "out"
+		if c.InTWEScope {
+			scope = "in"
+		}
+		fam := c.TWEFamily
+		if fam == "" {
+			fam = "-"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", c.CaseID, fam, scope, c.CaseKind, c.Vulnerable.Classification, c.Fixed.Classification, pair)
 	}
-	b.WriteString("\n## Metrics\n\n")
-	fmt.Fprintf(&b, "- TP: %d\n- FP: %d\n- FN: %d\n- TN: %d\n", report.Totals.TP, report.Totals.FP, report.Totals.FN, report.Totals.TN)
-	fmt.Fprintf(&b, "- Precision: %.4f\n- Recall: %.4f\n- F1: %.4f\n- Specificity: %.4f\n", report.Precision, report.Recall, report.F1, report.Specificity)
-	fmt.Fprintf(&b, "- Paired pass rate: %d/%d (%.4f)\n", report.PairedPasses, len(report.Cases), report.PairedRate)
 	b.WriteString("\n## Matching Details\n\n")
 	for _, c := range report.Cases {
 		fmt.Fprintf(&b, "### %s\n\n", c.CaseID)
@@ -203,7 +285,12 @@ func renderMarkdown(report scoreReport) string {
 }
 
 func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
-	report := scoreReport{Schema: "teecheck.benchmark.score.v1", GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+	report := scoreReport{Schema: "teecheck.benchmark.score.v2", GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+	report.Overall.Label = "overall"
+	report.InScope.Label = "in_twe_scope"
+	report.OutOfScope.Label = "out_of_twe_scope"
+	byFamily := map[string]*trackMetrics{}
+
 	for _, c := range cases {
 		if c.Case.Status == "pending_source" {
 			continue
@@ -216,22 +303,48 @@ func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
 		if err != nil {
 			return scoreReport{}, err
 		}
-		cs := caseScore{CaseID: c.Case.ID, Vulnerable: vuln, Fixed: fixed}
-		cs.PairedPass = vuln.Classification == "TP" && fixed.Classification == "TN"
-		if cs.PairedPass {
-			report.PairedPasses++
+		cs := caseScore{
+			CaseID:     c.Case.ID,
+			TWEFamily:  c.Oracle.TWEFamily,
+			InTWEScope: c.Oracle.InTWEScope,
+			CaseKind:   c.Oracle.CaseKind,
+			Vulnerable: vuln,
+			Fixed:      fixed,
 		}
-		addClass(&report.Totals, vuln.Classification)
-		addClass(&report.Totals, fixed.Classification)
+		cs.PairedPass = vuln.Classification == "TP" && fixed.Classification == "TN"
+
+		report.Overall.add(cs)
+		if cs.InTWEScope {
+			report.InScope.add(cs)
+			fam := byFamily[cs.TWEFamily]
+			if fam == nil {
+				fam = &trackMetrics{Label: cs.TWEFamily}
+				byFamily[cs.TWEFamily] = fam
+			}
+			fam.add(cs)
+		} else {
+			report.OutOfScope.add(cs)
+		}
 		report.Cases = append(report.Cases, cs)
 	}
-	report.Precision = ratio(report.Totals.TP, report.Totals.TP+report.Totals.FP)
-	report.Recall = ratio(report.Totals.TP, report.Totals.TP+report.Totals.FN)
-	report.Specificity = ratio(report.Totals.TN, report.Totals.TN+report.Totals.FP)
-	if report.Precision+report.Recall > 0 {
-		report.F1 = 2 * report.Precision * report.Recall / (report.Precision + report.Recall)
+
+	report.Overall.finalize()
+	report.InScope.finalize()
+	report.OutOfScope.finalize()
+	report.ByFamily = make(map[string]trackMetrics, len(byFamily))
+	for name, fam := range byFamily {
+		fam.finalize()
+		report.ByFamily[name] = *fam
 	}
-	report.PairedRate = ratio(report.PairedPasses, len(report.Cases))
+
+	// Mirror Overall into the flat backward-compatible fields.
+	report.Totals = report.Overall.Totals
+	report.Precision = report.Overall.Precision
+	report.Recall = report.Overall.Recall
+	report.F1 = report.Overall.F1
+	report.Specificity = report.Overall.Specificity
+	report.PairedPasses = report.Overall.PairedPasses
+	report.PairedRate = report.Overall.PairedRate
 	return report, nil
 }
 
@@ -289,16 +402,27 @@ func matchFinding(oracle oracleSpec, finding teecheckFinding) (bool, []string) {
 		return false, nil
 	}
 	text := strings.ToLower(strings.Join(append([]string{finding.Summary}, finding.Evidence...), "\n"))
-	var reasons []string
-	if strings.Contains(text, strings.ToLower(oracle.PrimaryFunction)) {
-		reasons = append(reasons, "primary_function:"+oracle.PrimaryFunction)
-	}
+	funcHit := oracle.PrimaryFunction != "" && strings.Contains(text, strings.ToLower(oracle.PrimaryFunction))
+	var termReasons []string
 	for _, term := range oracle.MatchTerms {
 		if strings.Contains(text, strings.ToLower(term)) {
-			reasons = append(reasons, "term:"+term)
+			termReasons = append(termReasons, "term:"+term)
 		}
 	}
-	return len(reasons) > 0, append([]string{"primary_file:" + oracle.PrimaryFile}, reasons...)
+	// A finding must land on the right file AND either name the vulnerable
+	// function or corroborate with at least two distinct match terms. A
+	// single generic term ("length", "hash") on the right file is not
+	// enough — that inflated true positives when a finding merely mentioned
+	// the file for an unrelated reason.
+	if !funcHit && len(termReasons) < 2 {
+		return false, nil
+	}
+	reasons := []string{"primary_file:" + oracle.PrimaryFile}
+	if funcHit {
+		reasons = append(reasons, "primary_function:"+oracle.PrimaryFunction)
+	}
+	reasons = append(reasons, termReasons...)
+	return true, reasons
 }
 
 func findFindings(root string) (string, error) {
@@ -345,10 +469,27 @@ func ratio(numerator, denominator int) float64 {
 	return math.Round((float64(numerator)/float64(denominator))*10000) / 10000
 }
 
+func printTrack(t trackMetrics) {
+	fmt.Printf("%-16s cases=%d TP=%d FP=%d FN=%d TN=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN,
+		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
+}
+
 func printScore(report scoreReport, path string) {
 	for _, c := range report.Cases {
-		fmt.Printf("CASE %s vulnerable=%s fixed=%s paired=%t\n", c.CaseID, c.Vulnerable.Classification, c.Fixed.Classification, c.PairedPass)
+		scope := "out"
+		if c.InTWEScope {
+			scope = "in"
+		}
+		fmt.Printf("CASE %s scope=%s family=%s vulnerable=%s fixed=%s paired=%t\n", c.CaseID, scope, c.TWEFamily, c.Vulnerable.Classification, c.Fixed.Classification, c.PairedPass)
 	}
-	fmt.Printf("TOTAL TP=%d FP=%d FN=%d TN=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n", report.Totals.TP, report.Totals.FP, report.Totals.FN, report.Totals.TN, report.Precision, report.Recall, report.F1, report.Specificity, report.PairedPasses, len(report.Cases))
+	printTrack(report.Overall)
+	printTrack(report.InScope)
+	printTrack(report.OutOfScope)
+	for _, fam := range []string{"Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"} {
+		if t, ok := report.ByFamily[fam]; ok {
+			printTrack(t)
+		}
+	}
 	fmt.Printf("REPORT %s\n", path)
 }
