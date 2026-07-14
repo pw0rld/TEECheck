@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The 183 CVE records are a candidate corpus, not 183 executable tests. This
+The 186 CVE records are a candidate corpus, not 186 executable tests. This
 specification defines when a record becomes a benchmark case and prevents
 hardware advisories, proprietary firmware issues, and source-level defects from
 being scored as though they were equivalent.
@@ -19,10 +19,11 @@ fixed/
 oracle.yaml
 ```
 
-`case.yaml` pins the CVE, platform, repository, vulnerable revision, fixed
-revision, build command, analysis command, and fixture hashes. `oracle.yaml`
-records the expected verdict, primary vulnerability location, required evidence
-path, and explicitly acceptable alternate locations.
+`case.yaml` pins the CVE, platform, repository, vulnerable/fixed revisions,
+authoritative source record, scan paths, and fixture hashes. The benchmark
+runner supplies the scanner command and performs isolated fixture validation.
+`oracle.yaml` records the expected verdict, primary vulnerability location,
+required evidence path, and explicitly acceptable alternate locations.
 
 ## Case Classes
 
@@ -56,6 +57,12 @@ A case is `eligible` only if all of the following are true:
 4. The oracle was written from advisory/patch evidence, not scanner output.
 5. The expected vulnerability location and evidence path are reviewed.
 6. The case builds or validates in an isolated test command.
+
+The executable runner additionally enforces an explicit `fixture_ready` status,
+a resolvable `source_record`, scan paths that cover the oracle primary file, and
+a non-empty patch that references at least one declared fixture file. Pending
+candidates must be explicitly marked `pending_source` and are never included in
+scoring.
 
 Every current documentation-only record remains `excluded` until a case
 directory satisfies this gate.

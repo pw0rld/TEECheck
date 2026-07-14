@@ -22,7 +22,7 @@ func TestBuildScorePairedResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Totals != (scoreTotals{TP: 3, TN: 3}) {
+	if report.Totals != (scoreTotals{TP: len(cases), TN: len(cases)}) {
 		t.Fatalf("totals=%+v", report.Totals)
 	}
 	if report.Precision != 1 || report.Recall != 1 || report.F1 != 1 || report.Specificity != 1 || report.PairedRate != 1 {
@@ -75,6 +75,15 @@ func TestMatchFindingIgnoresExplicitNoIssue(t *testing.T) {
 	}
 }
 
+func TestContainsPathAcceptsDirectoryScanRoot(t *testing.T) {
+	if !containsPath([]string{"syscall"}, "syscall/devices/hostsock/hostsock.c") {
+		t.Fatal("directory scan root should cover the oracle primary file")
+	}
+	if containsPath([]string{"syscall/devices/hostsock"}, "syscall/socket.c") {
+		t.Fatal("unrelated sibling must not be covered by a directory scan root")
+	}
+}
+
 func loadRepositoryCases(t *testing.T) []loadedCase {
 	t.Helper()
 	root := filepath.Join("..", "cases")
@@ -90,6 +99,9 @@ func loadRepositoryCases(t *testing.T) []loadedCase {
 		c, err := loadCase(filepath.Join(root, entry.Name()))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if c.Case.Status == "pending_source" {
+			continue
 		}
 		cases = append(cases, c)
 	}

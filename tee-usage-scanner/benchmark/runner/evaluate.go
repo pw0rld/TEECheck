@@ -86,6 +86,9 @@ func loadCase(dir string) (loadedCase, error) {
 
 func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout time.Duration) error {
 	for _, c := range cases {
+		if c.Case.Status == "pending_source" {
+			continue
+		}
 		for _, variant := range []string{"vulnerable", "fixed"} {
 			input, err := filepath.Abs(filepath.Join(c.Dir, variant))
 			if err != nil {
@@ -202,6 +205,9 @@ func renderMarkdown(report scoreReport) string {
 func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
 	report := scoreReport{Schema: "teecheck.benchmark.score.v1", GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
 	for _, c := range cases {
+		if c.Case.Status == "pending_source" {
+			continue
+		}
 		vuln, err := scoreVariant(c, "vulnerable", filepath.Join(resultsDir, c.Case.ID, "vulnerable"))
 		if err != nil {
 			return scoreReport{}, err

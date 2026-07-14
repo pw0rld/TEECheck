@@ -25,12 +25,14 @@ type fileSpec struct {
 type caseSpec struct {
 	Schema             int        `json:"schema"`
 	ID                 string     `json:"id"`
+	Status             string     `json:"status"`
 	Platform           string     `json:"platform"`
 	Repository         string     `json:"repository"`
 	VulnerableRevision string     `json:"vulnerable_revision"`
 	FixedRevision      string     `json:"fixed_revision"`
 	DetectionSurface   string     `json:"detection_surface"`
 	Language           string     `json:"language"`
+	SourceRecord       string     `json:"source_record"`
 	ScanPaths          []string   `json:"scan_paths"`
 	Files              []fileSpec `json:"files"`
 }
@@ -38,6 +40,7 @@ type caseSpec struct {
 type oracleSpec struct {
 	Schema           int      `json:"schema"`
 	ID               string   `json:"id"`
+	Status           string   `json:"status"`
 	Expected         string   `json:"expected"`
 	Weakness         string   `json:"weakness"`
 	PrimaryFile      string   `json:"primary_file"`
@@ -131,8 +134,23 @@ func validateCase(dir string) error {
 	if c.ID == "" || c.ID != o.ID || c.ID != filepath.Base(dir) {
 		return errors.New("case, oracle, and directory identifiers differ")
 	}
+	if c.Status != "fixture_ready" && c.Status != "pending_source" {
+		return fmt.Errorf("unsupported or missing case status %q", c.Status)
+	}
+	if c.Status == "pending_source" {
+		if o.Status != "pending_review" || c.SourceRecord == "" {
+			return errors.New("pending case must have a source record and pending oracle")
+		}
+		return nil
+	}
 	if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
 		return errors.New("repository revisions are incomplete")
+	}
+	if c.SourceRecord == "" {
+		return errors.New("source record is missing")
+	}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(c.SourceRecord))); err != nil {
+		return fmt.Errorf("source record: %w", err)
 	}
 	if len(c.Files) == 0 || len(c.ScanPaths) == 0 {
 		return errors.New("no fixture files or scan paths")
@@ -140,11 +158,33 @@ func validateCase(dir string) error {
 	if o.Expected != "vulnerable_only" || o.Weakness == "" || o.PrimaryFile == "" || o.PrimaryFunction == "" {
 		return errors.New("oracle ground truth is incomplete")
 	}
+	if !containsPath(c.ScanPaths, o.PrimaryFile) {
+		return fmt.Errorf("oracle primary file %q is not included in scan_paths", o.PrimaryFile)
+	}
 	if len(o.MatchTerms) == 0 || len(o.RequiredEvidence) == 0 || len(o.FixedEvidence) == 0 {
 		return errors.New("oracle evidence is incomplete")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "patches", "fix.patch")); err != nil {
 		return fmt.Errorf("fix patch: %w", err)
+	}
+	patchBytes, err := os.ReadFile(filepath.Join(dir, "patches", "fix.patch"))
+	if err != nil {
+		return fmt.Errorf("read fix patch: %w", err)
+	}
+	if len(patchBytes) == 0 {
+		return errors.New("fix patch is empty")
+	}
+
+	for _, scanPath := range c.ScanPaths {
+		if scanPath == "" || filepath.IsAbs(scanPath) || strings.Contains(scanPath, "..") {
+			return fmt.Errorf("unsafe scan path %q", scanPath)
+		}
+		for _, variant := range []string{"vulnerable", "fixed"} {
+			path := filepath.Join(dir, variant, filepath.FromSlash(scanPath))
+			if _, err := os.Stat(path); err != nil {
+				return fmt.Errorf("scan path %s/%s: %w", variant, scanPath, err)
+			}
+		}
 	}
 
 	seen := map[string]bool{}
@@ -168,6 +208,9 @@ func validateCase(dir string) error {
 		if f.Vulnerable != f.Fixed {
 			changed++
 		}
+		if !strings.Contains(string(patchBytes), f.Path) {
+			return fmt.Errorf("fix patch does not reference fixture file %q", f.Path)
+		}
 	}
 	if changed == 0 {
 		return errors.New("vulnerable and fixed fixtures are identical")
@@ -176,6 +219,17 @@ func validateCase(dir string) error {
 		return fmt.Errorf("oracle primary file %q is absent from fixture", o.PrimaryFile)
 	}
 	return nil
+}
+
+func containsPath(paths []string, want string) bool {
+	want = filepath.ToSlash(filepath.Clean(want))
+	for _, path := range paths {
+		path = filepath.ToSlash(filepath.Clean(path))
+		if path == want || strings.HasPrefix(want, path+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func readJSON(path string, dst any) error {
