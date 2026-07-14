@@ -64,6 +64,7 @@ type trackMetrics struct {
 	Label        string      `json:"label"`
 	Cases        int         `json:"cases"`
 	Totals       scoreTotals `json:"totals"`
+	Errors       int         `json:"errors"`
 	Precision    float64     `json:"precision"`
 	Recall       float64     `json:"recall"`
 	F1           float64     `json:"f1"`
@@ -76,6 +77,13 @@ func (t *trackMetrics) add(cs caseScore) {
 	t.Cases++
 	addClass(&t.Totals, cs.Vulnerable.Classification)
 	addClass(&t.Totals, cs.Fixed.Classification)
+	// An ERROR variant (scan crashed / produced no findings.json) is not a
+	// TP/FP/FN/TN judgment. It is counted separately so infrastructure
+	// failures neither inflate nor deflate precision/recall, but stay
+	// visible and can be driven to zero.
+	if cs.Vulnerable.Classification == "ERROR" || cs.Fixed.Classification == "ERROR" {
+		t.Errors++
+	}
 	if cs.PairedPass {
 		t.PairedPasses++
 	}
@@ -163,14 +171,19 @@ func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout ti
 			fmt.Printf("RUN %s/%s\n", c.Case.ID, variant)
 			err = cmd.Run()
 			cancel()
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("%s/%s scanner timeout after %s", c.Case.ID, variant, timeout)
-			}
-			if err != nil {
-				return fmt.Errorf("%s/%s scanner failed: %w", c.Case.ID, variant, err)
-			}
-			if _, err := findFindings(runDir); err != nil {
-				return fmt.Errorf("%s/%s: %w", c.Case.ID, variant, err)
+			// A failed or timed-out scan must not abort the whole batch. It
+			// is recorded as an ERROR variant during scoring (missing
+			// findings.json) and reported separately, so one crashing scan
+			// does not discard the results of every case that ran.
+			switch {
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				fmt.Printf("WARN %s/%s scanner timeout after %s\n", c.Case.ID, variant, timeout)
+			case err != nil:
+				fmt.Printf("WARN %s/%s scanner failed: %v\n", c.Case.ID, variant, err)
+			default:
+				if _, err := findFindings(runDir); err != nil {
+					fmt.Printf("WARN %s/%s: %v\n", c.Case.ID, variant, err)
+				}
 			}
 		}
 	}
@@ -214,8 +227,8 @@ func scoreAndWrite(cases []loadedCase, resultsDir string) error {
 }
 
 func trackRow(b *strings.Builder, t trackMetrics) {
-	fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %.4f | %.4f | %.4f | %.4f | %d/%d |\n",
-		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN,
+	fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %.4f | %.4f | %.4f | %.4f | %d/%d |\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors,
 		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
 }
 
@@ -228,14 +241,14 @@ func renderMarkdown(report scoreReport) string {
 	b.WriteString("Read scanner capability off **in_twe_scope**. The out_of_twe_scope\n")
 	b.WriteString("track is a known design gap (generic memory/arithmetic/resource bugs the\n")
 	b.WriteString("TWE pipeline does not target), not a scanner failure.\n\n")
-	b.WriteString("| Track | Cases | TP | FP | FN | TN | Precision | Recall | F1 | Specificity | Paired |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Track | Cases | TP | FP | FN | TN | Err | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	trackRow(&b, report.Overall)
 	trackRow(&b, report.InScope)
 	trackRow(&b, report.OutOfScope)
 	b.WriteString("\n### In-scope by TWE family\n\n")
-	b.WriteString("| Family | Cases | TP | FP | FN | TN | Precision | Recall | F1 | Specificity | Paired |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Family | Cases | TP | FP | FN | TN | Err | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, fam := range []string{"Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"} {
 		if t, ok := report.ByFamily[fam]; ok {
 			trackRow(&b, t)
@@ -349,17 +362,20 @@ func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
 }
 
 func scoreVariant(c loadedCase, variant, resultDir string) (variantScore, error) {
-	path, err := findFindings(resultDir)
-	if err != nil {
-		return variantScore{}, fmt.Errorf("%s/%s: %w", c.Case.ID, variant, err)
-	}
-	var findings teecheckFindings
-	if err := readJSON(path, &findings); err != nil {
-		return variantScore{}, err
-	}
 	expected := "clean"
 	if variant == "vulnerable" {
 		expected = "vulnerable"
+	}
+	path, err := findFindings(resultDir)
+	if err != nil {
+		// The scan produced no findings.json (crashed, timed out, or never
+		// ran). Record it as ERROR so it is reported separately instead of
+		// silently becoming a clean/vulnerable verdict or aborting scoring.
+		return variantScore{Variant: variant, Expected: expected, Observed: "error", Classification: "ERROR"}, nil
+	}
+	var findings teecheckFindings
+	if err := readJSON(path, &findings); err != nil {
+		return variantScore{Variant: variant, Expected: expected, Observed: "error", Classification: "ERROR", FindingsPath: path}, nil
 	}
 	result := variantScore{Variant: variant, Expected: expected, Observed: "clean", FindingsPath: path, FindingCount: len(findings.Findings)}
 	for _, finding := range findings.Findings {
@@ -385,9 +401,20 @@ func scoreVariant(c loadedCase, variant, resultDir string) (variantScore, error)
 	return result, nil
 }
 
+// detectionStatuses are the arbiter verdicts that assert an issue. The
+// arbiter's vocabulary, in ascending confidence, is no_issue_observed <
+// needs_review < likely_issue < confirmed_candidate. Only the top two count
+// as a detection: needs_review means the scanner declined to commit, so on
+// the vulnerable side it is not credited as a find and on the fixed side it
+// is the correct quiet outcome rather than a false positive.
+var detectionStatuses = map[string]bool{
+	"likely_issue":        true,
+	"confirmed_candidate": true,
+}
+
 func matchFinding(oracle oracleSpec, finding teecheckFinding) (bool, []string) {
 	status := strings.ToLower(strings.TrimSpace(finding.Status))
-	if status == "no_issue_observed" || status == "dismissed" || status == "false_positive" {
+	if !detectionStatuses[status] {
 		return false, nil
 	}
 	fileMatch := false
@@ -470,8 +497,8 @@ func ratio(numerator, denominator int) float64 {
 }
 
 func printTrack(t trackMetrics) {
-	fmt.Printf("%-16s cases=%d TP=%d FP=%d FN=%d TN=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n",
-		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN,
+	fmt.Printf("%-16s cases=%d TP=%d FP=%d FN=%d TN=%d err=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors,
 		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
 }
 

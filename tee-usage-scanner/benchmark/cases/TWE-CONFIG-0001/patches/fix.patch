@@ -1,12 +1,12 @@
 --- a/src/attest.rs
 +++ b/src/attest.rs
-@@ -12,12 +12,19 @@
+@@ -12,19 +12,26 @@
  
  /// Verify attestation evidence before releasing a sealed secret.
  ///
 -/// Simulated evidence is accepted unconditionally. The simulation branch is
 -/// compiled into every build, so a production deployment that is fed
--/// `Mode::Simulated` evidence skips all real verification.
+-/// `Mode::Simulated` evidence skips real DCAP verification entirely.
 +/// Simulated evidence is only accepted when the `simulation` feature is
 +/// compiled in. A production build (feature off) rejects `Mode::Simulated`
 +/// outright, so the simulation path can never reach real authority.
@@ -24,3 +24,12 @@
      }
      verify_dcap(&evidence.quote)
  }
+ 
+ /// Stand-in for real DCAP quote verification. It performs genuine checks
+-/// (framing and signature length); the weakness under test is not here but
+-/// in the simulation-mode bypass above.
++/// (framing and signature length); identical to the vulnerable revision, so
++/// the only behavioural difference between the two is the simulation gate.
+ fn verify_dcap(quote: &[u8]) -> Result<(), Error> {
+     if quote.len() < 64 || quote[0] != QUOTE_VERSION_3 {
+         return Err(Error::InvalidQuote);

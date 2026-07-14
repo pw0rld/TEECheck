@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "src/attest.rs",
-      "vulnerable_sha256": "e006913b0bf198a94d592abdaa0c5768c4f74fd658e940aee078353b752fc2a7",
-      "fixed_sha256": "859ccbf15e2e1de4283d50a7517ce1b142065451f7f2783c19780fab72b18d0d"
+      "vulnerable_sha256": "22d50b92c576cf0a0f1db043ecce6184d3ae881a12d533d186c4f64e89992ce7",
+      "fixed_sha256": "97b3e8ee88e45738f6fdb4a214aa491b1ed276e326384a967e5fa782da97a3c9"
     }
   ],
   "scan_paths": [

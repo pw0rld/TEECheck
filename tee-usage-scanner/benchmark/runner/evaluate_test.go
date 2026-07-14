@@ -13,6 +13,7 @@ func TestBuildScorePairedResults(t *testing.T) {
 	for _, c := range cases {
 		writeFindings(t, results, c.Case.ID, "vulnerable", []teecheckFinding{{
 			FindingID: "finding-1",
+			Status:    "confirmed_candidate",
 			Files:     []string{c.Oracle.PrimaryFile},
 			Summary:   c.Oracle.PrimaryFunction + " reaches " + c.Oracle.MatchTerms[0],
 		}})
@@ -37,6 +38,7 @@ func TestBuildScoreReportsFalseNegativeAndFalsePositive(t *testing.T) {
 	writeFindings(t, results, c.Case.ID, "vulnerable", nil)
 	writeFindings(t, results, c.Case.ID, "fixed", []teecheckFinding{{
 		FindingID: "fixed-hit",
+		Status:    "confirmed_candidate",
 		Files:     []string{c.Oracle.PrimaryFile},
 		Summary:   c.Oracle.MatchTerms[0],
 	}})
@@ -83,11 +85,36 @@ func TestMatchFindingRejectsSingleGenericTerm(t *testing.T) {
 		t.Skip("no case with a non-function match term")
 	}
 	matched, _ := matchFinding(c.Oracle, teecheckFinding{
+		Status:  "confirmed_candidate",
 		Files:   []string{c.Oracle.PrimaryFile},
 		Summary: "the " + generic + " field is fine here",
 	})
 	if matched {
 		t.Fatalf("a single generic term %q on the right file must not match", generic)
+	}
+}
+
+func TestMatchFindingRequiresAssertedStatus(t *testing.T) {
+	c := loadRepositoryCases(t)[0]
+	strong := c.Oracle.PrimaryFunction + " " + c.Oracle.MatchTerms[0]
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{"confirmed_candidate", true},
+		{"likely_issue", true},
+		{"needs_review", false},
+		{"no_issue_observed", false},
+		{"", false},
+	} {
+		matched, _ := matchFinding(c.Oracle, teecheckFinding{
+			Status:  tc.status,
+			Files:   []string{c.Oracle.PrimaryFile},
+			Summary: strong,
+		})
+		if matched != tc.want {
+			t.Fatalf("status %q: matched=%v want %v", tc.status, matched, tc.want)
+		}
 	}
 }
 
@@ -110,11 +137,23 @@ func TestMatchFindingAcceptsTwoTerms(t *testing.T) {
 		t.Skip("no case with two non-function match terms")
 	}
 	matched, _ := matchFinding(c.Oracle, teecheckFinding{
+		Status:  "confirmed_candidate",
 		Files:   []string{c.Oracle.PrimaryFile},
 		Summary: terms[0] + " combined with " + terms[1] + " triggers the issue",
 	})
 	if !matched {
 		t.Fatalf("two corroborating terms %v should match", terms[:2])
+	}
+}
+
+func TestScoreVariantMissingFindingsIsError(t *testing.T) {
+	c := loadRepositoryCases(t)[0]
+	vs, err := scoreVariant(c, "vulnerable", t.TempDir()) // empty dir, no findings.json
+	if err != nil {
+		t.Fatalf("missing findings should not error: %v", err)
+	}
+	if vs.Classification != "ERROR" {
+		t.Fatalf("classification=%q want ERROR", vs.Classification)
 	}
 }
 

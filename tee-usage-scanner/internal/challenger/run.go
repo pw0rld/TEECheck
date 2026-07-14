@@ -46,7 +46,12 @@ func Run(cfg config.Config) error {
 		if strings.EqualFold(cfg.ChallengeMode, "llm") {
 			challenge, err = buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, cfg.AgentID, cfg.LLMTemp)
 			if err != nil {
-				return fmt.Errorf("challenger llm for %s: %w", pack.CaseID, err)
+				// A single malformed LLM response (truncated or fenced JSON)
+				// must not abort the whole run. Degrade to the deterministic
+				// heuristic challenge so the pipeline still produces a
+				// challenge artifact for this case.
+				fmt.Printf("challenger: llm failed for %s (%v); falling back to heuristic challenge\n", pack.CaseID, err)
+				challenge = buildChallengeHeuristic(pack, hypothesis, cfg.AgentID)
 			}
 		} else {
 			challenge = buildChallengeHeuristic(pack, hypothesis, cfg.AgentID)
