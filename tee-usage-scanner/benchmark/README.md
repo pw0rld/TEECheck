@@ -17,13 +17,14 @@ cases/CVE-YYYY-NNNN/
 ├── vulnerable/        # Source before the security fix
 ├── fixed/             # Source after the security fix
 ├── patches/fix.patch  # Exact upstream security patch
-├── UPSTREAM-LICENSE
+├── UPSTREAM-LICENSE   # optional copy of the upstream license text
 └── README.md
 ```
 
-Only cases in this directory participate in executable scanner evaluation.
-There are currently three cases, producing six scan samples: three vulnerable
-and three fixed.
+Only `fixture_ready` cases in this directory participate in executable scanner
+evaluation. There are currently 50 executable cases, producing 100 scan
+samples: 50 vulnerable and 50 fixed. Another 18 directories preserve
+pending-source candidates but are excluded from scoring.
 
 ### `cves/`
 
@@ -100,10 +101,11 @@ directory.
 
 ## Current Scope
 
-- CVE research records: 183
-- Executable vulnerability cases: 3
-- Source samples: 6
-- Current executable project: OP-TEE
+- CVE research records: 186
+- Executable vulnerability cases: 50
+- Source samples: 100
+- Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, Linux KVM
+  SEV/SEV-SNP, Linux TDX/confidential-VM support, Occlum, and `sgx_tstd`
 
 The CVE corpus measures collection coverage. The executable cases measure
 scanner accuracy. These numbers must not be combined into a single benchmark
