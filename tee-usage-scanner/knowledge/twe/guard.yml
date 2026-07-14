@@ -1,0 +1,23 @@
+id: TWE-GUARD-001
+name: Validity-Only Consumption Of Verification Result
+family: Guard
+summary: >
+  Authority is granted on a verification result that only checks validity
+  while ignoring a required field — signature/message length, full
+  authentication-tag comparison, or curve/parameter checks — so a crafted
+  input passes an incomplete guard.
+applicable_contexts: [signature_verification, quote_verification]
+required_trustir: [verification_call, authority_point]
+allowed_enums:
+  verification_call: [signature_check, quote_check, tag_compare]
+  authority_point: [accept_message, release_secret, grant_access]
+codeql_modules:
+  - guard/validity_only_consumption.ql
+violation_condition: >
+  authority_point is reached on a verification_call that does not enforce the
+  required completeness field for its scheme.
+accepted_suppressors:
+  - full_field_comparison_present
+  - checked_inside_verifier
+  - test_or_dev_only
+fixtures: [CVE-2016-6129]

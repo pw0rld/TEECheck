@@ -1,0 +1,22 @@
+id: TWE-CONFIG-001
+name: Weak Trust Mode Reaches Production Authority
+family: Config
+summary: >
+  A simulation, debug, dev-key, or skip-verification mode can reach a
+  production authority point, letting weak or absent verification release a
+  secret or grant access when the mode is not gated out of production builds.
+applicable_contexts: [attestation_verification, key_release]
+required_trustir: [mode_selector, authority_point]
+allowed_enums:
+  mode_selector: [simulation_mode, debug_mode, dev_key_mode, skip_verification]
+  authority_point: [attestation_acceptance, secret_release]
+codeql_modules:
+  - config/weak_mode_reaches_authority.ql
+violation_condition: >
+  A weak-trust mode_selector reaches authority_point on a path present in
+  production builds.
+accepted_suppressors:
+  - mode_gated_by_build_feature
+  - mode_rejected_in_production
+  - test_or_dev_only
+fixtures: [TWE-CONFIG-0001]
