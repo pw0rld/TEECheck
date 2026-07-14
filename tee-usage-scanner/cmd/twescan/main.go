@@ -50,6 +50,12 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	if fixture == "" {
 		fixture = filepath.Dir(input)
 	}
+	// Fail fast (before any LLM call) on cases the deterministic Rust path
+	// cannot handle: they need a CodeQL build harness (only the Rust fixtures
+	// ship one) and an in-scope TWE family with a query generator.
+	if _, err := os.Stat(filepath.Join(fixture, "codeql")); err != nil {
+		return fmt.Errorf("no CodeQL build harness for this case (skipped): %s", filepath.Base(fixture))
+	}
 	scanPaths, err := readScanPaths(filepath.Join(fixture, "case.yaml"))
 	if err != nil {
 		return err
@@ -61,6 +67,9 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	family, err := readTWEFamily(filepath.Join(fixture, "oracle.yaml"))
 	if err != nil {
 		return err
+	}
+	if !generatorSupported(family) {
+		return fmt.Errorf("no query generator for family %q yet (skipped)", family)
 	}
 	cand, err := candidateFor(catalog, family, input, scanPaths)
 	if err != nil {
@@ -164,6 +173,12 @@ func envOr(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// generatorSupported reports whether a query generator exists for a family.
+// Mirrors twepipeline.generateQuery's switch.
+func generatorSupported(f twe.Family) bool {
+	return f == twe.FamilyBinding || f == twe.FamilyConfig
 }
 
 func readTWEFamily(oracleYaml string) (twe.Family, error) {
