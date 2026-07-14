@@ -1,0 +1,8 @@
+name: teecheck/twe-queries
+version: 0.0.1
+# Prewritten TWE CodeQL modules referenced by knowledge/twe/*.yml
+# (codeql_modules). Paths under this root match the catalog module paths,
+# e.g. binding/missing_subject_binding.ql. Dependency resolution against a
+# CodeQL bundle (codeql/rust-all) is wired up in M2-proper.
+dependencies:
+  codeql/rust-all: "*"
