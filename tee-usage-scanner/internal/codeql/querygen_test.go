@@ -23,9 +23,9 @@ func TestGenerateBindingQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// the attested field name derives from the claim symbol, not hardcoded
-	if !strings.Contains(q, `fe.getIdentifier().getText() = "pubkey"`) {
-		t.Errorf("query does not check the derived attested field:\n%s", q)
+	// the attested variable derives from the claim symbol, not hardcoded
+	if !strings.Contains(q, `nr.getText() = "report"`) {
+		t.Errorf("query does not check the derived attested variable:\n%s", q)
 	}
 	// the authority function is pinned by the TrustIR location
 	if !strings.Contains(q, `getBaseName() = "registry.rs"`) || !strings.Contains(q, "getStartLine() = 10") {
@@ -44,16 +44,17 @@ func TestGenerateBindingQueryMissingRole(t *testing.T) {
 	}
 }
 
-func TestAttestedFieldName(t *testing.T) {
+func TestAttestedVarName(t *testing.T) {
 	cases := map[string]string{
-		"report.pubkey":   "pubkey",
-		"quote.report.mr": "mr",
+		"report.pubkey":   "report",
+		"quote.report.mr": "quote",
+		"_report":         "_report",
 		"pubkey":          "pubkey",
 		"":                "",
 	}
 	for in, want := range cases {
-		if got := attestedFieldName(in); got != want {
-			t.Errorf("attestedFieldName(%q)=%q want %q", in, got, want)
+		if got := attestedVarName(in); got != want {
+			t.Errorf("attestedVarName(%q)=%q want %q", in, got, want)
 		}
 	}
 }

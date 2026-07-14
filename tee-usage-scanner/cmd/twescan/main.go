@@ -18,10 +18,13 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/solver"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twe"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twepipeline"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twexpert"
 )
 
 func main() {
@@ -58,6 +61,10 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("twescan: expert located roles for %s: %s@%d, %s@%d\n",
+		cand.TWEID,
+		cand.Roles["claim_field"].Loc.Symbol, cand.Roles["claim_field"].Loc.Line,
+		cand.Roles["authority_subject"].Loc.Symbol, cand.Roles["authority_subject"].Loc.Line)
 
 	engine := codeql.NewWithBin(filepath.Join(bundle, "codeql"))
 	if !engine.Available() {
@@ -99,9 +106,11 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	return nil
 }
 
-// candidateFor builds the TrustIR candidate for a fixture. This is the piece
-// the expert LLM will eventually produce; for now it is wired for the Binding
-// family by locating the attestation call and the authority point in source.
+// candidateFor produces the TrustIR candidate by asking the LLM (GLM, per the
+// TEECHECK_LLM_* environment) to locate the roles of the applicable TWE in the
+// scan file. The model only points at code; CodeQL and the solver judge. Only
+// the Binding family has a downstream query generator today, so that is the TWE
+// selected.
 func candidateFor(catalog *twe.Catalog, input string, scanPaths []string) (twe.TrustIRCandidate, error) {
 	var entry twe.Entry
 	for _, e := range catalog.All() {
@@ -113,34 +122,41 @@ func candidateFor(catalog *twe.Catalog, input string, scanPaths []string) (twe.T
 	if entry.ID == "" {
 		return twe.TrustIRCandidate{}, fmt.Errorf("no Binding TWE in catalog")
 	}
-	// Locate roles in the first scan file (the fixture's patched file).
 	scan := scanPaths[0]
 	data, err := os.ReadFile(filepath.Join(input, filepath.FromSlash(scan)))
 	if err != nil {
 		return twe.TrustIRCandidate{}, err
 	}
-	claimLine := lineOf(string(data), "verify_quote")
-	authLine := lineOf(string(data), ".push(")
-	if claimLine == 0 || authLine == 0 {
-		return twe.TrustIRCandidate{}, fmt.Errorf("could not locate Binding roles in %s (this fixture is not wired for twescan)", scan)
+
+	cfg := config.Config{
+		LLMProvider:   envOr("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:    envOr("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:     envOr("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:      envOr("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTimeoutSec: 60,
+		LLMTemp:       0.2,
 	}
-	return twe.TrustIRCandidate{
-		TWEID:  entry.ID,
-		SiteID: filepath.Base(filepath.Dir(input)) + "-" + strings.TrimSuffix(filepath.Base(scan), filepath.Ext(scan)),
-		Roles: map[string]twe.RoleCandidate{
-			"claim_field":       {Enum: "attested_public_key", Loc: twe.Loc{Path: scan, Line: claimLine, Symbol: "report.pubkey"}},
-			"authority_subject": {Enum: "registered_worker", Loc: twe.Loc{Path: scan, Line: authLine, Symbol: "pubkey"}},
-		},
-	}, nil
+	if strings.TrimSpace(cfg.LLMAPIKey) == "" {
+		return twe.TrustIRCandidate{}, fmt.Errorf("no LLM API key (set TEECHECK_LLM_API_KEY); the expert needs a model to locate roles")
+	}
+	client := llm.NewClient(cfg)
+
+	cand, err := twexpert.ExtractCandidate(context.Background(), client, entry, scan, string(data), cfg.LLMTemp)
+	if err != nil {
+		return twe.TrustIRCandidate{}, fmt.Errorf("expert extraction: %w", err)
+	}
+	// Give the site a stable, variant-qualified id for the findings artifact.
+	cand.SiteID = filepath.Base(filepath.Dir(input)) + "-" + strings.TrimSuffix(filepath.Base(scan), filepath.Ext(scan))
+	return cand, nil
 }
 
-func lineOf(content, needle string) int {
-	for i, line := range strings.Split(content, "\n") {
-		if strings.Contains(line, needle) {
-			return i + 1
+func envOr(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
 		}
 	}
-	return 0
+	return ""
 }
 
 func readScanPaths(caseYaml string) ([]string, error) {

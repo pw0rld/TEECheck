@@ -51,9 +51,9 @@ func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("candidate %s: missing role authority_subject", cand.SiteID)
 	}
-	field := attestedFieldName(claim.Loc.Symbol)
-	if field == "" {
-		return "", fmt.Errorf("candidate %s: cannot derive attested field name from claim symbol %q", cand.SiteID, claim.Loc.Symbol)
+	claimVar := attestedVarName(claim.Loc.Symbol)
+	if claimVar == "" {
+		return "", fmt.Errorf("candidate %s: cannot derive attested variable from claim symbol %q", cand.SiteID, claim.Loc.Symbol)
 	}
 	authFile := filepath.Base(authority.Loc.Path)
 	if authFile == "" || authFile == "." || authority.Loc.Line <= 0 {
@@ -63,7 +63,7 @@ func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "/**\n")
 	fmt.Fprintf(&b, " * @name TWE-BIND-001 generated for %s\n", cand.SiteID)
-	fmt.Fprintf(&b, " * @description Authority granted at %s:%d without an accepted binding to the attested field %q.\n", authFile, authority.Loc.Line, field)
+	fmt.Fprintf(&b, " * @description Authority granted at %s:%d without any use of the attested value %q.\n", authFile, authority.Loc.Line, claimVar)
 	fmt.Fprintf(&b, " * @kind problem\n")
 	fmt.Fprintf(&b, " * @problem.severity error\n")
 	fmt.Fprintf(&b, " * @id teecheck/generated/binding/%s\n", sanitizeID(cand.SiteID))
@@ -78,26 +78,29 @@ func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
 	fmt.Fprintf(&b, "    a.getLocation().getFile().getBaseName() = %q and\n", authFile)
 	fmt.Fprintf(&b, "    a.getLocation().getStartLine() = %d\n", authority.Loc.Line)
 	b.WriteString("  ) and\n")
-	fmt.Fprintf(&b, "  // no reference to the attested field %q on the authority path\n", field)
-	b.WriteString("  not exists(FieldExpr fe |\n")
-	b.WriteString("    fe.getEnclosingCallable() = f and\n")
-	fmt.Fprintf(&b, "    fe.getIdentifier().getText() = %q\n", field)
+	fmt.Fprintf(&b, "  // the attested value %q is never read in the authority function — it was\n", claimVar)
+	b.WriteString("  // bound and then dropped, so authority is not tied to the attested subject\n")
+	b.WriteString("  not exists(NameRef nr |\n")
+	b.WriteString("    nr.getEnclosingCallable() = f and\n")
+	fmt.Fprintf(&b, "    nr.getText() = %q\n", claimVar)
 	b.WriteString("  )\n")
 	// Surface the function name CodeQL resolved so downstream matching and
 	// review can name the code element, not just its location.
-	fmt.Fprintf(&b, "select f, \"TWE-BIND-001: \" + f.getName().getText() + \" grants authority without binding to attested field '%s' (%s)\"\n", field, cand.SiteID)
+	fmt.Fprintf(&b, "select f, \"TWE-BIND-001: \" + f.getName().getText() + \" grants authority without using the attested value '%s' (%s)\"\n", claimVar, cand.SiteID)
 	return b.String(), nil
 }
 
-// attestedFieldName pulls the field name out of a claim symbol like
-// "report.pubkey" (-> "pubkey") or a bare "pubkey" (-> "pubkey").
-func attestedFieldName(symbol string) string {
+// attestedVarName pulls the base binding out of a claim symbol: the variable
+// that holds the attested value. "report.pubkey" -> "report", "_report" ->
+// "_report". The query then checks whether that binding is ever read in the
+// authority function; if it is only bound and dropped, authority is unbound.
+func attestedVarName(symbol string) string {
 	s := strings.TrimSpace(symbol)
 	if s == "" {
 		return ""
 	}
-	if i := strings.LastIndex(s, "."); i >= 0 {
-		s = s[i+1:]
+	if i := strings.Index(s, "."); i >= 0 {
+		s = s[:i]
 	}
 	return strings.TrimSpace(s)
 }
