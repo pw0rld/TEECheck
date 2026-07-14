@@ -56,14 +56,21 @@ codeql database analyze db-<v> codeql/queries/binding/missing_subject_binding.ql
 - The seed query is a **first-cut syntactic heuristic** ("calls verify_quote and
   no `pubkey` field access"). M4 replaces it with a real dataflow query: no
   accepted binding relation from `claim_field` to `authority_subject`.
-- **Pack dependency resolution**: `codeql/rust-all` pulls transitive packs
-  (e.g. `codeql/namebinding`) that are vendored inside the bundle's
-  `rust-queries` pack but not resolvable by a bare custom pack without a lock
-  file. M2-proper must wire `teecheck/twe-queries` to resolve against the
-  bundle (lock file or `--additional-packs`), then invoke via the Go adapter.
-- **DB build needs a compilable crate.** Real targets (dcap-qvl) build fine;
-  single-file fixtures need a minimal `Cargo.toml` wrapper. The benchmark
-  fixtures will need a build shim for the Rust path.
+- **Pack dependency resolution — SOLVED.** `codeql/rust-all` pulls transitive
+  packs (e.g. `codeql/namebinding`) that a bundle ships only vendored under the
+  `rust-queries` pack's `.codeql/libraries` cache. The working recipe is to
+  pass that single directory as the sole `--additional-packs` entry:
+  `qlpacks/codeql/rust-queries/<ver>/.codeql/libraries`. It contains the full
+  resolved set (rust-all + namebinding + …) with no duplication — no
+  `codeql pack install`, no network. Do NOT also add the top-level `qlpacks`
+  dir, or shared packs resolve to "multiple locations". Captured in
+  `codeql.RustLibrariesPath`.
+- **DB build needs a compilable crate — handled per fixture.** Single-file
+  fixtures ship a `codeql/` build harness (a skeleton crate with stub modules);
+  `codeql.AssembleFixtureCrate` overlays the variant's scan files onto it. See
+  `TWE-BIND-0001/codeql/`. Real targets (dcap-qvl) build directly with no
+  harness. The full path is exercised by `TestFixtureEndToEnd`
+  (vulnerable→1, fixed→0 on the real fixture).
 - CodeQL adapter in `internal/staticcheck/codeql` is still a stub
   (`Available()==false`); wiring it to a real `codeql` invocation + SARIF
   parser is the M2 implementation task.
