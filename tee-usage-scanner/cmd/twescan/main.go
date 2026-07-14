@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
@@ -57,14 +58,20 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	if err != nil {
 		return err
 	}
-	cand, err := candidateFor(catalog, input, scanPaths)
+	family, err := readTWEFamily(filepath.Join(fixture, "oracle.yaml"))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("twescan: expert located roles for %s: %s@%d, %s@%d\n",
-		cand.TWEID,
-		cand.Roles["claim_field"].Loc.Symbol, cand.Roles["claim_field"].Loc.Line,
-		cand.Roles["authority_subject"].Loc.Symbol, cand.Roles["authority_subject"].Loc.Line)
+	cand, err := candidateFor(catalog, family, input, scanPaths)
+	if err != nil {
+		return err
+	}
+	var roleParts []string
+	for role, rc := range cand.Roles {
+		roleParts = append(roleParts, fmt.Sprintf("%s=%s@%d", role, rc.Loc.Symbol, rc.Loc.Line))
+	}
+	sort.Strings(roleParts)
+	fmt.Printf("twescan: expert located roles for %s: %s\n", cand.TWEID, strings.Join(roleParts, ", "))
 
 	engine := codeql.NewWithBin(filepath.Join(bundle, "codeql"))
 	if !engine.Available() {
@@ -111,16 +118,16 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 // scan file. The model only points at code; CodeQL and the solver judge. Only
 // the Binding family has a downstream query generator today, so that is the TWE
 // selected.
-func candidateFor(catalog *twe.Catalog, input string, scanPaths []string) (twe.TrustIRCandidate, error) {
+func candidateFor(catalog *twe.Catalog, family twe.Family, input string, scanPaths []string) (twe.TrustIRCandidate, error) {
 	var entry twe.Entry
 	for _, e := range catalog.All() {
-		if e.Family == twe.FamilyBinding {
+		if e.Family == family {
 			entry = e
 			break
 		}
 	}
 	if entry.ID == "" {
-		return twe.TrustIRCandidate{}, fmt.Errorf("no Binding TWE in catalog")
+		return twe.TrustIRCandidate{}, fmt.Errorf("no %s TWE in catalog", family)
 	}
 	scan := scanPaths[0]
 	data, err := os.ReadFile(filepath.Join(input, filepath.FromSlash(scan)))
@@ -157,6 +164,23 @@ func envOr(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func readTWEFamily(oracleYaml string) (twe.Family, error) {
+	data, err := os.ReadFile(oracleYaml)
+	if err != nil {
+		return "", fmt.Errorf("read oracle.yaml: %w", err)
+	}
+	var o struct {
+		TWEFamily string `json:"twe_family"`
+	}
+	if err := json.Unmarshal(data, &o); err != nil {
+		return "", fmt.Errorf("parse oracle.yaml: %w", err)
+	}
+	if strings.TrimSpace(o.TWEFamily) == "" {
+		return "", fmt.Errorf("oracle.yaml has no twe_family (case is out of TWE scope)")
+	}
+	return twe.Family(o.TWEFamily), nil
 }
 
 func readScanPaths(caseYaml string) ([]string, error) {

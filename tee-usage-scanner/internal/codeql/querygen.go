@@ -90,6 +90,57 @@ func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
 	return b.String(), nil
 }
 
+// GenerateConfigQuery emits a query for one TWE-CONFIG site (a weak trust mode
+// reaching production authority). It pins the mode-selecting function by the
+// mode_selector role's location and flags it when it reaches an acceptance
+// (a Result Ok) — the simulation branch's accept. In a hardened build the
+// accept is gated out (e.g. behind #[cfg(feature = "simulation")]) and is not
+// in the database, so the function has no acceptance and is not flagged.
+//
+// First-cut relation: "the mode-selecting function contains an acceptance".
+// Hardening (a real path check that the accept bypasses verification) is
+// future work, like the binding module.
+func GenerateConfigQuery(cand twe.TrustIRCandidate) (string, error) {
+	mode, ok := cand.Roles["mode_selector"]
+	if !ok {
+		return "", fmt.Errorf("candidate %s: missing role mode_selector", cand.SiteID)
+	}
+	if _, ok := cand.Roles["authority_point"]; !ok {
+		return "", fmt.Errorf("candidate %s: missing role authority_point", cand.SiteID)
+	}
+	modeFile := filepath.Base(mode.Loc.Path)
+	if modeFile == "" || modeFile == "." || mode.Loc.Line <= 0 {
+		return "", fmt.Errorf("candidate %s: mode_selector needs a file and line", cand.SiteID)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "/**\n")
+	fmt.Fprintf(&b, " * @name TWE-CONFIG-001 generated for %s\n", cand.SiteID)
+	fmt.Fprintf(&b, " * @description A weak trust mode selected at %s:%d reaches an acceptance without gating.\n", modeFile, mode.Loc.Line)
+	fmt.Fprintf(&b, " * @kind problem\n")
+	fmt.Fprintf(&b, " * @problem.severity error\n")
+	fmt.Fprintf(&b, " * @id teecheck/generated/config/%s\n", sanitizeID(cand.SiteID))
+	fmt.Fprintf(&b, " * @tags security\n")
+	fmt.Fprintf(&b, " */\n\n")
+	b.WriteString("import rust\n\n")
+	b.WriteString("from Function f\n")
+	b.WriteString("where\n")
+	fmt.Fprintf(&b, "  // mode selector located by TrustIR: %s:%d\n", modeFile, mode.Loc.Line)
+	b.WriteString("  exists(AstNode m |\n")
+	b.WriteString("    m.getEnclosingCallable() = f and\n")
+	fmt.Fprintf(&b, "    m.getLocation().getFile().getBaseName() = %q and\n", modeFile)
+	fmt.Fprintf(&b, "    m.getLocation().getStartLine() = %d\n", mode.Loc.Line)
+	b.WriteString("  ) and\n")
+	b.WriteString("  // the mode-selecting function reaches an acceptance (returns Ok); in a\n")
+	b.WriteString("  // hardened build the weak-mode accept is gated out and absent here\n")
+	b.WriteString("  exists(NameRef ok |\n")
+	b.WriteString("    ok.getEnclosingCallable() = f and\n")
+	b.WriteString("    ok.getText() = \"Ok\"\n")
+	b.WriteString("  )\n")
+	fmt.Fprintf(&b, "select f, \"TWE-CONFIG-001: \" + f.getName().getText() + \" lets a weak trust mode reach acceptance (%s)\"\n", cand.SiteID)
+	return b.String(), nil
+}
+
 // attestedVarName pulls the base binding out of a claim symbol: the variable
 // that holds the attested value. "report.pubkey" -> "report", "_report" ->
 // "_report". The query then checks whether that binding is ever read in the

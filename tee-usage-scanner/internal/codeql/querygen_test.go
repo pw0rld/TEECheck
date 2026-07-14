@@ -36,6 +36,34 @@ func TestGenerateBindingQuery(t *testing.T) {
 	}
 }
 
+func TestGenerateConfigQuery(t *testing.T) {
+	cand := twe.TrustIRCandidate{
+		TWEID:  "TWE-CONFIG-001",
+		SiteID: "cfg001-attest",
+		Roles: map[string]twe.RoleCandidate{
+			"mode_selector":   {Enum: "simulation_mode", Loc: twe.Loc{Path: "src/attest.rs", Line: 19, Symbol: "Mode::Simulated"}},
+			"authority_point": {Enum: "attestation_acceptance", Loc: twe.Loc{Path: "src/attest.rs", Line: 20, Symbol: "Ok"}},
+		},
+	}
+	q, err := GenerateConfigQuery(cand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, "getStartLine() = 19") || !strings.Contains(q, `getBaseName() = "attest.rs"`) {
+		t.Errorf("query does not pin the mode selector:\n%s", q)
+	}
+	if !strings.Contains(q, `ok.getText() = "Ok"`) {
+		t.Errorf("query does not check for an acceptance:\n%s", q)
+	}
+}
+
+func TestGenerateConfigQueryMissingRole(t *testing.T) {
+	cand := twe.TrustIRCandidate{TWEID: "TWE-CONFIG-001", Roles: map[string]twe.RoleCandidate{}}
+	if _, err := GenerateConfigQuery(cand); err == nil {
+		t.Fatal("expected error when mode_selector role is absent")
+	}
+}
+
 func TestGenerateBindingQueryMissingRole(t *testing.T) {
 	cand := bindingCandidate()
 	delete(cand.Roles, "authority_subject")

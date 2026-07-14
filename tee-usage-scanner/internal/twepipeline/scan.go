@@ -68,6 +68,8 @@ func generateQuery(entry twe.Entry, cand twe.TrustIRCandidate) (string, error) {
 	switch entry.Family {
 	case twe.FamilyBinding:
 		return codeql.GenerateBindingQuery(cand)
+	case twe.FamilyConfig:
+		return codeql.GenerateConfigQuery(cand)
 	default:
 		return "", fmt.Errorf("no query generator for family %q yet", entry.Family)
 	}
