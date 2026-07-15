@@ -1,13 +1,13 @@
 # Benchmark Case Index
 
-The repository currently contains 63 benchmark case directories. Only
+The repository currently contains 62 benchmark case directories. Only
 `fixture_ready` cases have vulnerable/fixed source trees and may be scored.
 `pending_source` cases are tracked candidates and are excluded from execution.
 
 ## Summary
 
-- Total cases: 63
-- Executable cases: 45
+- Total cases: 62
+- Executable cases: 44
 - Pending source cases: 18
 
 | Case | Platform | Status |
@@ -42,7 +42,6 @@ The repository currently contains 63 benchmark case directories. Only
 | [CVE-2020-15107](./CVE-2020-15107/README.md) | Open Enclave SDK | `fixture_ready` |
 | [CVE-2020-15224](./CVE-2020-15224/README.md) | Open Enclave SDK | `fixture_ready` |
 | [CVE-2020-16273](./CVE-2020-16273/README.md) | Trusted Firmware-M | `fixture_ready` |
-| [CVE-2021-24117](./CVE-2021-24117/README.md) | Intel SGX / sgx_tstd | `fixture_ready` |
 | [CVE-2021-27562](./CVE-2021-27562/README.md) | Trusted Firmware-M | `fixture_ready` |
 | [CVE-2021-32032](./CVE-2021-32032/README.md) | Trusted Firmware-M | `fixture_ready` |
 | [CVE-2021-33767](./CVE-2021-33767/README.md) | Open Enclave SDK | `pending_source` |

@@ -94,7 +94,6 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2021-0186](CVE-2021-0186.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2021-4093](CVE-2021-4093.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
 | [CVE-2021-24116](CVE-2021-24116.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
-| [CVE-2021-24117](CVE-2021-24117.md) | Intel SGX / sgx_tstd | `reviewed` | `source_fixture` |
 | [CVE-2021-27562](CVE-2021-27562.md) | Trusted Firmware-M | `reviewed` | `source_fixture` |
 | [CVE-2021-24119](CVE-2021-24119.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2021-25470](CVE-2021-25470.md) | Samsung TEEGRIS / TrustZone | `needs_vendor_review` | `needs_triage` |

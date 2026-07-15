@@ -22,8 +22,8 @@ cases/CVE-YYYY-NNNN/
 ```
 
 Only `fixture_ready` cases in this directory participate in executable scanner
-evaluation. There are currently 45 executable cases, producing 90 scan
-samples: 45 vulnerable and 45 fixed. Another 18 directories preserve
+evaluation. There are currently 44 executable cases, producing 88 scan
+samples: 44 vulnerable and 44 fixed. Another 18 directories preserve
 pending-source candidates but are excluded from scoring.
 
 Every executable case is a defect **inside the TEE** — the trusted OS, secure
@@ -60,8 +60,8 @@ memory-safety, arithmetic, resource, or concurrency bug that a sanitizer or
 fuzzer catches without any TEE-specific semantics. Out-of-scope cases are a
 known coverage gap of the TWE design, not a scanner failure.
 
-Current split of the 45 executable cases: 35 in scope, 10 out. In-scope
-families: Flow 15, Leakage 9, State 5, Guard 4, Binding 1, Config 1, Design 0.
+Current split of the 44 executable cases: 34 in scope, 10 out. In-scope
+families: Flow 14, Leakage 9, State 5, Guard 4, Binding 1, Config 1, Design 0.
 Binding and Config are seeded by synthetic fixtures only and remain the
 priority for new cases, since they are exactly the usage weaknesses (subject
 binding, simulated / debug attestation) most common in real audits. Add more by
@@ -154,11 +154,11 @@ directory.
 
 ## Current Scope
 
-- CVE research records: 179
-- Executable vulnerability cases: 45 (35 in TWE scope, 10 out; 2 synthetic)
-- Source samples: 90
-- Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, Occlum, and
-  `sgx_tstd` — all TEE-internal (trusted OS / secure world / enclave)
+- CVE research records: 178
+- Executable vulnerability cases: 44 (34 in TWE scope, 10 out; 2 synthetic)
+- Source samples: 88
+- Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, and Occlum
+  — all TEE-internal (trusted OS / secure world / enclave)
 
 The CVE corpus measures collection coverage. The executable cases measure
 scanner accuracy. These numbers must not be combined into a single benchmark
