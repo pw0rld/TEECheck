@@ -68,7 +68,7 @@ func TestScanSiteEndToEnd(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			res, err := ScanSite(context.Background(), engine, catalog, cand, db, libs, t.TempDir())
+			res, err := ScanSite(context.Background(), engine, catalog, cand, "rust", db, libs, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

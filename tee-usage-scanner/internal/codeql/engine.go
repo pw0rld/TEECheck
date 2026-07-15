@@ -47,11 +47,15 @@ func (e *Engine) Available() bool {
 
 // CreateDBOptions configures a database build.
 type CreateDBOptions struct {
-	Language   string // e.g. "rust"
+	Language   string // e.g. "rust", "cpp"
 	SourceRoot string // repo / crate root to extract
 	DBPath     string // output database directory
 	Overwrite  bool
-	// SearchPath is prepended to PATH for the build (e.g. so the Rust
+	// BuildMode selects how the extractor obtains code, e.g. "none" for C/C++
+	// no-compile extraction of a full source tree. Empty uses the extractor
+	// default (autobuild, which cargo drives for Rust).
+	BuildMode string
+	// ExtraPATH is prepended to PATH for the build (e.g. so the Rust
 	// extractor finds cargo). Empty leaves the environment untouched.
 	ExtraPATH string
 }
@@ -72,6 +76,9 @@ func (e *Engine) CreateDatabase(ctx context.Context, opts CreateDBOptions) error
 	}
 	if opts.Overwrite {
 		args = append(args, "--overwrite")
+	}
+	if opts.BuildMode != "" {
+		args = append(args, "--build-mode="+opts.BuildMode)
 	}
 	cmd := exec.CommandContext(ctx, e.bin, args...)
 	cmd.Env = envWithExtraPATH(opts.ExtraPATH)

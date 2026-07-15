@@ -21,7 +21,7 @@ import (
 // is a hard error — the deterministic gate at workflow step 8). A query that
 // fails to run yields an Unresolved verdict rather than an error, so one bad
 // site does not abort a batch.
-func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, cand twe.TrustIRCandidate, dbPath, rustLibs, workDir string) (solver.Result, error) {
+func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, cand twe.TrustIRCandidate, language, dbPath, rustLibs, workDir string) (solver.Result, error) {
 	entry, ok := catalog.Get(cand.TWEID)
 	if !ok {
 		return solver.Solve(solver.SolveInput{Entry: twe.Entry{}, SiteID: cand.SiteID}), nil
@@ -30,11 +30,18 @@ func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, 
 		return solver.Result{}, fmt.Errorf("invalid candidate: %w", err)
 	}
 
-	query, err := generateQuery(entry, cand)
+	query, err := generateQuery(language, entry, cand)
 	if err != nil {
 		return solver.Result{}, err
 	}
-	queryPath, err := codeql.WriteQueryPack(workDir, "generated.ql", query)
+	// Pack resolution differs by language: a Rust query pack pulls transitive
+	// packs only vendored in the bundle, so it needs the rust libraries on the
+	// additional-packs path; cpp-all resolves top-level with none.
+	depPack, additionalPacks := "codeql/rust-all", []string{rustLibs}
+	if language == "cpp" {
+		depPack, additionalPacks = "codeql/cpp-all", nil
+	}
+	queryPath, err := codeql.WriteQueryPack(workDir, "generated.ql", query, depPack)
 	if err != nil {
 		return solver.Result{}, err
 	}
@@ -42,7 +49,7 @@ func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, 
 	results, err := engine.Analyze(ctx, codeql.AnalyzeOptions{
 		DBPath:          dbPath,
 		Queries:         []string{queryPath},
-		AdditionalPacks: []string{rustLibs},
+		AdditionalPacks: additionalPacks,
 	})
 	if err != nil {
 		// Evidence is incomplete: record Unresolved, keep the error context.
@@ -61,16 +68,23 @@ func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, 
 	}), nil
 }
 
-// generateQuery selects the query generator by TWE family. Only Binding is
-// wired today; other families return an explicit error until their generators
-// land (M4-hardening), rather than silently producing nothing.
-func generateQuery(entry twe.Entry, cand twe.TrustIRCandidate) (string, error) {
-	switch entry.Family {
-	case twe.FamilyBinding:
-		return codeql.GenerateBindingQuery(cand)
-	case twe.FamilyConfig:
-		return codeql.GenerateConfigQuery(cand)
-	default:
-		return "", fmt.Errorf("no query generator for family %q yet", entry.Family)
+// generateQuery selects the query generator by language and TWE family. Rust
+// covers Binding and Config; C/C++ covers Guard. Unhandled combinations return
+// an explicit error rather than silently producing nothing.
+func generateQuery(language string, entry twe.Entry, cand twe.TrustIRCandidate) (string, error) {
+	switch language {
+	case "rust":
+		switch entry.Family {
+		case twe.FamilyBinding:
+			return codeql.GenerateBindingQuery(cand)
+		case twe.FamilyConfig:
+			return codeql.GenerateConfigQuery(cand)
+		}
+	case "cpp":
+		switch entry.Family {
+		case twe.FamilyGuard:
+			return codeql.GenerateGuardQueryC(cand)
+		}
 	}
+	return "", fmt.Errorf("no query generator for %s/%s yet", language, entry.Family)
 }

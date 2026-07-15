@@ -34,7 +34,7 @@ func TestGeneratedQueryDiscriminates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queryFile, err := WriteQueryPack(t.TempDir(), "generated_binding.ql", query)
+	queryFile, err := WriteQueryPack(t.TempDir(), "generated_binding.ql", query, "codeql/rust-all")
 	if err != nil {
 		t.Fatal(err)
 	}

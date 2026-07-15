@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,28 +51,33 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	if fixture == "" {
 		fixture = filepath.Dir(input)
 	}
-	// Fail fast (before any LLM call) on cases the deterministic Rust path
-	// cannot handle: they need a CodeQL build harness (only the Rust fixtures
-	// ship one) and an in-scope TWE family with a query generator.
-	if _, err := os.Stat(filepath.Join(fixture, "codeql")); err != nil {
-		return fmt.Errorf("no CodeQL build harness for this case (skipped): %s", filepath.Base(fixture))
-	}
-	scanPaths, err := readScanPaths(filepath.Join(fixture, "case.yaml"))
+	spec, err := readCaseSpec(filepath.Join(fixture, "case.yaml"))
 	if err != nil {
 		return err
 	}
-	catalog, err := twe.Load(knowledge)
-	if err != nil {
-		return err
-	}
+	language := inferLanguage(spec.ScanPaths)
 	family, err := readTWEFamily(filepath.Join(fixture, "oracle.yaml"))
 	if err != nil {
 		return err
 	}
-	if !generatorSupported(family) {
-		return fmt.Errorf("no query generator for family %q yet (skipped)", family)
+	// Fail fast (before any LLM call) on cases this path cannot handle.
+	if !generatorSupported(language, family) {
+		return fmt.Errorf("no query generator for %s/%q yet (skipped)", language, family)
 	}
-	cand, err := candidateFor(catalog, family, input, scanPaths)
+	if language == "rust" {
+		if _, err := os.Stat(filepath.Join(fixture, "codeql")); err != nil {
+			return fmt.Errorf("no CodeQL build harness for this Rust case (skipped): %s", filepath.Base(fixture))
+		}
+	}
+	if language == "cpp" && (spec.Repository == "" || variantRevision(spec, input) == "") {
+		return fmt.Errorf("C case needs repository + revision to build a database (skipped): %s", filepath.Base(fixture))
+	}
+
+	catalog, err := twe.Load(knowledge)
+	if err != nil {
+		return err
+	}
+	cand, err := candidateFor(catalog, family, input, spec.ScanPaths)
 	if err != nil {
 		return err
 	}
@@ -97,18 +103,33 @@ func run(input, runDir, fixture, knowledge, bundle, cargo string) error {
 	}
 	defer os.RemoveAll(work)
 
-	crate := filepath.Join(work, "crate")
-	if err := codeql.AssembleFixtureCrate(filepath.Join(fixture, "codeql"), input, scanPaths, crate); err != nil {
-		return err
-	}
 	db := filepath.Join(work, "db")
-	if err := engine.CreateDatabase(context.Background(), codeql.CreateDBOptions{
-		Language: "rust", SourceRoot: crate, DBPath: db, Overwrite: true, ExtraPATH: cargo,
-	}); err != nil {
-		return err
+	switch language {
+	case "rust":
+		crate := filepath.Join(work, "crate")
+		if err := codeql.AssembleFixtureCrate(filepath.Join(fixture, "codeql"), input, spec.ScanPaths, crate); err != nil {
+			return err
+		}
+		if err := engine.CreateDatabase(context.Background(), codeql.CreateDBOptions{
+			Language: "rust", SourceRoot: crate, DBPath: db, Overwrite: true, ExtraPATH: cargo,
+		}); err != nil {
+			return err
+		}
+	case "cpp":
+		tree := filepath.Join(work, "tree")
+		if err := cloneAndOverlay(spec.Repository, variantRevision(spec, input), input, spec.ScanPaths, tree); err != nil {
+			return err
+		}
+		if err := engine.CreateDatabase(context.Background(), codeql.CreateDBOptions{
+			Language: "cpp", SourceRoot: tree, DBPath: db, Overwrite: true, BuildMode: "none",
+		}); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported language %q", language)
 	}
 
-	res, err := twepipeline.ScanSite(context.Background(), engine, catalog, cand, db, libs, filepath.Join(work, "ql"))
+	res, err := twepipeline.ScanSite(context.Background(), engine, catalog, cand, language, db, libs, filepath.Join(work, "ql"))
 	if err != nil {
 		return err
 	}
@@ -175,10 +196,98 @@ func envOr(keys ...string) string {
 	return ""
 }
 
-// generatorSupported reports whether a query generator exists for a family.
-// Mirrors twepipeline.generateQuery's switch.
-func generatorSupported(f twe.Family) bool {
-	return f == twe.FamilyBinding || f == twe.FamilyConfig
+// generatorSupported mirrors twepipeline.generateQuery's language/family switch.
+func generatorSupported(language string, f twe.Family) bool {
+	switch language {
+	case "rust":
+		return f == twe.FamilyBinding || f == twe.FamilyConfig
+	case "cpp":
+		return f == twe.FamilyGuard
+	}
+	return false
+}
+
+type caseSpec struct {
+	ScanPaths          []string `json:"scan_paths"`
+	Repository         string   `json:"repository"`
+	VulnerableRevision string   `json:"vulnerable_revision"`
+	FixedRevision      string   `json:"fixed_revision"`
+}
+
+func readCaseSpec(caseYaml string) (caseSpec, error) {
+	data, err := os.ReadFile(caseYaml)
+	if err != nil {
+		return caseSpec{}, fmt.Errorf("read case.yaml: %w", err)
+	}
+	var c caseSpec
+	if err := json.Unmarshal(data, &c); err != nil {
+		return caseSpec{}, fmt.Errorf("parse case.yaml: %w", err)
+	}
+	if len(c.ScanPaths) == 0 {
+		return caseSpec{}, fmt.Errorf("case.yaml has no scan_paths")
+	}
+	return c, nil
+}
+
+// inferLanguage picks the CodeQL language from the scan file extensions.
+func inferLanguage(scanPaths []string) string {
+	for _, p := range scanPaths {
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".rs":
+			return "rust"
+		case ".c", ".h", ".cc", ".cpp", ".hpp", ".cxx":
+			return "cpp"
+		}
+	}
+	return ""
+}
+
+// variantRevision returns the repo revision for the variant being scanned,
+// chosen from the input directory name (".../vulnerable" or ".../fixed").
+func variantRevision(spec caseSpec, input string) string {
+	if filepath.Base(input) == "fixed" {
+		return spec.FixedRevision
+	}
+	return spec.VulnerableRevision
+}
+
+// cloneAndOverlay clones repo at revision into dest and overlays the variant's
+// pinned scan files. The clone supplies the headers the fixture file needs for
+// CodeQL's C extractor; the overlay pins the exact vulnerable/fixed source.
+// A caret suffix on the revision (a "parent of" ref) is resolved to its parent.
+func cloneAndOverlay(repo, revision, variantDir string, scanPaths []string, dest string) error {
+	if out, err := exec.Command("git", "clone", "--quiet", repo, dest).CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone %s: %w\n%s", repo, err, out)
+	}
+	// git resolves a "sha^" (parent-of) revspec natively.
+	if out, err := gitIn(dest, "checkout", "--quiet", revision); err != nil {
+		return fmt.Errorf("git checkout %s: %w\n%s", revision, err, out)
+	}
+	for _, rel := range scanPaths {
+		src := filepath.Join(variantDir, filepath.FromSlash(rel))
+		dst := filepath.Join(dest, filepath.FromSlash(rel))
+		if err := copyFile(src, dst); err != nil {
+			return fmt.Errorf("overlay %s: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+func gitIn(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
 }
 
 func readTWEFamily(oracleYaml string) (twe.Family, error) {
@@ -198,19 +307,3 @@ func readTWEFamily(oracleYaml string) (twe.Family, error) {
 	return twe.Family(o.TWEFamily), nil
 }
 
-func readScanPaths(caseYaml string) ([]string, error) {
-	data, err := os.ReadFile(caseYaml)
-	if err != nil {
-		return nil, fmt.Errorf("read case.yaml: %w", err)
-	}
-	var c struct {
-		ScanPaths []string `json:"scan_paths"`
-	}
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("parse case.yaml: %w", err)
-	}
-	if len(c.ScanPaths) == 0 {
-		return nil, fmt.Errorf("case.yaml has no scan_paths")
-	}
-	return c.ScanPaths, nil
-}
