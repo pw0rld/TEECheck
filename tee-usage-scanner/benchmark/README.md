@@ -22,9 +22,16 @@ cases/CVE-YYYY-NNNN/
 ```
 
 Only `fixture_ready` cases in this directory participate in executable scanner
-evaluation. There are currently 52 executable cases, producing 104 scan
-samples: 52 vulnerable and 52 fixed. Another 18 directories preserve
+evaluation. There are currently 45 executable cases, producing 90 scan
+samples: 45 vulnerable and 45 fixed. Another 18 directories preserve
 pending-source candidates but are excluded from scoring.
+
+Every executable case is a defect **inside the TEE** — the trusted OS, secure
+world, enclave, or trusted application. A 2026-07 review removed seven cases
+whose code lives in the untrusted host or normal world (Linux KVM/SEV
+hypervisor, the Linux OP-TEE kernel driver, swiotlb DMA, a device-tree config,
+and guest-kernel EFI): TEE-adjacent, but not a weakness in a TEE. See
+`../cves/TEE-STANDARD-REVIEW.md`.
 
 Most executable cases pin a public CVE (`detection_surface: source`). A few are
 **synthetic** (`detection_surface: synthetic`, id prefix `TWE-<FAMILY>-NNNN`):
@@ -53,8 +60,8 @@ memory-safety, arithmetic, resource, or concurrency bug that a sanitizer or
 fuzzer catches without any TEE-specific semantics. Out-of-scope cases are a
 known coverage gap of the TWE design, not a scanner failure.
 
-Current split of the 52 executable cases: 38 in scope, 14 out. In-scope
-families: Flow 16, Leakage 10, State 5, Guard 4, Binding 1, Config 1, Design 1.
+Current split of the 45 executable cases: 35 in scope, 10 out. In-scope
+families: Flow 15, Leakage 9, State 5, Guard 4, Binding 1, Config 1, Design 0.
 Binding and Config are seeded by synthetic fixtures only and remain the
 priority for new cases, since they are exactly the usage weaknesses (subject
 binding, simulated / debug attestation) most common in real audits. Add more by
@@ -147,11 +154,11 @@ directory.
 
 ## Current Scope
 
-- CVE research records: 186
-- Executable vulnerability cases: 52 (38 in TWE scope, 14 out; 2 synthetic)
-- Source samples: 104
-- Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, Linux KVM
-  SEV/SEV-SNP, Linux TDX/confidential-VM support, Occlum, and `sgx_tstd`
+- CVE research records: 179
+- Executable vulnerability cases: 45 (35 in TWE scope, 10 out; 2 synthetic)
+- Source samples: 90
+- Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, Occlum, and
+  `sgx_tstd` — all TEE-internal (trusted OS / secure world / enclave)
 
 The CVE corpus measures collection coverage. The executable cases measure
 scanner accuracy. These numbers must not be combined into a single benchmark

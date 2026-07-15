@@ -112,9 +112,7 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2021-44149](CVE-2021-44149.md) | Arm TrustZone / OP-TEE | `needs_vendor_review` | `source_fixture_candidate` |
 | [CVE-2021-44421](CVE-2021-44421.md) | Intel SGX / Occlum | `reviewed` | `source_fixture` |
 | [CVE-2021-46744](CVE-2021-46744.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
-| [CVE-2021-47389](CVE-2021-47389.md) | AMD SEV / KVM | `reviewed` | `source_fixture` |
 | [CVE-2022-0005](CVE-2022-0005.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
-| [CVE-2022-0171](CVE-2022-0171.md) | AMD SEV / KVM | `reviewed` | `source_fixture` |
 | [CVE-2022-21123](CVE-2022-21123.md) | Intel SGX | `reviewed` | `policy_fixture` |
 | [CVE-2022-21125](CVE-2022-21125.md) | Intel SGX | `reviewed` | `policy_fixture` |
 | [CVE-2022-21127](CVE-2022-21127.md) | Intel SGX | `reviewed` | `policy_fixture` |
@@ -128,7 +126,6 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2022-46152](CVE-2022-46152.md) | OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2022-46486](CVE-2022-46486.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2022-46487](CVE-2022-46487.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
-| [CVE-2022-48853](CVE-2022-48853.md) | Confidential VM / Linux DMA | `reviewed` | `source_fixture` |
 | [CVE-2023-4155](CVE-2023-4155.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
 | [CVE-2023-20573](CVE-2023-20573.md) | AMD SEV-SNP | `reviewed` | `knowledge_only` |
 | [CVE-2023-20575](CVE-2023-20575.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
@@ -168,7 +165,6 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2025-20053](CVE-2025-20053.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-20613](CVE-2025-20613.md) | Intel TDX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-21096](CVE-2025-21096.md) | Intel TDX | `needs_vendor_review` | `needs_triage` |
-| [CVE-2025-21871](CVE-2025-21871.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2025-22853](CVE-2025-22853.md) | Intel TDX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-22889](CVE-2025-22889.md) | Intel TDX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-26403](CVE-2025-26403.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
@@ -177,11 +173,9 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2025-29948](CVE-2025-29948.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-32004](CVE-2025-32004.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
 | [CVE-2025-32086](CVE-2025-32086.md) | Intel SGX | `needs_vendor_review` | `needs_triage` |
-| [CVE-2025-38374](CVE-2025-38374.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2025-46733](CVE-2025-46733.md) | OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2025-53022](CVE-2025-53022.md) | Trusted Firmware-M | `reviewed` | `source_fixture` |
 | [CVE-2025-61972](CVE-2025-61972.md) | AMD SEV / SEV-ES / SEV-SNP | `needs_vendor_review` | `needs_triage` |
-| [CVE-2025-71300](CVE-2025-71300.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2026-33317](CVE-2026-33317.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2026-33662](CVE-2026-33662.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2026-33697](CVE-2026-33697.md) | Intel TDX | `needs_vendor_review` | `needs_triage` |
@@ -195,5 +189,4 @@ This table is generated from the individual Markdown records. A record marked
 | [CVE-2026-44362](CVE-2026-44362.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2026-45614](CVE-2026-45614.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
 | [CVE-2026-45702](CVE-2026-45702.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
-| [CVE-2026-45851](CVE-2026-45851.md) | Intel TDX / confidential computing | `reviewed` | `source_fixture` |
 | [CVE-2026-53763](CVE-2026-53763.md) | Arm TrustZone / OP-TEE | `reviewed` | `source_fixture` |
