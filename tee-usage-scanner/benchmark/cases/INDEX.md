@@ -1,30 +1,15 @@
 # Benchmark Case Index
 
-The repository currently contains 62 benchmark case directories. Only
-`fixture_ready` cases have vulnerable/fixed source trees and may be scored.
-`pending_source` cases are tracked candidates and are excluded from execution.
+The repository currently contains 44 benchmark case directories. Every case
+has vulnerable and fixed source trees and may be scored.
 
 ## Summary
 
-- Total cases: 62
+- Total cases: 44
 - Executable cases: 44
-- Pending source cases: 18
 
 | Case | Platform | Status |
 |---|---|---|
-| [CVE-2014-10039](./CVE-2014-10039/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2014-4322](./CVE-2014-4322/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9108](./CVE-2015-9108/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9110](./CVE-2015-9110/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9112](./CVE-2015-9112/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9113](./CVE-2015-9113/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9114](./CVE-2015-9114/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9115](./CVE-2015-9115/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9131](./CVE-2015-9131/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9132](./CVE-2015-9132/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9134](./CVE-2015-9134/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9162](./CVE-2015-9162/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
-| [CVE-2015-9166](./CVE-2015-9166/README.md) | Qualcomm QSEE / TrustZone | `pending_source` |
 | [CVE-2016-6129](./CVE-2016-6129/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
 | [CVE-2017-1000412](./CVE-2017-1000412/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
 | [CVE-2017-1000413](./CVE-2017-1000413/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
@@ -36,19 +21,14 @@ The repository currently contains 62 benchmark case directories. Only
 | [CVE-2019-1010296](./CVE-2019-1010296/README.md) | OP-TEE | `fixture_ready` |
 | [CVE-2019-1010297](./CVE-2019-1010297/README.md) | OP-TEE | `fixture_ready` |
 | [CVE-2019-1010298](./CVE-2019-1010298/README.md) | OP-TEE | `fixture_ready` |
-| [CVE-2019-1369](./CVE-2019-1369/README.md) | Open Enclave SDK | `pending_source` |
-| [CVE-2019-1370](./CVE-2019-1370/README.md) | Open Enclave SDK | `pending_source` |
 | [CVE-2019-25052](./CVE-2019-25052/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
 | [CVE-2020-15107](./CVE-2020-15107/README.md) | Open Enclave SDK | `fixture_ready` |
 | [CVE-2020-15224](./CVE-2020-15224/README.md) | Open Enclave SDK | `fixture_ready` |
 | [CVE-2020-16273](./CVE-2020-16273/README.md) | Trusted Firmware-M | `fixture_ready` |
 | [CVE-2021-27562](./CVE-2021-27562/README.md) | Trusted Firmware-M | `fixture_ready` |
 | [CVE-2021-32032](./CVE-2021-32032/README.md) | Trusted Firmware-M | `fixture_ready` |
-| [CVE-2021-33767](./CVE-2021-33767/README.md) | Open Enclave SDK | `pending_source` |
 | [CVE-2021-40327](./CVE-2021-40327/README.md) | Trusted Firmware-M | `fixture_ready` |
-| [CVE-2021-41094](./CVE-2021-41094/README.md) | Open Enclave SDK | `pending_source` |
 | [CVE-2021-43619](./CVE-2021-43619/README.md) | Trusted Firmware-M | `fixture_ready` |
-| [CVE-2021-44149](./CVE-2021-44149/README.md) | Arm TrustZone / OP-TEE | `pending_source` |
 | [CVE-2021-44421](./CVE-2021-44421/README.md) | Intel SGX / Occlum | `fixture_ready` |
 | [CVE-2022-46152](./CVE-2022-46152/README.md) | OP-TEE | `fixture_ready` |
 | [CVE-2023-37479](./CVE-2023-37479/README.md) | Open Enclave SDK | `fixture_ready` |

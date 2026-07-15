@@ -5,8 +5,10 @@ security patch, immutable revision identifiers, file hashes, and a reviewed
 oracle. The fixtures are source subsets intended for scanner evaluation; they
 are not standalone OP-TEE build trees.
 
-The full list is in [INDEX.md](INDEX.md). The current corpus contains 68 cases:
-50 executable source cases and 18 pending-source candidates.
+The full list is in [INDEX.md](INDEX.md). The current corpus contains 44
+executable source cases. Candidate CVEs without local source fixtures are kept
+outside this directory under `benchmark/candidates/source-pending/` and are
+not benchmark cases.
 
 Examples of executable cases include:
 

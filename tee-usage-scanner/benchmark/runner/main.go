@@ -154,14 +154,8 @@ func validateCase(dir string) error {
 	if c.ID == "" || c.ID != o.ID || c.ID != filepath.Base(dir) {
 		return errors.New("case, oracle, and directory identifiers differ")
 	}
-	if c.Status != "fixture_ready" && c.Status != "pending_source" {
+	if c.Status != "fixture_ready" {
 		return fmt.Errorf("unsupported or missing case status %q", c.Status)
-	}
-	if c.Status == "pending_source" {
-		if o.Status != "pending_review" || c.SourceRecord == "" {
-			return errors.New("pending case must have a source record and pending oracle")
-		}
-		return nil
 	}
 	// A synthetic case is a hand-authored vulnerable/fixed pair that does
 	// not track a public CVE (used to cover TWE families the CVE corpus
