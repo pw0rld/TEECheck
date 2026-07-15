@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -700,6 +701,107 @@ def _build_data_flow_summary(
     return "\n".join(paragraphs)
 
 
+class MermaidFixResponse(BaseModel):
+    """LLM response for Mermaid diagram fix."""
+    mermaid_code: str
+
+
+def _sanitize_mermaid(mermaid: str) -> str:
+    """Fix known LLM-generated Mermaid syntax issues deterministically."""
+    # Strip markdown fences
+    if mermaid.startswith("```mermaid"):
+        mermaid = mermaid[len("```mermaid"):]
+    if mermaid.startswith("```"):
+        mermaid = mermaid[3:]
+    if mermaid.endswith("```"):
+        mermaid = mermaid[:-3]
+    mermaid = mermaid.strip()
+
+    # Decode Python-style unicode escapes
+    for raw, char in [
+        (r"\U0001F512", "\U0001F512"),  # 🔒
+        (r"\U0001F310", "\U0001F310"),  # 🌐
+        (r"\U0001F510", "\U0001F510"),  # 🔐
+        (r"⚠️", "⚠️"),
+    ]:
+        mermaid = mermaid.replace(raw, char)
+
+    # Fix \n in node labels [text\nmore] → [text<br>more]
+    def _fix_node_newlines(m):
+        return m.group(0).replace(r"\n", "<br>")
+    mermaid = re.sub(r'\[[^\]]*\\n[^\]]*\]', _fix_node_newlines, mermaid)
+
+    # Fix invalid link syntax: <---> → <-->
+    mermaid = mermaid.replace("<--->", "<-->")
+    mermaid = re.sub(r'<-{3,}>', '<-->', mermaid)
+
+    # Fix class assignments: "class A B C name" → "class A,B,C name"
+    def _fix_class(m):
+        indent, nodes, classname = m.group(1), m.group(2), m.group(3)
+        parts = nodes.split()
+        if len(parts) > 1:
+            return f'{indent}class {",".join(parts)} {classname}'
+        return m.group(0)
+    mermaid = re.sub(
+        r'^([ \t]*)class ([A-Za-z0-9_]+(?: [A-Za-z0-9_]+)+) ([a-z]\w*)\s*$',
+        _fix_class, mermaid, flags=re.MULTILINE,
+    )
+
+    # Fix parentheses in link labels: |text (gRPC)| → |text - gRPC|
+    def _fix_link_parens(m):
+        label = m.group(1)
+        fixed = label.replace("(", "-").replace(")", "")
+        return f"|{fixed}|"
+    mermaid = re.sub(r'\|([^|]*\([^|)]*\)[^|]*)\|', _fix_link_parens, mermaid)
+
+    return mermaid
+
+
+def _validate_mermaid(mermaid: str) -> tuple[bool, str]:
+    """Validate Mermaid syntax using mmdc CLI. Returns (valid, error_message)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    mmdc = shutil.which("mmdc")
+    if not mmdc:
+        # Also try npx
+        npx = shutil.which("npx")
+        if npx:
+            mmdc = npx
+        else:
+            logger.warning(
+                "mmdc not available — Mermaid validation skipped. "
+                "Install with: npm install -g @mermaid-js/mermaid-cli"
+            )
+            return True, ""
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mmd", delete=False) as f:
+        f.write(mermaid)
+        tmpfile = f.name
+
+    try:
+        cmd = [mmdc]
+        if mmdc.endswith("npx"):
+            cmd = [mmdc, "@mermaid-js/mermaid-cli"]
+        cmd.extend(["-i", tmpfile, "-o", os.devnull])
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr[:500]
+    except FileNotFoundError:
+        logger.warning("mmdc not found — Mermaid validation skipped")
+        return True, ""
+    except subprocess.TimeoutExpired:
+        logger.warning("mmdc validation timed out — skipping")
+        return True, ""
+    finally:
+        os.unlink(tmpfile)
+
+
 def _build_llm_architecture_diagram(
     key_components: list[str],
     fingerprint,
@@ -798,15 +900,7 @@ def _build_llm_architecture_diagram(
             error_save_dir=results_dir, temperature=temperature,
         )
 
-        mermaid = response.mermaid_code.strip()
-        # Strip markdown fences if the LLM wrapped them
-        if mermaid.startswith("```mermaid"):
-            mermaid = mermaid[len("```mermaid"):]
-        if mermaid.startswith("```"):
-            mermaid = mermaid[3:]
-        if mermaid.endswith("```"):
-            mermaid = mermaid[:-3]
-        mermaid = mermaid.strip()
+        mermaid = _sanitize_mermaid(response.mermaid_code)
 
         # Ensure classDef styles are present (LLM sometimes omits them)
         required_classdefs = (
@@ -816,12 +910,36 @@ def _build_llm_architecture_diagram(
             "classDef crypto fill:#e2d5f1,stroke:#6a4c93,color:#1a1a2e"
         )
         if "classDef trusted" not in mermaid:
-            # Insert classDef block before the first class assignment or at the end
             insert_pos = mermaid.find("class ")
             if insert_pos > 0:
                 mermaid = mermaid[:insert_pos] + required_classdefs + "\n\n    " + mermaid[insert_pos:]
             else:
                 mermaid = mermaid + "\n\n" + required_classdefs
+
+        # Validate and optionally retry with LLM
+        valid, error = _validate_mermaid(mermaid)
+        max_retries = 2
+        for attempt in range(max_retries):
+            if valid:
+                break
+            logger.info("Mermaid validation failed (attempt %d/%d): %s", attempt + 1, max_retries, error[:200])
+            fix_prompt = (
+                f"The following Mermaid diagram has a syntax error:\n\n```\n{mermaid}\n```\n\n"
+                f"Error from mermaid-cli:\n{error}\n\n"
+                "Fix the syntax. Return ONLY valid Mermaid code — no markdown fences, no explanation."
+            )
+            try:
+                fix_response = parse_with_retry(
+                    client, "You fix broken Mermaid diagrams. Return only valid Mermaid code.", fix_prompt,
+                    MermaidFixResponse, temperature=temperature,
+                )
+                mermaid = _sanitize_mermaid(fix_response.mermaid_code)
+                valid, error = _validate_mermaid(mermaid)
+            except Exception as fix_err:
+                logger.warning("Mermaid LLM fix failed on attempt %d: %s", attempt + 1, str(fix_err)[:200])
+
+        if not valid:
+            logger.warning("Mermaid still invalid after %d retries: %s", max_retries, error[:200])
 
         def _sanitize_table_cell(text: str) -> str:
             """Sanitize LLM output for markdown table cells."""
@@ -847,7 +965,6 @@ def _build_llm_architecture_diagram(
 
     except Exception as e:
         logger.warning("LLM architecture diagram failed, using deterministic fallback: %s", str(e)[:200])
-        # Return deterministic fallback
         fallback = _build_architecture_diagram(key_components, fingerprint)
         return fallback, []
 

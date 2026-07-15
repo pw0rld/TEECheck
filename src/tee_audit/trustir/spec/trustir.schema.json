@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TrustIR v1.0",
+  "type": "object",
+  "required": ["schema_version", "repo", "candidate_id", "twe_id", "taxonomy_family", "trust_context", "evidence_spans"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "repo": {
+      "type": "object",
+      "required": ["name", "root"],
+      "properties": {
+        "name": {"type": "string"},
+        "root": {"type": "string"},
+        "commit": {"type": "string"},
+        "languages": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "candidate_id": {"type": "string"},
+    "twe_id": {"type": "string"},
+    "taxonomy_family": {"enum": ["Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"]},
+    "tee_dimension": {"enum": ["incorrect_usage", "inappropriate_design"]},
+    "trust_context": {"type": "string"},
+    "evidence_spans": {"type": "array", "items": {"$ref": "#/$defs/evidence_span"}},
+    "claim_producers": {"type": "array", "items": {"$ref": "#/$defs/claim_producer"}},
+    "claim_fields": {"type": "array", "items": {"$ref": "#/$defs/claim_field"}},
+    "flow_sources": {"type": "array"},
+    "flow_sinks": {"type": "array"},
+    "authority_points": {"type": "array", "items": {"$ref": "#/$defs/authority_point"}},
+    "guards": {"type": "array", "items": {"$ref": "#/$defs/guard"}},
+    "binding_relations": {"type": "array", "items": {"$ref": "#/$defs/binding_relation"}},
+    "state_objects": {"type": "array"},
+    "config_sources": {"type": "array"},
+    "observable_sinks": {"type": "array"},
+    "suppressors": {"type": "array"},
+    "required_obligations": {"type": "array", "items": {"$ref": "#/$defs/obligation"}}
+  },
+  "$defs": {
+    "evidence_span": {
+      "type": "object",
+      "required": ["id", "kind", "file", "start_line", "end_line"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["code", "documentation", "config", "contract", "comment", "build_file", "manifest"]},
+        "file": {"type": "string"},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "quote": {"type": "string"}
+      }
+    },
+    "selector": {
+      "type": "object",
+      "properties": {
+        "language": {"type": "string"},
+        "file": {"type": "string"},
+        "qualified_name": {"type": "string"},
+        "line": {"type": "integer"},
+        "column": {"type": "integer"},
+        "abi_signature": {"type": "string"}
+      }
+    },
+    "claim_producer": {
+      "type": "object",
+      "required": ["id", "kind", "selector"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "selector": {"$ref": "#/$defs/selector"},
+        "output_object": {"type": "string"},
+        "output_type": {"type": "string"},
+        "evidence_span_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "claim_field": {
+      "type": "object",
+      "required": ["id", "role", "selector"],
+      "properties": {
+        "id": {"type": "string"},
+        "producer_id": {"type": "string"},
+        "selector": {"type": "string"},
+        "role": {"type": "string"},
+        "semantic_type": {"type": "string"},
+        "security_state_after_producer": {"enum": ["raw", "parsed", "authentic", "appraised", "scoped", "bound", "unknown"]},
+        "evidence_span_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "authority_point": {
+      "type": "object",
+      "required": ["id", "kind", "selector"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "selector": {"$ref": "#/$defs/selector"},
+        "authority_subject": {"type": "object"},
+        "protected_asset": {"type": "string"},
+        "evidence_span_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "guard": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "selector": {"$ref": "#/$defs/selector"},
+        "checked_fields": {"type": "array", "items": {"type": "string"}},
+        "accepted_values": {"type": "array", "items": {"type": "string"}},
+        "failure_behavior": {"enum": ["throws_or_returns_error", "reverts", "returns_false", "exits_process", "logs_only", "unknown"]},
+        "must_dominate_authority": {"type": "boolean"}
+      }
+    },
+    "binding_relation": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "from_claim_field_id": {"type": "string"},
+        "to_authority_subject": {"type": "string"},
+        "evidence_selector": {"type": "string"},
+        "must_control_authority": {"type": "boolean"}
+      }
+    },
+    "obligation": {
+      "type": "object",
+      "required": ["id", "twe_id", "family", "authority_point_id"],
+      "properties": {
+        "id": {"type": "string"},
+        "twe_id": {"type": "string"},
+        "family": {"type": "string"},
+        "authority_point_id": {"type": "string"},
+        "required_relation": {"type": "object"},
+        "must_dominate": {"type": "boolean"}
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+name: web3-tee/trustir-go
+version: 0.1.0
+description: TrustIR TEE-weakness query pack for Go (driven by generated facts).
+dependencies:
+  "codeql/go-all": "6.0.0"

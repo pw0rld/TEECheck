@@ -1,0 +1,5 @@
+name: web3-tee/trustir-rust
+version: 0.1.0
+description: TrustIR TEE-weakness query pack for Rust (driven by generated facts).
+dependencies:
+  "codeql/rust-all": "0.2.4"

@@ -45,7 +45,7 @@ def load_prompt(name: str, **kwargs: str) -> str:
     _LONG_VARS = {
         "code_context", "dossier", "fingerprint", "findings_summary",
         "taxonomy_reference", "taint_specs", "taint_tracking_template",
-        "fingerprint_map", "zone_context", "call_chain",
+        "fingerprint_map", "zone_context", "call_chain", "enumeration",
     }
     _SHORT_LIMIT = 4000
     _LONG_LIMIT = 24000

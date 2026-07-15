@@ -23,6 +23,11 @@ class AuditConfig(BaseModel):
     no_color: bool = False
     max_concurrent_llm_calls: int = 3
     no_escalate: bool = False
+    # Per-repo subsystem scoping: repo name -> list of repo-relative path prefixes
+    # to enumerate (e.g. {"suave-geth": ["suave/"]}). Restricts a fork's analysis
+    # to its own enclave/trust layer so inherited code is not mislabeled. A repo
+    # not listed (or []) = whole repo (backward compatible).
+    repo_scopes: dict[str, list[str]] = {}
 
     @classmethod
     def load(cls, **overrides: object) -> AuditConfig:
