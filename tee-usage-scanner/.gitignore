@@ -5,3 +5,6 @@ runs/
 # NOT the cmd/teecheck/ source directory.
 /teecheck
 *.exe
+
+# Local LLM credentials — never commit
+.env.local

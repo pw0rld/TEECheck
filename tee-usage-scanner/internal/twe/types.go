@@ -9,7 +9,7 @@
 // Rust toolchain — so it is the first landable increment of the refactor.
 package twe
 
-// Family is one of the seven TWE families. Every entry belongs to exactly
+// Family is one of the supported TWE families. Every entry belongs to exactly
 // one, and the value is validated at load time.
 type Family string
 
@@ -25,10 +25,16 @@ const (
 
 // ValidFamilies is the closed set of families. It matches the twe_family
 // vocabulary the benchmark oracles use so the catalog and the corpus stay
-// aligned.
+// aligned — all seven families, even those without a catalog entry yet, so a
+// generator or oracle may reference any of them.
 var ValidFamilies = map[Family]bool{
-	FamilyFlow: true, FamilyGuard: true, FamilyBinding: true, FamilyState: true,
-	FamilyConfig: true, FamilyDesign: true, FamilyLeakage: true,
+	FamilyFlow:    true,
+	FamilyGuard:   true,
+	FamilyBinding: true,
+	FamilyState:   true,
+	FamilyConfig:  true,
+	FamilyDesign:  true,
+	FamilyLeakage: true,
 }
 
 // Entry is one TEE Weakness Entry: the unit of security knowledge the system

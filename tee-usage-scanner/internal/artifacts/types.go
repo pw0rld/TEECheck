@@ -100,14 +100,23 @@ type Findings struct {
 }
 
 type FindingItem struct {
-	FindingID  string   `json:"finding_id"`
-	SliceID    string   `json:"slice_id"`
-	Status     string   `json:"status"`
-	Severity   string   `json:"severity"`
-	Confidence string   `json:"confidence"`
-	Files      []string `json:"files,omitempty"`
-	Summary    string   `json:"summary"`
-	Evidence   []string `json:"evidence,omitempty"`
+	FindingID  string            `json:"finding_id"`
+	SliceID    string            `json:"slice_id"`
+	Status     string            `json:"status"`
+	Severity   string            `json:"severity"`
+	Confidence string            `json:"confidence"`
+	Files      []string          `json:"files,omitempty"`
+	Locations  []FindingLocation `json:"locations,omitempty"`
+	Summary    string            `json:"summary"`
+	Evidence   []string          `json:"evidence,omitempty"`
+}
+
+// FindingLocation is the structured (file, line) position of a finding, so a
+// consumer (the benchmark scorer) can match on line without parsing it out of
+// the evidence prose. It carries the same data the evidence string embeds.
+type FindingLocation struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
 }
 
 type PromptSnippet struct {
@@ -154,13 +163,13 @@ type CasePack struct {
 }
 
 type Hypothesis struct {
-	SchemaVersion      string          `json:"schema_version"`
-	CaseID             string          `json:"case_id"`
-	AgentID            string          `json:"agent_id"`
-	Title              string          `json:"title"`
-	Summary            string          `json:"summary"`
-	SuspectedIssue     string          `json:"suspected_issue"`
-	MissingObligations []string        `json:"missing_obligations,omitempty"`
+	SchemaVersion      string   `json:"schema_version"`
+	CaseID             string   `json:"case_id"`
+	AgentID            string   `json:"agent_id"`
+	Title              string   `json:"title"`
+	Summary            string   `json:"summary"`
+	SuspectedIssue     string   `json:"suspected_issue"`
+	MissingObligations []string `json:"missing_obligations,omitempty"`
 	// SupportingFacts holds the validated free-text claims —
 	// the Text of every CitedFact whose citations all resolved
 	// against the live repo. Legacy hypotheses (pre-v1.1.1) used
@@ -186,9 +195,9 @@ type Hypothesis struct {
 	// "validated facts" surface remains honest. Verifier prompt and
 	// arbiter Evidence render these with an explicit [unanchored]
 	// tag; they never silently merge with cited claims.
-	UntypedFacts []string `json:"untyped_facts,omitempty"`
-	KnowledgeHints []KnowledgeHint    `json:"knowledge_hints,omitempty"`
-	Confidence     string             `json:"confidence"`
+	UntypedFacts      []string        `json:"untyped_facts,omitempty"`
+	KnowledgeHints    []KnowledgeHint `json:"knowledge_hints,omitempty"`
+	Confidence        string          `json:"confidence"`
 	NeedsVerification bool            `json:"needs_verification"`
 	// Cited is the flat hypothesis-level citation pool. v1.1.1
 	// populates it as the union of every citation across CitedFacts
@@ -212,10 +221,10 @@ type Challenge struct {
 }
 
 type VerificationMemo struct {
-	SchemaVersion string `json:"schema_version"`
-	CaseID        string `json:"case_id"`
-	AgentID       string `json:"agent_id"`
-	Status        string `json:"status"`
+	SchemaVersion string   `json:"schema_version"`
+	CaseID        string   `json:"case_id"`
+	AgentID       string   `json:"agent_id"`
+	Status        string   `json:"status"`
 	ChecksRun     []string `json:"checks_run,omitempty"`
 	// ConfirmedFacts holds the validated free-text claims produced
 	// by the verifier — the Text of every ConfirmedCitedFacts entry
@@ -225,6 +234,10 @@ type VerificationMemo struct {
 	// as a display fallback. Same exclusion rule as expert: facts
 	// whose citations failed are NOT mirrored here.
 	ConfirmedFacts []string `json:"confirmed_facts,omitempty"`
+	// CandidateFacts are structured static-tool candidates that have not
+	// been independently confirmed by the verifier. They must not affect
+	// the confirmed verdict or benchmark truth by themselves.
+	CandidateFacts []string `json:"candidate_facts,omitempty"`
 	// ConfirmedCitedFacts is the v1.1.2 canonical confirmed-fact
 	// field. Each entry pairs a confirmation claim with the byte
 	// regions backing it.
@@ -267,9 +280,9 @@ type VerificationMemo struct {
 // universal ReasonCode (applies to any non-TP verdict, see
 // review.go).
 type ReviewRecord struct {
-	SchemaVersion string   `json:"schema_version"`
-	CaseID        string   `json:"case_id"`
-	FindingID     string   `json:"finding_id"`
+	SchemaVersion string `json:"schema_version"`
+	CaseID        string `json:"case_id"`
+	FindingID     string `json:"finding_id"`
 
 	// Verdict is one of the Verdict* constants. NormalizeVerdict
 	// accepts legacy values ("confirmed"/"dismissed"/"inconclusive"
@@ -300,8 +313,8 @@ type ReviewRecord struct {
 	// "did not record per-evidence inspection".
 	ReviewedEvidence []string `json:"reviewed_evidence,omitempty"`
 
-	Tags    []string `json:"tags,omitempty"`
-	Notes   string   `json:"notes,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
+	Notes string   `json:"notes,omitempty"`
 
 	// Severity is preserved for backward compatibility with old
 	// review_records.jsonl. New writes set CorrectedSeverity

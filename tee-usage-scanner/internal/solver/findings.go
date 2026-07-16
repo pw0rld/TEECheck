@@ -26,6 +26,7 @@ func BuildFindings(runID string, results []Result) artifacts.Findings {
 			Severity:   severityFor(r),
 			Confidence: confidenceFor(r.Status),
 			Files:      evidenceFiles(r.Evidence),
+			Locations:  evidenceLocations(r.Evidence),
 			Summary:    fmt.Sprintf("%s (%s): %s", r.TWEID, r.Status, r.Reason),
 			Evidence:   evidenceLines(r.Evidence),
 		})
@@ -74,6 +75,26 @@ func evidenceFiles(evidence []codeql.Result) []string {
 	}
 	sort.Strings(files)
 	return files
+}
+
+// evidenceLocations returns the structured (path, line) of each evidence hit
+// with a real position, deduplicated. This is the same data evidenceLines
+// embeds in prose, exposed structurally so the scorer can match on line.
+func evidenceLocations(evidence []codeql.Result) []artifacts.FindingLocation {
+	seen := map[string]bool{}
+	var locs []artifacts.FindingLocation
+	for _, e := range evidence {
+		if e.Path == "" || e.StartLine <= 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", e.Path, e.StartLine)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		locs = append(locs, artifacts.FindingLocation{Path: e.Path, StartLine: e.StartLine})
+	}
+	return locs
 }
 
 func evidenceLines(evidence []codeql.Result) []string {
