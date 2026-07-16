@@ -52,5 +52,3 @@ has vulnerable and fixed source trees and may be scored.
 | [CVE-2026-45614](./CVE-2026-45614/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
 | [CVE-2026-45702](./CVE-2026-45702/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
 | [CVE-2026-53763](./CVE-2026-53763/README.md) | Arm TrustZone / OP-TEE | `fixture_ready` |
-| [TWE-BIND-0001](./TWE-BIND-0001/README.md) | Intel SGX / DCAP (synthetic) | `fixture_ready` |
-| [TWE-CONFIG-0001](./TWE-CONFIG-0001/README.md) | Intel SGX / DCAP (synthetic) | `fixture_ready` |

@@ -32,7 +32,6 @@ type caseSpec struct {
 	FixedRevision      string     `json:"fixed_revision"`
 	DetectionSurface   string     `json:"detection_surface"`
 	Language           string     `json:"language"`
-	SourceRecord       string     `json:"source_record"`
 	ScanPaths          []string   `json:"scan_paths"`
 	Files              []fileSpec `json:"files"`
 }
@@ -78,8 +77,7 @@ type oracleSpec struct {
 	// and fixed source and patch are public, hence plausibly in the training
 	// corpus of the GLM-based scanner. A detection on such a case may reflect
 	// memorization rather than reasoning, so the suspect subset is reported
-	// separately. Synthetic hand-authored pairs are not public and are the
-	// only leakage-clean cases.
+	// separately.
 	LeakageSuspect bool `json:"leakage_suspect"`
 }
 
@@ -93,7 +91,6 @@ var validLocationProvenance = map[string]bool{
 	"multi-file-pending":   true,
 	"multi-file-confirmed": true,
 	"multi-file-corrected": true,
-	"synthetic":            true,
 }
 
 var validTWEFamilies = map[string]bool{
@@ -188,23 +185,11 @@ func validateCase(dir string) error {
 	if c.Status != "fixture_ready" {
 		return fmt.Errorf("unsupported or missing case status %q", c.Status)
 	}
-	// A synthetic case is a hand-authored vulnerable/fixed pair that does
-	// not track a public CVE (used to cover TWE families the CVE corpus
-	// misses, e.g. Binding and Config). It skips the upstream provenance
-	// checks — there is no repository revision or CVE record — but every
-	// substantive check below (fixture hashes, vulnerable != fixed, oracle
-	// completeness, TWE fields, patch) still applies.
-	synthetic := c.DetectionSurface == "synthetic"
-	if !synthetic {
-		if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
-			return errors.New("repository revisions are incomplete")
-		}
-		if c.SourceRecord == "" {
-			return errors.New("source record is missing")
-		}
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(c.SourceRecord))); err != nil {
-			return fmt.Errorf("source record: %w", err)
-		}
+	// Every case is source-backed: it tracks a public CVE with a real upstream
+	// repository and revisions, so the vulnerable and fixed source can be
+	// traced to the upstream commit.
+	if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
+		return errors.New("repository revisions are incomplete")
 	}
 	if len(c.Files) == 0 || len(c.ScanPaths) == 0 {
 		return errors.New("no fixture files or scan paths")
@@ -226,9 +211,6 @@ func validateCase(dir string) error {
 	}
 	if !validLocationProvenance[o.OracleReview.LocationProvenance] {
 		return fmt.Errorf("unknown oracle_review.location_provenance %q", o.OracleReview.LocationProvenance)
-	}
-	if (o.OracleReview.LocationProvenance == "synthetic") != (c.DetectionSurface == "synthetic") {
-		return fmt.Errorf("oracle_review.location_provenance %q disagrees with detection_surface %q", o.OracleReview.LocationProvenance, c.DetectionSurface)
 	}
 	if !containsPath(c.ScanPaths, o.PrimaryFile) {
 		return fmt.Errorf("oracle primary file %q is not included in scan_paths", o.PrimaryFile)

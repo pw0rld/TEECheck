@@ -1,7 +1,7 @@
 # TEECheck Benchmark
 
-This directory contains the vulnerability corpus, executable source fixtures,
-evaluation runner, and reviewable score reports used to measure TEECheck.
+This directory contains the executable source fixtures, evaluation runner, and
+reviewable score reports used to measure TEECheck.
 
 ## Directory Layout
 
@@ -23,24 +23,20 @@ datasets/CVE-YYYY-NNNN/
 ```
 
 Only `fixture_ready` cases in this directory participate in executable scanner
-evaluation. There are currently 46 executable cases (44 public CVEs plus 2
-synthetic), producing 92 scan samples: 46 vulnerable and 46 fixed. Every case
-has a checked-in vulnerable and fixed source tree.
+evaluation. There are currently 44 executable cases, producing 88 scan
+samples: 44 vulnerable and 44 fixed. Every case has a checked-in vulnerable and
+fixed source tree.
+
+Every case is source-backed: it pins a public CVE (`detection_surface:
+source`) with a real upstream repository, revisions, and record. Hand-authored
+synthetic fixtures are not admitted — the benchmark measures detection of real,
+public vulnerabilities.
 
 Every executable case is a defect **inside the TEE** — the trusted OS, secure
 world, enclave, or trusted application. A 2026-07 review removed seven cases
 whose code lives in the untrusted host or normal world (Linux KVM/SEV
 hypervisor, the Linux OP-TEE kernel driver, swiotlb DMA, a device-tree config,
-and guest-kernel EFI): TEE-adjacent, but not a weakness in a TEE. See
-`knowledge/cves/TEE-STANDARD-REVIEW.md`.
-
-Most executable cases pin a public CVE (`detection_surface: source`). A few are
-**synthetic** (`detection_surface: synthetic`, id prefix `TWE-<FAMILY>-NNNN`):
-hand-authored vulnerable/fixed pairs that do not track a CVE, used to cover TWE
-families the CVE corpus misses. Synthetic cases skip the upstream provenance
-checks (no repository revision or CVE record) but are held to every other
-requirement — fixture hashes, vulnerable != fixed, a fix patch, and a complete
-reviewed oracle.
+and guest-kernel EFI): TEE-adjacent, but not a weakness in a TEE.
 
 Each reviewed `oracle.yaml` also carries a TWE scope classification so the
 benchmark measures "can we find the CVEs we are designed to find" instead of
@@ -63,10 +59,9 @@ oracle_review.location_provenance
   # multi-file-confirmed  multi-file fix, primary_file reviewed as the exploitable file
   # multi-file-corrected  multi-file fix, primary_file was moved off collateral to the real file
   # multi-file-pending    multi-file fix, not yet reviewed (none currently)
-  # synthetic             hand-authored pair, no CVE provenance
 oracle_review.patch_files # how many files the fix patch touches (ripple indicator)
-leakage_suspect           # true for public CVEs plausibly in the GLM training corpus;
-                          #   false only for the synthetic (non-public) pairs
+leakage_suspect           # every case pins a public CVE plausibly in the GLM
+                          #   training corpus, so this is true for all of them
 ```
 
 `primary_function` and `match_terms` are retained as human-review evidence only.
@@ -82,34 +77,16 @@ memory-safety, arithmetic, resource, or concurrency bug that a sanitizer or
 fuzzer catches without any TEE-specific semantics. Out-of-scope cases are a
 known coverage gap of the TWE design, not a scanner failure.
 
-Current split of the 46 executable cases: 34 in scope, 12 out. In-scope
-families: Flow 14, Leakage 9, State 5, Guard 4, Binding 1, Config 1, Design 0.
+Current split of the 44 executable cases: 32 in scope, 12 out. In-scope
+families: Flow 14, Leakage 9, State 5, Guard 4, Binding 0, Config 0, Design 0.
 Oracle-location provenance: 30 single-file-fix, 12 multi-file-confirmed, 2
-multi-file-corrected, 2 synthetic. Leakage-suspect (public CVE): 44; clean
-(synthetic): 2.
-Binding and Config are seeded by synthetic fixtures only and remain the
-priority for new cases, since they are exactly the usage weaknesses (subject
-binding, simulated / debug attestation) most common in real audits. Add more by
-copying `TWE-BIND-0001` / `TWE-CONFIG-0001` and adapting the vulnerable/fixed
-pair — ideally lifted from a real repository such as dcap-qvl or an FPC audit
-finding.
-
-### `knowledge/cves/`
-
-The broader TEE CVE research corpus. It contains one Markdown record per CVE,
-plus the complete catalog, collection methodology, benchmark specification, and
-machine-readable manifest.
-
-The CVE records here provide background material for evaluation and research.
-Only cases with checked-in source pairs under `datasets/` are executable tests.
-
-Important files:
-
-- `knowledge/cves/CATALOG.md`: complete human-readable CVE index.
-- `knowledge/cves/MANIFEST.jsonl`: machine-readable status for every CVE.
-- `knowledge/cves/COLLECTION.md`: sources, search strategy, and known blind spots.
-- `knowledge/cves/BENCHMARK-SPEC.md`: fixture admission and scoring requirements.
-- `knowledge/cves/_TEMPLATE.md`: template for new CVE records.
+multi-file-corrected. Every case is leakage-suspect (all pin a public CVE).
+Binding, Config, and Design have no cases yet and are the priority for new
+cases, since Binding (subject binding) and Config (simulated / debug
+attestation) are exactly the usage weaknesses most common in real audits. New
+cases must be source-backed — a public CVE with a real vulnerable/fixed commit
+pair, ideally from a Rust attestation repository such as dcap-qvl or an FPC
+audit finding.
 
 ### `evaluator/runner/`
 
@@ -191,15 +168,10 @@ directory.
 
 ## Current Scope
 
-- CVE research records: 178
-- Executable vulnerability cases: 46 (34 in TWE scope, 12 out; 44 public CVEs, 2 synthetic)
-- Source samples: 92
+- Executable vulnerability cases: 44 (32 in TWE scope, 12 out; all public CVEs)
+- Source samples: 88
 - Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, and Occlum
   — all TEE-internal (trusted OS / secure world / enclave)
-
-The CVE corpus measures collection coverage. The executable cases measure
-scanner accuracy. These numbers must not be combined into a single benchmark
-score.
 
 Two known limitations to keep in mind when reading results:
 
