@@ -7,7 +7,7 @@ import (
 
 func TestProjectUnderstandingContractsRoundTrip(t *testing.T) {
 	model := ArchitectureModel{
-		SchemaVersion: "teecheck.architecture.v1",
+		SchemaVersion: SchemaVersionArchitectureV1,
 		RunID:         "run-1",
 		Repo:          RepoRef{URL: "repo", Commit: "abc"},
 		Assets: []ArchitectureElement{{
@@ -31,13 +31,14 @@ func TestProjectUnderstandingContractsRoundTrip(t *testing.T) {
 
 func TestToolFactAndAgentAssessmentStaySeparate(t *testing.T) {
 	fact := ToolFact{
-		SchemaVersion: "teecheck.tool_fact.v1",
+		SchemaVersion: SchemaVersionToolFactV1,
+		RequestID:     "req-1",
 		FactID:        "fact-1", Tool: "trustir", Operation: "trace_flow",
 		RepoCommit: "abc", Status: "success",
 		Result: json.RawMessage(`{"violation":true}`),
 	}
 	finding := UnifiedFindingV3{
-		SchemaVersion: "teecheck.finding.v3",
+		SchemaVersion: SchemaVersionFindingV3,
 		FindingID:     "finding-1", Summary: "rollback candidate",
 		ToolFactRefs:    []string{fact.FactID},
 		AgentAssessment: AgentAssessment{Status: "contested", Confidence: "medium"},

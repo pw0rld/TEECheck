@@ -2,6 +2,23 @@ package artifacts
 
 import "encoding/json"
 
+// Canonical schema_version values for the §9 contracts, matching the "const"
+// declared in each schemas/*.json file. schema_version is never inferred
+// from a file's name or path — see internal/schema for the validator that
+// checks a decoded artifact's own field against these values.
+const (
+	SchemaVersionProjectProfileV2       = "teecheck.project_profile.v2"
+	SchemaVersionArchitectureV1         = "teecheck.architecture.v1"
+	SchemaVersionProjectInvariantV1     = "teecheck.project_invariant.v1"
+	SchemaVersionTWEKnowledgeManifestV1 = "teecheck.twe_knowledge_manifest.v1"
+	// SchemaVersionToolFactV1 is "teecheck.trustir_result.v1", not
+	// "teecheck.tool_fact.v1": ToolFact validates against the "result" half
+	// of schemas/trustir-tool.v1.json (see ToolFact's doc comment).
+	SchemaVersionToolFactV1         = "teecheck.trustir_result.v1"
+	SchemaVersionTWEInvestigationV1 = "teecheck.twe_investigation.v1"
+	SchemaVersionFindingV3          = "teecheck.finding.v3"
+)
+
 // EvidenceState describes how strongly a project-understanding statement is
 // grounded. These values are deliberately separate from finding confidence:
 // they describe the provenance of an architecture fact, not vulnerability
@@ -112,12 +129,17 @@ type ArchitectureModel struct {
 }
 
 // ProjectInvariant is a project-specific security obligation instantiated
-// from TWE prior knowledge and the ArchitectureModel.
+// from TWE prior knowledge and the ArchitectureModel. RelatedTWEs and
+// VerificationPlan intentionally omit `omitempty`: project-invariant.v1.json
+// requires both keys to be present (related_twes additionally requires at
+// least one entry) even when the Planner has not yet filled them in, so an
+// empty-but-present `[]` is a distinct, valid state from the key being
+// absent.
 type ProjectInvariant struct {
 	SchemaVersion         string              `json:"schema_version"`
 	InvariantID           string              `json:"invariant_id"`
 	Statement             string              `json:"statement"`
-	RelatedTWEs           []string            `json:"related_twes,omitempty"`
+	RelatedTWEs           []string            `json:"related_twes"`
 	Parties               []string            `json:"parties,omitempty"`
 	Assets                []string            `json:"assets,omitempty"`
 	Boundaries            []string            `json:"boundaries,omitempty"`
@@ -126,7 +148,7 @@ type ProjectInvariant struct {
 	RequiredProperties    []string            `json:"required_properties,omitempty"`
 	ExpectedDefenses      []string            `json:"expected_defenses,omitempty"`
 	ArchitectureRefs      []string            `json:"architecture_refs,omitempty"`
-	VerificationPlan      []string            `json:"verification_plan,omitempty"`
+	VerificationPlan      []string            `json:"verification_plan"`
 	UnresolvedAssumptions []string            `json:"unresolved_assumptions,omitempty"`
 	Status                string              `json:"status"`
 	Evidence              []EvidenceReference `json:"evidence,omitempty"`
@@ -165,8 +187,20 @@ type ToolPathStep struct {
 
 // ToolFact is immutable after persistence. Agent outputs reference it by ID
 // rather than copying or rewriting the underlying static result.
+//
+// It is validated against schemas/trustir-tool.v1.json's "result" variant
+// (schema_version "teecheck.trustir_result.v1"). That schema still models
+// today's request/result tool protocol, so it requires RequestID — a pairing
+// concept from the live operation model, not from §9.6's fact list
+// (tool/version, repo commit, query hash, structured result, locations,
+// status, artifact ref). PR-05 replaces the operation model with a fact
+// layer per §19/§20; RequestID is the field most likely to become dead at
+// that point, since a persisted fact has no paired live request to point
+// back to. It stays required here only to satisfy the schema as it exists
+// today — see the PR-01 handoff notes for the full field-by-field list.
 type ToolFact struct {
 	SchemaVersion   string           `json:"schema_version"`
+	RequestID       string           `json:"request_id"`
 	FactID          string           `json:"fact_id"`
 	Tool            string           `json:"tool"`
 	ToolVersion     string           `json:"tool_version,omitempty"`
