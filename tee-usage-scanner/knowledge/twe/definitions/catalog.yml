@@ -52,11 +52,8 @@ twe:
     name: Context-Free TEE Output Acceptance
     query_modules: [binding/ContextFreeOutputAcceptance.ql]
     required_trustir: [tee_output, context_fields, authority_point, binding_relation]
-  # This is the weakness knowledge/twe/playbooks/rollback.yml (id
-  # TWE-STATE-ROLLBACK) is the experience layer for — same TWE, two
-  # unreconciled ids: tee-audit's numeric catalog id here, and the readable
-  # id the merge design doc (§5.1, §9) and rollback.yml settled on. Left
-  # as-is rather than renamed on either side; see the PR-02 report.
+  # knowledge/twe/playbooks/rollback.yml is the experience layer for this
+  # weakness and keys off this id.
   - id: TWE-STATE-001
     family: State
     name: Sealed State Restored Without Version or Epoch Continuity

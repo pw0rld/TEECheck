@@ -1,5 +1,5 @@
 schema_version: teecheck.twe_playbook.v1
-id: TWE-STATE-ROLLBACK
+id: TWE-STATE-001
 name: Trusted State Rollback
 family: State
 

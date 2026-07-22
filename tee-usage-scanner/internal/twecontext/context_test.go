@@ -109,7 +109,7 @@ func TestShippedRollbackPlaybook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile shipped playbooks: %v", err)
 	}
-	if len(compiled.Manifest.TWEIDs) != 1 || compiled.Manifest.TWEIDs[0] != "TWE-STATE-ROLLBACK" {
+	if len(compiled.Manifest.TWEIDs) != 1 || compiled.Manifest.TWEIDs[0] != "TWE-STATE-001" {
 		t.Fatalf("shipped TWE IDs = %v", compiled.Manifest.TWEIDs)
 	}
 	// Both rollback attack shapes (§20.2) must show up in the compiled

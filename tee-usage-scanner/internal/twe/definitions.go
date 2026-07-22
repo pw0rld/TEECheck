@@ -26,11 +26,12 @@ var definitionIDPattern = regexp.MustCompile(`^TWE-[A-Z0-9-]+$`)
 // A Definition is just the fixed id/name/family/query-module anchor both of
 // those layers, and the future fact/query layer (PR-05), key off by TWE id.
 // Only one Definition — TWE-STATE-001, "Sealed State Restored Without
-// Version or Epoch Continuity" — has a Playbook today, and that Playbook
-// uses a different id, TWE-STATE-ROLLBACK: tee-audit's numeric catalog id
-// and the design doc's readable id for the same weakness were never
-// reconciled before this migration. See the PR-02 report for why this was
-// left as-is rather than guessed at.
+// Version or Epoch Continuity" — has a Playbook today.
+//
+// The numeric ids come from tee-audit and are load-bearing: its CodeQL query
+// blueprints reference them 207 times across 60 queries, in @id and @tags. So
+// the catalog's scheme wins over the readable ids the design doc's examples
+// once used, and everything keys off one id per weakness.
 type Definition struct {
 	ID              string   `yaml:"id"`
 	Family          Family   `yaml:"family"`

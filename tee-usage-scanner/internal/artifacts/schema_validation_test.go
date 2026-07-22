@@ -82,7 +82,7 @@ func TestSchemaProjectInvariantV1(t *testing.T) {
 		SchemaVersion:      SchemaVersionProjectInvariantV1,
 		InvariantID:        "INV-STATE-001",
 		Statement:          "Restored WalletState must be checked against a non-replayable freshness anchor before SignTransaction",
-		RelatedTWEs:        []string{"TWE-STATE-ROLLBACK"},
+		RelatedTWEs:        []string{"TWE-STATE-001"},
 		Entrypoints:        []string{"restore_wallet"},
 		AuthorityPoints:    []string{"sign_transaction"},
 		RequiredProperties: []string{"state_freshness", "version_continuity"},
@@ -122,7 +122,7 @@ func TestSchemaTWEKnowledgeManifestV1(t *testing.T) {
 		CatalogVersion: "teecheck.twe_playbook.v1",
 		CatalogSHA256:  "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
 		ContextSHA256:  "d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1",
-		TWEIDs:         []string{"TWE-STATE-ROLLBACK"},
+		TWEIDs:         []string{"TWE-STATE-001"},
 	}
 	data := marshalJSON(t, manifest)
 	if err := schema.Validate(schema.TWEKnowledgeManifestV1, data); err != nil {
@@ -197,7 +197,7 @@ func TestSchemaTWEInvestigationV1(t *testing.T) {
 	investigation := TWEInvestigation{
 		SchemaVersion:   SchemaVersionTWEInvestigationV1,
 		InvestigationID: "inv-1",
-		TWEIDs:          []string{"TWE-STATE-ROLLBACK"},
+		TWEIDs:          []string{"TWE-STATE-001"},
 		InvariantIDs:    []string{"INV-STATE-001"},
 		Classification:  "standard",
 		CoverageGaps:    []string{"no evidence of restore_wallet's caller"},
@@ -227,7 +227,7 @@ func TestSchemaFindingV3(t *testing.T) {
 	finding := UnifiedFindingV3{
 		SchemaVersion:  SchemaVersionFindingV3,
 		FindingID:      "finding-1",
-		RelatedTWEs:    []string{"TWE-STATE-ROLLBACK"},
+		RelatedTWEs:    []string{"TWE-STATE-001"},
 		Classification: "standard",
 		Summary:        "rollback candidate",
 		ToolFactRefs:   []string{"fact-1"},
