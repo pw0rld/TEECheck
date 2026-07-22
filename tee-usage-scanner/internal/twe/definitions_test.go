@@ -226,3 +226,23 @@ func TestLoadExclusionRulesRejectsEmpty(t *testing.T) {
 		t.Fatal("expected empty deny_globs to be rejected")
 	}
 }
+
+func TestExclusionRulesMatch(t *testing.T) {
+	rules := ExclusionRules{DenyGlobs: []string{"**/vendor/**", "**/*.pb.go", "**/testdata/**"}}
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		{"core/tee/tee_svc.c", false},
+		{"third_party/vendor/openssl/rsa.c", true},
+		{"vendor/github.com/foo/bar/baz.go", true},
+		{"api/service.pb.go", true},
+		{"internal/preprocessor/testdata/fixture.rs", true},
+		{"internal/preprocessor/run.go", false},
+	}
+	for _, tc := range cases {
+		if got := rules.Match(tc.rel); got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.rel, got, tc.want)
+		}
+	}
+}

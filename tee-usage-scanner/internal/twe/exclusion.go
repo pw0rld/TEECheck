@@ -3,6 +3,7 @@ package twe
 import (
 	"fmt"
 	"os"
+	"path"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -55,4 +56,52 @@ func (r ExclusionRules) Validate() error {
 		seen[glob] = true
 	}
 	return nil
+}
+
+// Match reports whether rel — a slash-separated, repo-relative file path —
+// falls under any deny glob. This is the single evaluator for exclusion.yml;
+// callers outside this package (PR-03 fingerprinting, PR-05 fact extraction)
+// use it instead of hand-rolling their own vendor/generated/test path lists,
+// per docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §21: "vendor/generated/test
+// scope must be explicitly marked, using the migrated exclusion.yml".
+func (r ExclusionRules) Match(rel string) bool {
+	rel = strings.TrimPrefix(strings.TrimPrefix(rel, "./"), "/")
+	for _, glob := range r.DenyGlobs {
+		if matchDoubleStarGlob(glob, rel) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDoubleStarGlob matches a "**"-aware glob against a slash-separated
+// path. "**" matches zero or more whole path segments; any other segment is
+// matched with path.Match (shell-style single-segment wildcards). The
+// standard library's path/filepath.Match has no "**" support, and the
+// deny_globs in exclusion.yml rely on it (e.g. "**/vendor/**"), so this small
+// segment-recursive matcher is needed rather than a library dependency.
+func matchDoubleStarGlob(pattern, name string) bool {
+	return matchGlobSegments(strings.Split(pattern, "/"), strings.Split(name, "/"))
+}
+
+func matchGlobSegments(pattern, name []string) bool {
+	if len(pattern) == 0 {
+		return len(name) == 0
+	}
+	if pattern[0] == "**" {
+		if matchGlobSegments(pattern[1:], name) {
+			return true
+		}
+		if len(name) == 0 {
+			return false
+		}
+		return matchGlobSegments(pattern, name[1:])
+	}
+	if len(name) == 0 {
+		return false
+	}
+	if ok, err := path.Match(pattern[0], name[0]); err != nil || !ok {
+		return false
+	}
+	return matchGlobSegments(pattern[1:], name[1:])
 }
