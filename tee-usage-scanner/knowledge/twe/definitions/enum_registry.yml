@@ -1,0 +1,191 @@
+# Migrated verbatim from tee-audit's trustir/spec/enum_registry.yml (PR-02 of
+# the TEECheck/tee-audit merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §5.3).
+#
+# This is the fact vocabulary: the finite set of role/kind values a program
+# fact extracted from code may take. It has exactly one definition site — this
+# file — shared by the LLM annotation prompt and the fixed-query layer once
+# PR-05 builds them; neither may re-declare or copy these values. tee-audit's
+# own v1 postmortem names an enum mismatch between the prompt and the query
+# layer as one of its worst bugs (§23.4 of the merge doc), which is the whole
+# reason this file has a single source instead of two.
+claim_field_role:
+  - measurement
+  - signer_identity
+  - product_id
+  - security_version
+  - report_data
+  - user_data
+  - attested_public_key
+  - runtime_public_key
+  - worker_identity
+  - prover_identity
+  - oracle_identity
+  - agent_address
+  - chain_id
+  - contract_address
+  - task_id
+  - epoch
+  - nonce
+  - timestamp
+  - tcb_status
+  - debug_flag
+  - tee_type
+  - runtime_hash
+  - sealed_state_version
+authority_kind:
+  - registration_acceptance
+  - key_release
+  - secret_access
+  - proof_acceptance
+  - oracle_update
+  - trusted_worker_update
+  - runtime_key_acceptance
+  - confidential_input_acceptance
+  - policy_change
+  - settlement_acceptance
+  - state_restore_acceptance
+  - observable_output
+authority_subject_role:
+  - registered_worker
+  - registered_prover
+  - registered_oracle
+  - registered_agent
+  - key_release_recipient
+  - proof_instance
+  - encryption_key
+  - payout_subject
+guard_kind:
+  - verifier_success_check
+  - quote_signature_verification
+  - certificate_chain_verification
+  - tcb_status_appraisal
+  - qe_identity_appraisal
+  - collateral_freshness_check
+  - crl_revocation_check
+  - measurement_allowlist_check
+  - signer_allowlist_check
+  - report_data_integrity_check
+  - nonce_freshness_check
+  - timestamp_freshness_check
+  - epoch_freshness_check
+  - identity_verification
+  - production_mode_check
+# Taint propagators (iteration 3, IRIS taint-propagator analog). An API tagged
+# PROPAGATOR with one of these roles carries tainted data from an input to an
+# output without sanitization; the fact generator wires it as
+# isAdditionalTrustFlowStep. (Not a security decision itself.)
+taint_propagator_role:
+  - carry_through           # output derived directly from a tainted input
+  - field_propagation       # taint flows into a struct field carried out
+  - encoding_passthrough    # decode/encode wrapper that preserves taint
+  - collection_spread       # taint spreads into a collection/map element
+  - accessor_propagation    # getter/accessor returning a tainted-held value
+binding_relation_kind:
+  - equal
+  - derived_equal
+  - hash_equal
+  - signature_covers
+  - transcript_covers
+  - registry_lookup_matches
+  - allowlist_membership
+  - monotonic_greater_or_equal
+  - freshness_within_window
+  - same_epoch
+  - same_chain_context
+config_source_kind:
+  - environment_variable
+  - cli_flag
+  - cargo_feature
+  - build_tag
+  - chain_constant
+  - genesis_config
+  - docker_env
+  - manifest_option
+  - gramine_manifest
+  - config_file
+  - hardcoded_dev_key
+  - test_key_material
+security_mode_kind:
+  - production
+  - debug
+  - simulation
+  - mock_tee
+  - none_attestation
+  - skip_verification
+  - allow_debug_enclave
+  - inject_key
+  - use_dev_key
+  - unsafe_collateral_source
+state_object_kind:
+  - sealed_blob
+  - checkpoint
+  - replay_trace
+  - epoch_state
+  - runtime_state_root
+  - key_rotation_state
+  - committee_membership_state
+  - monotonic_counter
+  - nonce_cache
+  - freshness_token
+observable_sink_role:
+  - log_output
+  - rpc_error_message
+  - http_response_body
+  - http_header
+  - grpc_status_detail
+  - cli_output
+  - event_emission
+  - host_filesystem_write
+  - metrics_label
+  - debug_trace
+  # Boundary-exit observable surfaces (TWE-FLOW-002 / LEAK). Cross-boundary
+  # host/network/RPC outputs where enclave secrets must not arrive in cleartext.
+  - host_log_output
+  - host_memory_buffer
+  - network_response
+  - rpc_response
+# Flow-family roles (TWE-FLOW-001/002, and the source side of LEAK). Without a
+# catalog category for these, the extraction prompt forbids inventing sink/source
+# roles -> the LLM emits ZERO sinks -> Flow/Leak queries can never fire on real
+# code. These are the genuine "host-controlled source reaches a security-relevant
+# consumption" roles.
+trust_source_role:
+  - host_input
+  - untrusted_rpc_input
+  - peer_message
+  - chain_input
+  - user_supplied_data
+  - host_controlled_config
+  - external_attestation_input
+  # Secret-carrying trust sources (TWE-FLOW-002 / TWE-LEAK-001 / TWE-LEAK-002).
+  # These are enclave-originated or enclave-held secrets whose unguarded flow to
+  # a boundary-exit / observable sink is itself the concern.
+  - enclave_secret
+  - enclave_private_key
+  - key_material
+  - sealed_state_content
+  - user_confidential_input
+  - private_key
+  - confidential_result
+  - enclave_internal_error
+  - measurement_value
+  - secret_dependent_branch
+trust_sink_role:
+  - key_derivation_input
+  - signing_input
+  - encryption_input
+  - decryption_input
+  - sealing_input
+  - confidential_store_write
+  - key_release_target
+  - access_control_decision
+  - enclave_call_input
+finding_status:
+  - confirmed
+  - violated_candidate
+  - delegated
+  - guarded_elsewhere
+  - configuration_dependent
+  - test_only
+  - out_of_scope
+  - unresolved
