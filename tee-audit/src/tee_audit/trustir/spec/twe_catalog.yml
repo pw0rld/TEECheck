@@ -1,0 +1,81 @@
+twe:
+  - id: TWE-FLOW-001
+    family: Flow
+    name: Host-Controlled Data Reaches Enclave Security Decision
+    query_modules: [flow/HostToEnclaveSecurityDecision.ql]
+    required_trustir: [flow_source, flow_sink, trust_boundary, sanitizer, entrypoint]
+  - id: TWE-FLOW-002
+    family: Flow
+    name: Secret or Key Material Leaves TEE Boundary Without Protection
+    query_modules: [flow/SecretBoundaryExit.ql]
+    required_trustir: [secret_source, boundary_exit, untrusted_sink, protection_guard]
+  - id: TWE-GUARD-001
+    family: Guard
+    name: Validity-Only Attestation Consumption
+    query_modules: [guard/ValidityOnlyConsumption.ql]
+    required_trustir: [claim_producer, verifier_success_field, claim_fields, authority_point, required_guard_set]
+  - id: TWE-GUARD-002
+    family: Guard
+    name: Attestation Status or TCB Appraisal Ignored
+    query_modules: [guard/StatusAppraisalIgnored.ql, guard/FailOpenStatus.ql]
+    required_trustir: [claim_producer, status_field, accepted_statuses, authority_point, guard_behavior]
+  - id: TWE-GUARD-003
+    family: Guard
+    name: Missing Freshness Check Before Authority
+    query_modules: [guard/MissingFreshnessCheck.ql]
+    required_trustir: [freshness_field, freshness_source, authority_point, freshness_guard]
+  - id: TWE-BIND-001
+    family: Binding
+    name: Unbound Attested Subject Authority
+    query_modules: [binding/MissingSubjectBinding.ql]
+    required_trustir: [claim_field, authority_subject, authority_point, required_binding_relation]
+  - id: TWE-BIND-002
+    family: Binding
+    name: Public Key Not Bound to Report Data
+    query_modules: [binding/ReportDataKeyBinding.ql]
+    required_trustir: [attestation_report_field, public_key_field, binding_relation, authority_point]
+  - id: TWE-BIND-003
+    family: Binding
+    name: Context-Free TEE Output Acceptance
+    query_modules: [binding/ContextFreeOutputAcceptance.ql]
+    required_trustir: [tee_output, context_fields, authority_point, binding_relation]
+  - id: TWE-STATE-001
+    family: State
+    name: Sealed State Restored Without Version or Epoch Continuity
+    query_modules: [state/SealedStateRestoreWithoutVersion.ql]
+    required_trustir: [state_object, state_restore_operation, continuity_guard, authority_point]
+  - id: TWE-STATE-002
+    family: State
+    name: Replayable Attestation Result or Authorization
+    query_modules: [state/ReplayableAuthorization.ql]
+    required_trustir: [authorization_artifact, freshness_field, replay_cache_or_nonce_guard, authority_point]
+  - id: TWE-CONFIG-001
+    family: Config
+    name: Debug, Simulation, or None-Attestation Mode Reaches Production Authority
+    query_modules: [config/WeakModeReachesAuthority.ql]
+    required_trustir: [config_source, weak_mode, authority_point, production_guard]
+  - id: TWE-CONFIG-002
+    family: Config
+    name: Host-Controlled or Development Key Enters Trusted Runtime Authority
+    query_modules: [config/DevKeyReachesRuntime.ql]
+    required_trustir: [config_source, key_material, runtime_authority_point, production_guard]
+  - id: TWE-DESIGN-001
+    family: Design
+    name: Claimed TEE Trust Path Has a Non-TEE Bypass
+    query_modules: [design/BypassAuthorityPath.ql]
+    required_trustir: [claimed_security_property, protected_asset, tee_trust_path, bypass_path, authority_point]
+  - id: TWE-DESIGN-002
+    family: Design
+    name: TEE Protects the Wrong Component for the Claimed Security Property
+    query_modules: [design/ProtectedWrongComponent.ql]
+    required_trustir: [claimed_security_property, protected_asset, trusted_component, unprotected_critical_component]
+  - id: TWE-LEAK-001
+    family: Leakage
+    name: Enclave Secret or Internal State Reaches Logs, Errors, or Metadata
+    query_modules: [leakage/SecretToLogOrError.ql]
+    required_trustir: [secret_source, observable_sink, normalizer, trust_boundary]
+  - id: TWE-LEAK-002
+    family: Leakage
+    name: Secret-Dependent Output Length or Structure Exposed
+    query_modules: [leakage/SecretDependentOutputShape.ql]
+    required_trustir: [secret_source, observable_sink, normalizer, secret_dependent_branch]

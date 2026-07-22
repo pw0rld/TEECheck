@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+*.sarif
+codeql-dbs/
+results/
+.env
+config.yaml
+.venv/
+venv/
+*.DS_Store
+.omc/
+.omx/
+.agents/
+# Ignore audit working directories (repos, artifacts, intermediate results)
+output/*-audit/

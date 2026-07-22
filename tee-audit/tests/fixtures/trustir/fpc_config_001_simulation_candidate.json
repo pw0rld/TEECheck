@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "repo": {"name": "fabric-private-chaincode", "root": "/repo", "languages": ["go"]},
+  "candidate_id": "C-FPC-CONFIG-SIM",
+  "twe_id": "TWE-CONFIG-001",
+  "taxonomy_family": "Config",
+  "tee_dimension": "incorrect_usage",
+  "trust_context": "attested_output_acceptance",
+  "evidence_spans": [
+    {"id": "EV1", "kind": "code", "file": "internal/attestation/simulation/issuer.go",
+     "start_line": 12, "end_line": 21,
+     "quote": "func NewSimulationIssuer() *types.Issuer { ... attestation_type simulated, attestation MA== }"},
+    {"id": "EV2", "kind": "code", "file": "ecc_go/chaincode/enclave_go/attestation/attestation.go",
+     "start_line": 10, "end_line": 20,
+     "quote": "issuer := simulation.NewSimulationIssuer()"}
+  ],
+  "authority_points": [
+    {"id": "AP1", "kind": "runtime_key_acceptance",
+     "selector": {"language": "go", "file": "ecc_go/chaincode/enclave_go/attestation/attestation.go",
+                  "qualified_name": "NewSimulationIssuer", "line": 16},
+     "protected_asset": "enclave_attestation_trust",
+     "evidence_span_ids": ["EV2"]}
+  ],
+  "config_sources": [
+    {"id": "CFG1", "kind": "config_file", "role": "simulation", "weak_mode": "simulation",
+     "file": "internal/attestation/simulation/issuer.go", "line": 20}
+  ],
+  "required_obligations": [
+    {"id": "O1", "twe_id": "TWE-CONFIG-001", "family": "Config",
+     "authority_point_id": "AP1",
+     "required_relation": {"weak_mode": "simulation", "needs_production_guard": true},
+     "must_dominate": true}
+  ],
+  "suppressors": []
+}
