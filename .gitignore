@@ -1,0 +1,17 @@
+# Go build output
+tee-usage-scanner/runner
+tee-usage-scanner/teecheck
+
+# Node build output. tee-usage-scanner/web currently holds only dist +
+# node_modules + generated vite config — no source, no tracked files.
+tee-usage-scanner/web/
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tool state
+.codex
+.superpowers/
+
+# Run artifacts
+runs/
