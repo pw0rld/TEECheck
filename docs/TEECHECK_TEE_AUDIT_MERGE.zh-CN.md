@@ -870,7 +870,9 @@ teecheck run <repo> \
 
 | 风险 | 后果 | 缓解措施 |
 |---|---|---|
-| **C 事实层从零构建失败** | PR-06 之后全部无法验收 | §23.7 前置可行性验证；独立排期 |
+| **C 事实层从零构建失败** | PR-06 之后全部无法验收 | 部分已退休：C 数据库构建与端到端 differential 已由 C-feasibility spike 验证（§23.7）。剩余风险收窄为「事实表架构能否在 C 上成立」，仍需 §23.7 的前置验证；独立排期 |
+| **`--build-mode=none` 不做真实编译** | 宏/`#ifdef` 走源码默认值，config 门控的弱点可能测不出 | spike 已记录该限制。TF-M 的 profile 宏类案例需真实构建才有保真度——PR-09 对照组中此类案例单独标注，不计入通过 |
+| **内核级仓库的克隆与抽取成本** | 跑多案例时不可接受 | DB 按 commit 构建一次并落为显式 artifact（§23.3）；PR-09 对照组按体量分批 |
 | TWE 过于抽象 | Agent 无法转成代码调查 | 每条 TWE 提供明确 steps、evidence、defenses |
 | TWE 过于具体 | 只能匹配已知项目 | 禁止项目函数名进入核心场景，平台细节放 adapter |
 | 全部 TWE 上下文增长 | Token 和注意力压力 | §11.1 编译期硬上限，超限即失败 |
@@ -1262,7 +1264,7 @@ tee-audit 的 `stages/dossier.py`(97行) 与 `stages/invariants.py`(77行) 是 A
 - resolver：把标注的名字解析到真实符号，未解析的标记 unresolved；
 - 事实生成：输出 `GeneratedTrustFacts.qll`；
 - 通过现有 `internal/codeql/` engine 执行；
-- CodeQL DB **每 run 按 commit 构建一次**，落到 run 目录作为显式 artifact（不是缓存副作用）；
+- CodeQL DB **每 run 按 commit 构建一次**，落到 run 目录作为显式 artifact（不是缓存副作用）。构建方式采用 spike 验证过的路径：`git clone <repository>@<revision>` 取全树 + `--build-mode=none`，输入取自 `case.yaml` 的 `repository`/`vulnerable_revision`/`fixed_revision`。**不得退回单文件或 stub 头文件方案**——spike 已证伪，两者抽出的函数数均为 0；
 - ToolFact persistence；error/unsupported/unresolved mapping。
 
 新增 `codeql/trustir/cpp/`：
@@ -1285,7 +1287,7 @@ tee-audit 的 `stages/dossier.py`(97行) 与 `stages/invariants.py`(77行) 是 A
 
 - 宏展开产生的重复/合成符号；
 - 头文件中重复定义与 `static inline`；
-- 条件编译分支（`#ifdef CFG_*`）导致的不可达代码；
+- 条件编译分支（`#ifdef CFG_*`）导致的不可达代码——spike 已确认这是 `--build-mode=none` 的固有限制而非可修复缺陷：不做真实编译，宏与 `#ifdef` 一律走源码默认值。因此本层的目标是**标注哪些结论受配置假设影响**，不是消除该影响；
 - OP-TEE / TF-M 的平台适配层与内核核心的 scope 区分。
 
 ### 23.6 Rollback 最小能力
@@ -1301,10 +1303,39 @@ tee-audit 的 `stages/dossier.py`(97行) 与 `stages/invariants.py`(77行) 是 A
 
 ### 23.7 前置可行性验证
 
-本 PR 是全计划唯一的从零构建项，失败会使 PR-06 之后全部无法验收。**先做可行性验证再进入完整实现**：
+本 PR 是全计划唯一的从零构建项。但其中**风险最大的一块已经被退休**——见
+`tee-usage-scanner/docs/design/C-feasibility-spike.md`（2026-07-15，结论 PASS）。
 
-- 在 CVE-2026-44362 的 vulnerable revision 上，手写一份最小 `GeneratedTrustFacts.qll`（不经 LLM，人工填事实），验证 cpp 查询能否追出 `subkey_version -> key->version -> check_update_version`；
+已验证不再是风险的部分：
+
+| 项 | spike 结论 |
+|---|---|
+| CodeQL C 工具链 | `cpp-all`/`cpp-queries` bundle 与 gcc 已就位 |
+| C 数据库构建 | `git clone <repository>@<revision>` + 全树 `--build-mode=none`，得到完全可查询的 AST（libtomcrypt: 780 函数 / 7769 调用）。**不需要交叉编译工具链，不需要项目构建系统** |
+| 单文件 fixture 方案 | 已证伪：`--build-mode=none` 对无头文件的单文件抽出 0 个函数；stub 头文件同样为 0。必须全树 |
+| 端到端 differential | CVE-2016-6129 已跑通：vulnerable 命中、fixed 干净、scoped 后无误报 |
+
+`case.yaml` 已经带 `repository` + `vulnerable_revision` + `fixed_revision`，构建所需输入齐备。
+
+仍然开放、本 PR 必须验证的部分——spike 用的是**手写的单条自定义查询**，不是事实表架构，
+且目标是 libtomcrypt 而非 OP-TEE：
+
+- 在 CVE-2026-44362 的 vulnerable revision 上，手写一份最小 `GeneratedTrustFacts.qll`（不经 LLM，人工填事实），验证**薄壳查询消费事实表**这一形态能否在 C 上追出 `subkey_version -> key->version -> check_update_version`；
 - 该验证通过前，不投入 7 族查询的完整移植。
+
+即：**「C 上能不能用 CodeQL」已结案，「C 上能不能用事实表架构」仍待验证。**
+
+### 23.8 spike 与本计划的分歧
+
+spike 的「Next」提出 M2-C（DB 构建）+ **M4-C（每族生成 C/C++ QL 模板）**+ 语言分派。
+其中 M4-C 是 `querygen.go` 那条「按族生成整条查询」的路线，与 §6.2 选定的事实表架构互斥。
+
+spike 写于本融合计划之前，其 DB 构建结论完全有效并直接采用；其查询生成结论不采用。
+理由见 §6.2：模板路线新增语言的成本是 O(查询数)，事实表路线是 O(1)。
+
+spike 还记录了一件已发生的事：自定义 C Guard TWE 及其生成的查询已从 TWE catalog 移除，
+CVE-2016-6129 不再映射到任何 TWE——这就是 `codeql/queries-cpp/guard/missing_length_check.ql`
+在 `00e7d69` 中退场的原因。
 
 ### 验收
 
