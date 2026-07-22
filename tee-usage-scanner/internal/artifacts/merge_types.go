@@ -168,6 +168,12 @@ type TWEKnowledgeManifest struct {
 	CatalogSHA256  string   `json:"catalog_sha256"`
 	ContextSHA256  string   `json:"context_sha256"`
 	TWEIDs         []string `json:"twe_ids"`
+
+	// ContextTokenEstimate records how large the compiled prior-knowledge
+	// context actually was. The budget in twecontext fails compilation
+	// rather than truncating, so this is the observable that shows how much
+	// headroom is left before it fires.
+	ContextTokenEstimate int `json:"context_token_estimate,omitempty"`
 }
 
 // ToolLocation and ToolPathStep are transport-neutral code facts returned by

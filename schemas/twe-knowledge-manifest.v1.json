@@ -14,7 +14,8 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^TWE-[A-Z0-9-]+$"}
-    }
+    },
+    "context_token_estimate": {"type": "integer", "minimum": 0}
   },
   "additionalProperties": false
 }

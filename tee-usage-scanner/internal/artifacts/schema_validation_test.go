@@ -9,6 +9,7 @@ package artifacts
 //     rejected.
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -127,6 +128,23 @@ func TestSchemaTWEKnowledgeManifestV1(t *testing.T) {
 	data := marshalJSON(t, manifest)
 	if err := schema.Validate(schema.TWEKnowledgeManifestV1, data); err != nil {
 		t.Fatalf("valid TWEKnowledgeManifest rejected: %v", err)
+	}
+
+	// The compiled context size must survive into the persisted artifact:
+	// §11.1's budget fails compilation instead of truncating, so this is the
+	// only record of how close a run came to the ceiling.
+	withEstimate := manifest
+	withEstimate.ContextTokenEstimate = 720
+	sized := marshalJSON(t, withEstimate)
+	if err := schema.Validate(schema.TWEKnowledgeManifestV1, sized); err != nil {
+		t.Fatalf("manifest carrying context_token_estimate rejected: %v", err)
+	}
+	if !bytes.Contains(sized, []byte(`"context_token_estimate":720`)) {
+		t.Fatalf("context_token_estimate missing from persisted manifest: %s", sized)
+	}
+	// It stays optional: manifests written before the field existed still load.
+	if err := schema.Validate(schema.TWEKnowledgeManifestV1, withoutField(t, sized, "context_token_estimate")); err != nil {
+		t.Fatalf("manifest without context_token_estimate must still validate: %v", err)
 	}
 
 	if err := schema.Validate(schema.TWEKnowledgeManifestV1, withoutField(t, data, "catalog_sha256")); err == nil {

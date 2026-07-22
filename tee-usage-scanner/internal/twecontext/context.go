@@ -83,14 +83,8 @@ type Catalog struct {
 // metadata. All playbooks are included; no project profile filters this set.
 //
 // ContextTokenEstimate is the whole-catalog counterpart of the per-playbook
-// ceiling Compile enforces (§11.1's "context_token_estimate" field, §9.4). It
-// is deliberately not part of Manifest: the frozen
-// schemas/twe-knowledge-manifest.v1.json (PR-01) has additionalProperties:
-// false and does not declare this property, so writing it into the persisted
-// manifest would produce an artifact the canonical schema rejects. It is
-// exposed here, at the Go level, for callers and tests that need the number
-// without persisting it in a way that breaks schema validation — see the
-// PR-02 report for the schema follow-up this implies.
+// ceiling Compile enforces (§11.1, §9.4). It is mirrored into Manifest so the
+// number survives into the persisted run artifact, not just this struct.
 type Compiled struct {
 	Text                 string
 	ContextTokenEstimate int
@@ -286,15 +280,17 @@ func (c *Catalog) Compile() (Compiled, error) {
 	for _, p := range c.playbooks {
 		ids = append(ids, p.ID)
 	}
+	total := estimateTokens(text)
 	return Compiled{
 		Text:                 text,
-		ContextTokenEstimate: estimateTokens(text),
+		ContextTokenEstimate: total,
 		Manifest: artifacts.TWEKnowledgeManifest{
-			SchemaVersion:  "teecheck.twe_knowledge_manifest.v1",
-			CatalogVersion: SchemaVersion,
-			CatalogSHA256:  c.catalogSHA256,
-			ContextSHA256:  digest([]byte(text)),
-			TWEIDs:         ids,
+			SchemaVersion:        "teecheck.twe_knowledge_manifest.v1",
+			CatalogVersion:       SchemaVersion,
+			CatalogSHA256:        c.catalogSHA256,
+			ContextSHA256:        digest([]byte(text)),
+			TWEIDs:               ids,
+			ContextTokenEstimate: total,
 		},
 	}, nil
 }
