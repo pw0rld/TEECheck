@@ -64,36 +64,6 @@ func TestGenerateConfigQueryMissingRole(t *testing.T) {
 	}
 }
 
-func TestGenerateGuardQueryC(t *testing.T) {
-	cand := twe.TrustIRCandidate{
-		TWEID:  "TWE-GUARD-001",
-		SiteID: "guard-rsa",
-		Roles: map[string]twe.RoleCandidate{
-			"verification_call": {Enum: "signature_check", Loc: twe.Loc{Path: "src/pk/rsa/rsa_verify_hash.c", Line: 100, Symbol: "der_decode_sequence_ex"}},
-			"authority_point":   {Enum: "accept_message", Loc: twe.Loc{Path: "src/pk/rsa/rsa_verify_hash.c", Line: 153, Symbol: "*stat = 1"}},
-		},
-	}
-	q, err := GenerateGuardQueryC(cand)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(q, "import cpp") {
-		t.Errorf("C query must import cpp:\n%s", q)
-	}
-	if !strings.Contains(q, `getBaseName() = "rsa_verify_hash.c"`) || !strings.Contains(q, "getStartLine() = 153") {
-		t.Errorf("query does not pin the authority location:\n%s", q)
-	}
-	if !strings.Contains(q, `getTarget().getName() = "der_length_sequence"`) {
-		t.Errorf("query does not check the completeness call:\n%s", q)
-	}
-}
-
-func TestGenerateGuardQueryCMissingRole(t *testing.T) {
-	if _, err := GenerateGuardQueryC(twe.TrustIRCandidate{TWEID: "TWE-GUARD-001", Roles: map[string]twe.RoleCandidate{}}); err == nil {
-		t.Fatal("expected error when authority_point role is absent")
-	}
-}
-
 func TestGenerateBindingQueryMissingRole(t *testing.T) {
 	cand := bindingCandidate()
 	delete(cand.Roles, "authority_subject")

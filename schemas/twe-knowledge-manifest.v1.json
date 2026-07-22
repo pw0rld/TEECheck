@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/twe-knowledge-manifest.v1.json",
+  "title": "TEECheck TWE Knowledge Manifest v1",
+  "type": "object",
+  "required": ["schema_version", "catalog_sha256", "context_sha256", "twe_ids"],
+  "properties": {
+    "schema_version": {"const": "teecheck.twe_knowledge_manifest.v1"},
+    "catalog_version": {"type": "string"},
+    "catalog_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "context_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "twe_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^TWE-[A-Z0-9-]+$"}
+    }
+  },
+  "additionalProperties": false
+}

@@ -407,10 +407,6 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 		fmt.Printf("Unique after dedup: %d\n", len(merged.Candidates))
 	}
 
-	if len(merged.Candidates) == 0 {
-		return fmt.Errorf("planner produced 0 candidates after dedup; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
-	}
-
 	// Persist merged bundle to the canonical evidence_bundle.json
 	// path so downstream (and stats) see a single view of truth.
 	if err := runfs.WriteJSON(runfs.EvidenceBundlePath(runDir), merged); err != nil {

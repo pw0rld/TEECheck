@@ -68,9 +68,9 @@ func ScanSite(ctx context.Context, engine *codeql.Engine, catalog *twe.Catalog, 
 	}), nil
 }
 
-// generateQuery selects the query generator by language and TWE family. Rust
-// covers Binding and Config; C/C++ covers Guard. Unhandled combinations return
-// an explicit error rather than silently producing nothing.
+// generateQuery selects the query generator by language and TWE family.
+// Unhandled combinations return an explicit error rather than silently
+// producing nothing.
 func generateQuery(language string, entry twe.Entry, cand twe.TrustIRCandidate) (string, error) {
 	switch language {
 	case "rust":
@@ -79,11 +79,6 @@ func generateQuery(language string, entry twe.Entry, cand twe.TrustIRCandidate) 
 			return codeql.GenerateBindingQuery(cand)
 		case twe.FamilyConfig:
 			return codeql.GenerateConfigQuery(cand)
-		}
-	case "cpp":
-		switch entry.Family {
-		case twe.FamilyGuard:
-			return codeql.GenerateGuardQueryC(cand)
 		}
 	}
 	return "", fmt.Errorf("no query generator for %s/%s yet", language, entry.Family)

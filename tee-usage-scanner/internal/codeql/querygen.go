@@ -145,56 +145,6 @@ func GenerateConfigQuery(cand twe.TrustIRCandidate) (string, error) {
 	return b.String(), nil
 }
 
-// completenessCheckC is the completeness-check marker for the signature
-// Guard context: libtomcrypt computes the ASN.1 encoded length via
-// der_length_sequence and gates acceptance on it. This is domain knowledge of
-// the prewritten Guard module (you cannot locate a check that is absent), not
-// something the TrustIR candidate carries. A fuller catalog would map markers
-// per crypto library / context.
-const completenessCheckC = "der_length_sequence"
-
-// GenerateGuardQueryC emits a C/C++ query for one TWE-GUARD site (validity-only
-// consumption). It pins the acceptance-bearing function by the authority_point
-// role's location and flags it when the required completeness check is absent.
-// TrustIR supplies the scope (which function); the required check is domain
-// knowledge of the module (see completenessCheckC).
-func GenerateGuardQueryC(cand twe.TrustIRCandidate) (string, error) {
-	authority, ok := cand.Roles["authority_point"]
-	if !ok {
-		return "", fmt.Errorf("candidate %s: missing role authority_point", cand.SiteID)
-	}
-	authFile := filepath.Base(authority.Loc.Path)
-	if authFile == "" || authFile == "." || authority.Loc.Line <= 0 {
-		return "", fmt.Errorf("candidate %s: authority_point needs a file and line", cand.SiteID)
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "/**\n")
-	fmt.Fprintf(&b, " * @name TWE-GUARD-001 generated for %s\n", cand.SiteID)
-	fmt.Fprintf(&b, " * @description Acceptance at %s:%d without the %q completeness check.\n", authFile, authority.Loc.Line, completenessCheckC)
-	fmt.Fprintf(&b, " * @kind problem\n")
-	fmt.Fprintf(&b, " * @problem.severity error\n")
-	fmt.Fprintf(&b, " * @id teecheck/generated/guard/%s\n", sanitizeID(cand.SiteID))
-	fmt.Fprintf(&b, " * @tags security\n")
-	fmt.Fprintf(&b, " */\n\n")
-	b.WriteString("import cpp\n\n")
-	b.WriteString("from Function f\n")
-	b.WriteString("where\n")
-	fmt.Fprintf(&b, "  // authority point located by TrustIR: %s:%d\n", authFile, authority.Loc.Line)
-	b.WriteString("  exists(Expr e |\n")
-	b.WriteString("    e.getEnclosingFunction() = f and\n")
-	fmt.Fprintf(&b, "    e.getLocation().getFile().getBaseName() = %q and\n", authFile)
-	fmt.Fprintf(&b, "    e.getLocation().getStartLine() = %d\n", authority.Loc.Line)
-	b.WriteString("  ) and\n")
-	fmt.Fprintf(&b, "  // required completeness check %q is absent on the acceptance path\n", completenessCheckC)
-	b.WriteString("  not exists(FunctionCall c |\n")
-	b.WriteString("    c.getEnclosingFunction() = f and\n")
-	fmt.Fprintf(&b, "    c.getTarget().getName() = %q\n", completenessCheckC)
-	b.WriteString("  )\n")
-	fmt.Fprintf(&b, "select f, \"TWE-GUARD-001: \" + f.getName() + \" accepts without the required completeness check (%s)\"\n", cand.SiteID)
-	return b.String(), nil
-}
-
 // attestedVarName pulls the base binding out of a claim symbol: the variable
 // that holds the attested value. "report.pubkey" -> "report", "_report" ->
 // "_report". The query then checks whether that binding is ever read in the

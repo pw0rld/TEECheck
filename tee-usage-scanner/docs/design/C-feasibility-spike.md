@@ -30,11 +30,15 @@ AST — `rsa_verify_hash_ex` with all its calls (`der_decode_sequence_ex`,
 build system** — just `git clone @revision` + extract. `case.yaml` already
 carries `repository` + `vulnerable_revision` + `fixed_revision`.
 
-## Judging CVE-2016-6129
+## Historical experiment: CVE-2016-6129
+
+This experiment is retained as historical benchmark documentation only. The
+custom C Guard TWE and its generated query were removed from the active TWE
+catalog; CVE-2016-6129 is no longer mapped to a TWE.
 
 The fix adds a `der_length_sequence` call computing the ASN.1 length and gates
 acceptance (`*stat = 1`) on `reallen == outlen`. The vulnerable revision accepts
-without it. C Guard query (`codeql/queries-cpp/guard/missing_length_check.ql`):
+without it. The former custom C Guard query was:
 the acceptance-bearing function does not call `der_length_sequence`.
 
 Both databases were built by overlaying each fixture variant's

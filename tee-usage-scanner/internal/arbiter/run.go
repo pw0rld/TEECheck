@@ -131,6 +131,9 @@ func buildFindingEvidence(hypothesis artifacts.Hypothesis, memo artifacts.Verifi
 			len(memo.UntypedContradictions))
 	out = append(out, hypothesis.SupportingFacts...)
 	out = append(out, memo.ConfirmedFacts...)
+	for _, candidate := range memo.CandidateFacts {
+		out = append(out, "[unvalidated candidate] "+candidate)
+	}
 	for _, u := range hypothesis.UntypedFacts {
 		out = append(out, "[unanchored] "+u)
 	}
