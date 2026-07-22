@@ -375,3 +375,32 @@ func writeRepoFile(t *testing.T, root, rel, content string) {
 		t.Fatal(err)
 	}
 }
+
+// TestDetectManifestKindCoversOPTEEAndTFM guards the formats the ported
+// tee-audit parsers had no notion of. tee-audit targeted the SGX/Gramine
+// world, so its manifest vocabulary stops there — but OP-TEE and TF-M are 36
+// of the benchmark's 44 datasets. The corpus ships partial checkouts and
+// contains none of these files, so only a unit test can hold this line.
+func TestDetectManifestKindCoversOPTEEAndTFM(t *testing.T) {
+	manifests := map[string]string{
+		"ta/user_ta_header_defines.h":        "OP-TEE TA manifest",
+		"secure_fw/partitions/manifest.yaml": "TF-M secure partition manifest",
+		"tools/tfm_manifest_list.yaml":       "TF-M secure partition manifest",
+		"partitions/crypto_manifest.yaml":    "TF-M secure partition manifest",
+		"include/openenclave/edl/socket.edl": "EDL trust boundary definition",
+	}
+	for rel, want := range manifests {
+		if got := detectManifestKind(rel); got != want {
+			t.Errorf("detectManifestKind(%q) = %q, want %q", rel, got, want)
+		}
+	}
+
+	// sub.mk is build wiring, not a trust-boundary declaration, so it must
+	// land in the build system rather than inflate the manifest signal.
+	if got := detectManifestKind("core/arch/arm/sub.mk"); got != "" {
+		t.Errorf("sub.mk classified as manifest %q; it is build wiring", got)
+	}
+	if got := detectBuildSystem("core/arch/arm/sub.mk"); got != "optee-make" {
+		t.Errorf("detectBuildSystem(sub.mk) = %q, want optee-make", got)
+	}
+}

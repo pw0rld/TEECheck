@@ -404,6 +404,12 @@ func detectBuildSystem(rel string) string {
 		return "make"
 	case "build.gradle", "build.gradle.kts":
 		return "gradle"
+	case "sub.mk", "conf.mk":
+		// OP-TEE build fragments. Deliberately a build system rather than a
+		// manifest: sub.mk lists which sources compile into a TA or into
+		// core, which is build wiring, not a declaration of the trust
+		// boundary the way user_ta_header_defines.h is.
+		return "optee-make"
 	}
 	return ""
 }
@@ -434,6 +440,24 @@ func detectManifestKind(rel string) string {
 		return "Nitro enclave configuration"
 	case strings.Contains(base, "enclave") && (base == "dockerfile.enclave" || strings.HasSuffix(base, ".toml")):
 		return "Enclave build manifest"
+
+	// The cases above are the SGX/Gramine/Nitro formats, which is everything
+	// tee-audit's manifest_parsers.py knew about — it has no notion of OP-TEE
+	// or TF-M. Those two platforms are 36 of the benchmark's 44 datasets, so
+	// their declaration formats belong here too. This corpus ships partial
+	// checkouts containing none of them, so these arms are unexercised by it;
+	// they matter when fingerprinting a whole OP-TEE or TF-M tree, which is
+	// what PR-04's Architecture Agent reads.
+	case base == "user_ta_header_defines.h":
+		// OP-TEE's TA manifest in all but name: declares the TA UUID, flags,
+		// stack and heap sizes and properties. The closest analogue OP-TEE
+		// has to an SGX enclave configuration.
+		return "OP-TEE TA manifest"
+	case base == "manifest.yaml", base == "tfm_manifest_list.yaml",
+		strings.HasSuffix(base, "_manifest.yaml"):
+		// TF-M secure-partition manifests, declaring the partition's
+		// services, IRQs and priorities across the trust boundary.
+		return "TF-M secure partition manifest"
 	}
 	return ""
 }
