@@ -100,6 +100,9 @@ TEECheck 已有更强的对应实现（`expert`/`challenger`/`verifier`/`arbiter
 
 | 内容 | 许可 |
 |---|---|
-| `tee-audit/` | MIT（本文件记录，`LICENSE` 保留） |
-| `teecheck-benchmark/datasets/` 中的 OP-TEE OS 源码切片 | BSD-2-Clause |
-| TEECheck 根仓库 | 待确定 |
+| TEECheck 根仓库 | **Apache-2.0**（见根目录 `LICENSE`、`NOTICE`） |
+| `tee-audit/` | MIT（本文件记录，`tee-audit/LICENSE` 保留） |
+| `teecheck-benchmark/datasets/` 中的上游源码切片 | 各自上游许可（OP-TEE OS 为 BSD-2-Clause），见各 `case.yaml` |
+
+MIT 与 BSD-2-Clause 均可并入 Apache-2.0 项目，反向不可。根目录 `NOTICE` 汇总全部
+第三方来源。
