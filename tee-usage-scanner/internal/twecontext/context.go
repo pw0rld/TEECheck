@@ -197,15 +197,27 @@ func (c *Catalog) All() []Playbook {
 }
 
 func clonePlaybook(p Playbook) Playbook {
-	p.AttackerCapabilities = append([]string(nil), p.AttackerCapabilities...)
-	p.LookFor = append([]string(nil), p.LookFor...)
-	p.InvestigationSteps = append([]string(nil), p.InvestigationSteps...)
-	p.RequiredEvidence = append([]string(nil), p.RequiredEvidence...)
-	p.CommonDefenses = append([]string(nil), p.CommonDefenses...)
-	p.CommonFalsePositives = append([]string(nil), p.CommonFalsePositives...)
-	p.RelatedTWEs = append([]string(nil), p.RelatedTWEs...)
-	p.TrustIRHints = append([]string(nil), p.TrustIRHints...)
+	p.AttackerCapabilities = cloneStrings(p.AttackerCapabilities)
+	p.LookFor = cloneStrings(p.LookFor)
+	p.InvestigationSteps = cloneStrings(p.InvestigationSteps)
+	p.RequiredEvidence = cloneStrings(p.RequiredEvidence)
+	p.CommonDefenses = cloneStrings(p.CommonDefenses)
+	p.CommonFalsePositives = cloneStrings(p.CommonFalsePositives)
+	p.RelatedTWEs = cloneStrings(p.RelatedTWEs)
+	p.TrustIRHints = cloneStrings(p.TrustIRHints)
 	return p
+}
+
+// cloneStrings copies s into an independent slice. Unlike
+// append([]string(nil), s...), it preserves a non-nil-but-empty s as
+// non-nil: RelatedTWEs is schema-optional but, when present, must marshal
+// as `[]`, not `null` — twe-playbook.v1.json requires the key but not a
+// minimum length, and json.Marshal renders a nil slice as `null`, which
+// fails the schema's "type": "array" check.
+func cloneStrings(s []string) []string {
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
 }
 
 func (c *Catalog) Compile() Compiled {
