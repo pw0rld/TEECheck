@@ -24,7 +24,10 @@ func compileTWEKnowledge(knowledgeRoot, runDir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	compiled := catalog.Compile()
+	compiled, err := catalog.Compile()
+	if err != nil {
+		return false, err
+	}
 	if err := runfs.WriteText(runfs.TWEAgentContextPath(runDir), compiled.Text); err != nil {
 		return false, fmt.Errorf("write agent context: %w", err)
 	}

@@ -1,6 +1,10 @@
 // Package twecontext loads experience-oriented TWE playbooks and compiles the
 // complete catalog into compact prior knowledge shared by security agents.
 // It intentionally does not perform retrieval or project-based selection.
+// Compile enforces a per-playbook token ceiling as a compile-time hard
+// failure (§11.1, §20.4) — the catalog cost is multiplied across every
+// injection point, so a playbook that has grown too large must block the
+// run, not silently shrink into a truncated context.
 package twecontext
 
 import (
@@ -23,6 +27,33 @@ import (
 const SchemaVersion = "teecheck.twe_playbook.v1"
 
 var tweIDPattern = regexp.MustCompile(`^TWE-[A-Z0-9-]+$`)
+
+// maxPlaybookContextTokens is the compile-time hard limit on a single
+// playbook's compact context block (§11.1, §20.4 of the merge design). 16
+// playbooks land in 6 agent injection points (Planner, Architecture,
+// Invariant, Expert, Challenger, Verifier), so a single playbook growing is a
+// 6x cost multiplier before a second playbook is even added — this bound
+// exists to catch that growth at compile time, as a hard failure, rather than
+// let Compile silently truncate the offending playbook or let the multiplied
+// cost show up later as a token bill.
+//
+// Measured: knowledge/twe/playbooks/rollback.yml — the only playbook shipped
+// so far, and the only one required to cover two distinct attack shapes
+// instead of one (§8.9, §20.2) — compiles to ~720 tokens (2877 chars at the
+// ~4-chars-per-token estimate below). 900 leaves ~25% headroom for a
+// legitimately more detailed playbook while still failing closed on anything
+// that has drifted into prose.
+const maxPlaybookContextTokens = 900
+
+// estimateTokens approximates an LLM token count from raw text without a
+// tokenizer dependency. ~4 characters per token is the standard
+// order-of-magnitude heuristic for English technical prose. Rounding up means
+// the budget check can only be stricter than a real tokenizer's count, never
+// looser — the ceiling must never pass something a real tokenizer would
+// reject.
+func estimateTokens(s string) int {
+	return (len(s) + 3) / 4
+}
 
 // Playbook is prior audit knowledge for reasoning agents. Unlike the legacy
 // executable TWE Entry, it expresses a weakness scenario and an investigation
@@ -50,9 +81,20 @@ type Catalog struct {
 
 // Compiled is the exact context injected into agents and its reproducibility
 // metadata. All playbooks are included; no project profile filters this set.
+//
+// ContextTokenEstimate is the whole-catalog counterpart of the per-playbook
+// ceiling Compile enforces (§11.1's "context_token_estimate" field, §9.4). It
+// is deliberately not part of Manifest: the frozen
+// schemas/twe-knowledge-manifest.v1.json (PR-01) has additionalProperties:
+// false and does not declare this property, so writing it into the persisted
+// manifest would produce an artifact the canonical schema rejects. It is
+// exposed here, at the Go level, for callers and tests that need the number
+// without persisting it in a way that breaks schema validation — see the
+// PR-02 report for the schema follow-up this implies.
 type Compiled struct {
-	Text     string
-	Manifest artifacts.TWEKnowledgeManifest
+	Text                 string
+	ContextTokenEstimate int
+	Manifest             artifacts.TWEKnowledgeManifest
 }
 
 func Load(dir string) (*Catalog, error) {
@@ -220,20 +262,24 @@ func cloneStrings(s []string) []string {
 	return out
 }
 
-func (c *Catalog) Compile() Compiled {
+const contextHeader = "TWE PRIOR KNOWLEDGE (complete catalog; apply every relevant playbook, do not treat it as a finding)\n"
+
+// Compile renders the full playbook catalog into one compact Agent context.
+// It fails, rather than truncating, if any single playbook's compact block
+// exceeds maxPlaybookContextTokens — see that constant's comment for why a
+// per-playbook ceiling exists and how it was chosen.
+func (c *Catalog) Compile() (Compiled, error) {
 	var out strings.Builder
-	out.WriteString("TWE PRIOR KNOWLEDGE (complete catalog; apply every relevant playbook, do not treat it as a finding)\n")
+	out.WriteString(contextHeader)
 	for _, p := range c.playbooks {
-		fmt.Fprintf(&out, "\n[%s] %s | family=%s\n", p.ID, p.Name, p.Family)
-		writeField(&out, "Scenario", []string{p.Scenario})
-		writeField(&out, "Attacker", p.AttackerCapabilities)
-		writeField(&out, "Look for", p.LookFor)
-		writeField(&out, "Investigate", p.InvestigationSteps)
-		writeField(&out, "Evidence required", p.RequiredEvidence)
-		writeField(&out, "Defenses", p.CommonDefenses)
-		writeField(&out, "False positives", p.CommonFalsePositives)
-		writeField(&out, "Related", p.RelatedTWEs)
-		writeField(&out, "Tool hints", p.TrustIRHints)
+		block := compilePlaybookBlock(p)
+		if tokens := estimateTokens(block); tokens > maxPlaybookContextTokens {
+			return Compiled{}, fmt.Errorf(
+				"%s: compact context is ~%d tokens (%d chars), which exceeds the %d-token compile-time ceiling (§11.1); shrink the playbook — TWEContextCompiler must fail closed here, not truncate",
+				p.ID, tokens, len(block), maxPlaybookContextTokens,
+			)
+		}
+		out.WriteString(block)
 	}
 	text := out.String()
 	ids := make([]string, 0, len(c.playbooks))
@@ -241,7 +287,8 @@ func (c *Catalog) Compile() Compiled {
 		ids = append(ids, p.ID)
 	}
 	return Compiled{
-		Text: text,
+		Text:                 text,
+		ContextTokenEstimate: estimateTokens(text),
 		Manifest: artifacts.TWEKnowledgeManifest{
 			SchemaVersion:  "teecheck.twe_knowledge_manifest.v1",
 			CatalogVersion: SchemaVersion,
@@ -249,7 +296,26 @@ func (c *Catalog) Compile() Compiled {
 			ContextSHA256:  digest([]byte(text)),
 			TWEIDs:         ids,
 		},
-	}
+	}, nil
+}
+
+// compilePlaybookBlock renders one playbook's compact context block. Compile
+// measures and appends these one at a time — rather than assembling the whole
+// document and measuring the total — so the ceiling attributes cleanly to the
+// one playbook that is too large instead of to "the catalog" in aggregate.
+func compilePlaybookBlock(p Playbook) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[%s] %s | family=%s\n", p.ID, p.Name, p.Family)
+	writeField(&b, "Scenario", []string{p.Scenario})
+	writeField(&b, "Attacker", p.AttackerCapabilities)
+	writeField(&b, "Look for", p.LookFor)
+	writeField(&b, "Investigate", p.InvestigationSteps)
+	writeField(&b, "Evidence required", p.RequiredEvidence)
+	writeField(&b, "Defenses", p.CommonDefenses)
+	writeField(&b, "False positives", p.CommonFalsePositives)
+	writeField(&b, "Related", p.RelatedTWEs)
+	writeField(&b, "Tool hints", p.TrustIRHints)
+	return b.String()
 }
 
 func writeField(out *strings.Builder, label string, values []string) {

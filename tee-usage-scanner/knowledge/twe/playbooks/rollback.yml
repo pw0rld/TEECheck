@@ -22,6 +22,7 @@ look_for:
   - sealed_or_signed_state_kept_in_untrusted_storage
   - counters_epochs_versions_heights_and_revocation_state
   - propagation_of_freshness_fields_to_rollback_guards
+  - version_or_epoch_fields_that_are_declared_but_never_assigned_before_a_guard_reads_them
   - security_decisions_reached_from_restored_or_loaded_state
 
 investigation_steps:
@@ -32,13 +33,15 @@ investigation_steps:
   - trace_version_epoch_or_counter_fields_to_the_runtime_object
   - locate_rollback_checks_and_external_freshness_anchors
   - test_whether_state_and_its_freshness_value_can_be_rolled_back_together
+  - verify_the_guards_input_is_actually_written_by_the_load_or_provisioning_path_and_not_left_at_a_default
   - trace_accepted_stale_state_to_an_authority_or_security_effect
   - construct_an_evidence_anchored_attack_sequence
 
 required_evidence:
   - attacker_selectable_historical_state_or_artifact
   - reachable_restore_or_load_path
-  - missing_replayable_or_unpropagated_freshness_anchor
+  - freshness_anchor_is_itself_replayable_alongside_the_state
+  - freshness_value_is_never_propagated_from_load_or_provisioning_into_the_guards_input
   - security_relevant_effect_after_stale_state_is_accepted
 
 common_defenses:
@@ -56,6 +59,7 @@ common_false_positives:
   - a_non_replayable_anchor_is_checked_before_any_security_effect
   - a_downstream_independent_system_rejects_the_stale_state
   - the_version_is_propagated_and_the_rollback_database_fails_closed
+  - the_guards_input_is_confirmed_written_from_a_live_source_on_every_call_path_to_it
 
 related_twes:
   - TWE-STATE-REPLAY
