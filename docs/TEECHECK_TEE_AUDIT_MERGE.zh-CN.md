@@ -275,7 +275,7 @@ Fingerprint -> Architecture Dossier -> Security Invariants -> Analysis Matrix
 ### 5.1 推荐结构
 
 ```yaml
-id: TWE-STATE-ROLLBACK
+id: TWE-STATE-001
 name: Trusted State Rollback
 family: State
 
@@ -334,6 +334,10 @@ tool_hints:
   - trace_restore_to_authority
   - find_freshness_guards
 ```
+
+ID 方案沿用 tee-audit 的编号（`TWE-<FAMILY>-<NNN>`）。这不是偏好问题——其 CodeQL
+查询图纸在 `@id` 与 `@tags` 中引用这些编号 **207 次、覆盖 60 份查询**，是 PR-05 的
+直接工作面。可读式 id（如 `TWE-STATE-ROLLBACK`）已废弃。
 
 ### 5.2 TWE 中不应包含的内容
 
@@ -409,7 +413,7 @@ fetch_*.ql 全量抽取 functions/calls/params/field_reads
 ```json
 {
   "tool": "trustir_facts",
-  "twe_id": "TWE-STATE-ROLLBACK",
+  "twe_id": "TWE-STATE-001",
   "repo_commit": "...",
   "roles": {
     "restore_operation": {
@@ -687,7 +691,7 @@ fixed：     版本被传播到 rollback checking。
   "schema_version": "teecheck.project_invariant.v1",
   "invariant_id": "INV-STATE-001",
   "statement": "Restored WalletState must be checked against a non-replayable freshness anchor before SignTransaction",
-  "related_twes": ["TWE-STATE-ROLLBACK"],
+  "related_twes": ["TWE-STATE-001"],
   "parties": [],
   "assets": [],
   "boundaries": [],
@@ -723,7 +727,7 @@ fixed：     版本被传播到 rollback checking。
 {
   "schema_version": "teecheck.twe_investigation.v1",
   "investigation_id": "...",
-  "twe_ids": ["TWE-STATE-ROLLBACK"],
+  "twe_ids": ["TWE-STATE-001"],
   "invariant_ids": ["INV-STATE-001"],
   "architecture_refs": [],
   "classification": "standard|variant|composition|catalog_gap",
@@ -749,7 +753,7 @@ fixed：     版本被传播到 rollback checking。
 {
   "schema_version": "teecheck.finding.v3",
   "finding_id": "...",
-  "related_twes": ["TWE-STATE-ROLLBACK"],
+  "related_twes": ["TWE-STATE-001"],
   "related_invariants": ["INV-STATE-001"],
   "architecture_refs": [],
   "classification": "standard|variant|composition|catalog_gap",
