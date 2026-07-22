@@ -1196,12 +1196,21 @@ Web3 role signal 在 C/TEE OS 目标下命中率低，保留检测器但不作�
 - vendor/generated/test scope 必须显式标记（复用 §20.1 搬入的 `exclusion.yml`）。
 - 所有信号都要有文件位置或 manifest ref。
 
-### 验收
+### 验收（实测结果已回填）
 
-- 在 benchmark 的 OP-TEE / TF-M / OpenEnclave fixture 上能产生平台、artifact 和 manifest 信号。
-- 每个信号可追溯到 detector 和文件位置。
-- ProjectProfile v1 consumers 不崩溃。
-- Fingerprint 不调用 LLM。
+- **平台信号**：OP-TEE 25/27、TF-M 8/9、Open Enclave 4/4、SGX 1/1、SEV-SNP 1/1；Rust 对照组 0 误报。达标。
+  - 3 处未命中（CVE-2016-6129、CVE-2026-40257、CVE-2023-40271）都是只含 vendored 平台无关加密代码的单文件切片，文件里没有任何 TEE 记号——语料覆盖问题，非探测器缺陷。
+  - `platform:optee` 在一个标为 Open Enclave 的数据集（CVE-2020-15107）上命中，已核实为**真阳性**：该数据集的 `enclave/core/CMakeLists.txt` 确实列有 `optee/*.c` 源码组，Open Enclave 本就支持 OP-TEE 后端，是 `case.yaml` 的单一平台标签表达不了。
+- **artifact 信号**：OP-TEE 16/27、TF-M 3/9、Open Enclave 3/4。部分达标。
+- **manifest 信号**：OP-TEE 0/27、TF-M 0/9、Open Enclave 1/4。**本语料无法达标**——数据集是部分 checkout，全库只有 2 个 `.edl` 和 4 个 `.mk`，不含任何 `.edl` 之外的清单文件。探测器已支持 OP-TEE/TF-M 清单格式（`user_ta_header_defines.h`、TF-M partition manifest），由单元测试而非语料测试守护。
+- 每个信号可追溯到 detector 和文件位置。达标。
+- ProjectProfile v1 consumers 不崩溃。达标。
+- Fingerprint 不调用 LLM。达标。
+
+**对 PR-04 的后果**：§7.3 把 manifests 列为 Architecture Agent 的输入之一，但在本 benchmark 上
+36/44 的案例拿不到任何 manifest 信号。因此 PR-04 的 Architecture Agent **不得把 manifest 缺失
+当作架构事实**（例如推断「没有声明的信任边界」），必须走 `CoverageWarnings`。真实完整仓库上
+该输入是有的，只有这个评测语料没有。
 
 ## 22. PR-04：Architecture Agent 与 Invariant Agent
 
