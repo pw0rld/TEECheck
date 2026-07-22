@@ -40,7 +40,7 @@ func Run(cfg config.Config) error {
 	if err := runfs.WriteJSON(runfs.ProjectProfilePath(cfg.RunDir), profile); err != nil {
 		return fmt.Errorf("write project profile: %w", err)
 	}
-	profileV2, err := buildProfileV2(manifest, profile)
+	profileV2, err := buildProfileV2(manifest, profile, cfg.KnowledgeRoot)
 	if err != nil {
 		return fmt.Errorf("build project profile v2: %w", err)
 	}
