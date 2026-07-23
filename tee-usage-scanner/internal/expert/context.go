@@ -54,8 +54,7 @@ func loadCaseContext(runDir string, pack artifacts.CasePack) caseContext {
 		ctx.archModel = &sliced
 	}
 
-	var allInvariants []artifacts.ProjectInvariant
-	if err := runfs.ReadJSON(runfs.ProjectInvariantsPath(runDir), &allInvariants); err == nil {
+	if allInvariants, err := runfs.ReadProjectInvariants(runDir); err == nil {
 		ctx.invariants = sliceInvariants(allInvariants, pack.RelatedInvariants)
 	}
 

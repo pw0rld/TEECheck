@@ -108,8 +108,12 @@ func TestVerifierRun_NeverWritesProjectInvariantsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	invs := []artifacts.ProjectInvariant{
-		{InvariantID: "inv-1", Statement: "version must propagate", Status: "proposed", RelatedTWEs: []string{"TWE-01"}, VerificationPlan: []string{"grep for version check"}},
+	invs := artifacts.ProjectInvariants{
+		SchemaVersion: "teecheck.project_invariants.v1",
+		RunID:         "run-1",
+		Invariants: []artifacts.ProjectInvariant{
+			{InvariantID: "inv-1", Statement: "version must propagate", Status: "proposed", RelatedTWEs: []string{"TWE-01"}, VerificationPlan: []string{"grep for version check"}},
+		},
 	}
 	invPath := runfs.ProjectInvariantsPath(runDir)
 	if err := runfs.WriteJSON(invPath, invs); err != nil {
