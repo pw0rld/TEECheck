@@ -21,6 +21,15 @@ type PlannerState struct {
 	Rounds     []artifacts.RoundRecord  `json:"rounds"`
 	Candidates []artifacts.Candidate    `json:"candidates"`
 	SinksSeen  []artifacts.SinkHitGroup `json:"sinks_seen,omitempty"`
+
+	// Investigations holds every TWEInvestigation the Planner has built so
+	// far this run (§7.5, §9.5). Each entry already carries its own
+	// filled/missing roles, outstanding required evidence, counterevidence,
+	// and coverage gaps — see artifacts.TWEInvestigation — so this single
+	// field is what BuildRoundPrompt's "ACTIVE TWE INVESTIGATIONS" section
+	// renders and what the main loop appends to as the LLM's `done` payload
+	// declares new or updated investigations across passes.
+	Investigations []artifacts.TWEInvestigation `json:"investigations,omitempty"`
 }
 
 // NewState returns an empty PlannerState bound to a run id.
@@ -67,6 +76,15 @@ func (s *PlannerState) AppendRoundAndPersist(r artifacts.RoundRecord, logPath st
 // responsible for de-duplication by ID if needed.
 func (s *PlannerState) AddCandidates(cands []artifacts.Candidate) {
 	s.Candidates = append(s.Candidates, cands...)
+}
+
+// AddInvestigations appends new TWEInvestigations to the state. Caller is
+// responsible for de-duplication by InvestigationID if needed — Build's
+// deterministic ID means re-adding the same investigation content produces
+// the same ID, so a caller that wants "latest wins" semantics should
+// dedupe by ID before calling this, mirroring AddCandidates' contract.
+func (s *PlannerState) AddInvestigations(invs []artifacts.TWEInvestigation) {
+	s.Investigations = append(s.Investigations, invs...)
 }
 
 // LastRoundsForPrompt returns up to n most recent rounds for prompt
