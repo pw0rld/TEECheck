@@ -14,6 +14,21 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/tools"
 )
 
+// Run drives the two-phase Challenger (§7.7, §25) for every case pack
+// in the run:
+//
+//	Phase 1 (independent): builds a ChallengerIndependentView from
+//	ONLY the CasePack + its loaded caseContext (TWE knowledge,
+//	Architecture slice, Invariants, ToolFacts) — the Expert's
+//	Hypothesis is not read until AFTER phase 1 is persisted. This
+//	ordering is deliberate, not incidental: hypothesisPath is not even
+//	computed until after independentView has been written to disk, so
+//	a future edit that tried to "peek ahead" would have to add a new
+//	read, not just reorder two already-present statements.
+//
+//	Phase 2 (comparative): reads the Hypothesis, computes
+//	KeyDifferences against the phase-1 view, and produces the final
+//	Challenge.
 func Run(cfg config.Config) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
@@ -36,6 +51,25 @@ func Run(cfg config.Config) error {
 		if err := runfs.ReadJSON(casePath, &pack); err != nil {
 			return fmt.Errorf("read case pack %s: %w", casePath, err)
 		}
+
+		// ── Phase 1: independent judgment, no Hypothesis in scope. ──
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+		var independentView artifacts.ChallengerIndependentView
+		if strings.EqualFold(cfg.ChallengeMode, "llm") {
+			independentView, err = buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+			if err != nil {
+				fmt.Printf("challenger: phase-1 llm failed for %s (%v); falling back to heuristic independent view\n", pack.CaseID, err)
+				independentView = buildIndependentViewHeuristic(pack, cfg.AgentID)
+			}
+		} else {
+			independentView = buildIndependentViewHeuristic(pack, cfg.AgentID)
+		}
+		independentPath := filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("independent-%03d.json", idx+1))
+		if err := runfs.WriteJSON(independentPath, independentView); err != nil {
+			return fmt.Errorf("write independent view %s: %w", independentView.CaseID, err)
+		}
+
+		// ── Phase 2: now read the Expert hypothesis and diff. ──
 		var hypothesis artifacts.Hypothesis
 		hypothesisPath := filepath.Join(runfs.ExpertDir(cfg.RunDir), fmt.Sprintf("hypothesis-%03d.json", idx+1))
 		if err := runfs.ReadJSON(hypothesisPath, &hypothesis); err != nil {
@@ -44,18 +78,19 @@ func Run(cfg config.Config) error {
 
 		var challenge artifacts.Challenge
 		if strings.EqualFold(cfg.ChallengeMode, "llm") {
-			challenge, err = buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, cfg.AgentID, cfg.LLMTemp)
+			challenge, err = buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
 			if err != nil {
 				// A single malformed LLM response (truncated or fenced JSON)
 				// must not abort the whole run. Degrade to the deterministic
 				// heuristic challenge so the pipeline still produces a
 				// challenge artifact for this case.
-				fmt.Printf("challenger: llm failed for %s (%v); falling back to heuristic challenge\n", pack.CaseID, err)
-				challenge = buildChallengeHeuristic(pack, hypothesis, cfg.AgentID)
+				fmt.Printf("challenger: phase-2 llm failed for %s (%v); falling back to heuristic challenge\n", pack.CaseID, err)
+				challenge = buildChallengeHeuristic(pack, hypothesis, independentView, cfg.AgentID)
 			}
 		} else {
-			challenge = buildChallengeHeuristic(pack, hypothesis, cfg.AgentID)
+			challenge = buildChallengeHeuristic(pack, hypothesis, independentView, cfg.AgentID)
 		}
+		challenge.IndependentViewPath = independentPath
 
 		target := filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("challenge-%03d.json", idx+1))
 		if err := runfs.WriteJSON(target, challenge); err != nil {
@@ -67,7 +102,7 @@ func Run(cfg config.Config) error {
 	return nil
 }
 
-func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, agentID string, temperature float64) (artifacts.Challenge, error) {
+func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, independent artifacts.ChallengerIndependentView, agentID string, temperature float64) (artifacts.Challenge, error) {
 	searchTerms := append([]string{}, hypothesis.MissingObligations...)
 	searchTerms = append(searchTerms, "caller", "bind", "verify", "authorize", "wrapper")
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)
@@ -75,7 +110,13 @@ func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools
 		return artifacts.Challenge{}, err
 	}
 
-	system := "You are the Challenger Agent in TEECheck. Challenge the expert's conclusion and reason like an attacker and skeptic. Return exactly one JSON object."
+	// Phase 2 (§7.7): the Challenger already formed an independent
+	// judgment in phase 1, before ever seeing this hypothesis. The
+	// prompt below is framed as a COMPARISON against that prior
+	// judgment, not as "challenge the expert's conclusion" from the
+	// first token — the self-confirmation failure mode §25 exists to
+	// fix.
+	system := `You are the Challenger Agent in TEECheck, now in phase 2 of a two-phase review (§7.7, §25). You already formed an independent judgment in phase 1 WITHOUT seeing the Expert's hypothesis (reproduced below as "Your phase-1 independent view"). Now compare that independent view against the Expert's hypothesis and report where they genuinely differ — do not simply restate agreement with the Expert. Reason like an attacker and skeptic. Return exactly one JSON object.`
 	user := fmt.Sprintf(`Return a JSON object with fields:
 - exploit_narrative
 - counter_arguments (array of strings)
@@ -83,6 +124,7 @@ func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools
 - suggested_checks (array of strings)
 - exploitability (string)
 - reviewer_stance (string)
+- key_differences (array of strings — where your phase-1 independent view and the Expert hypothesis actually disagree)
 
 Case:
 - case_id: %s
@@ -90,6 +132,13 @@ Case:
 - target_files: %s
 - target_symbols: %s
 - open_questions: %s
+
+Your phase-1 independent view (formed WITHOUT the Expert hypothesis):
+- issue_present: %v
+- reasoning: %s
+- defenses_considered: %s
+- counter_examples: %s
+- confidence: %s
 
 Expert hypothesis:
 - title: %s
@@ -107,7 +156,10 @@ Tool hits:
 
 Snippets:
 %s
-`, pack.CaseID, pack.Category, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.OpenQuestions, " | "), hypothesis.Title, hypothesis.Summary, hypothesis.SuspectedIssue, strings.Join(hypothesis.MissingObligations, ", "), strings.Join(hypothesis.SupportingFacts, " | "), hypothesis.Confidence, formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
+`, pack.CaseID, pack.Category, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.OpenQuestions, " | "),
+		independent.IssuePresent, independent.Reasoning, strings.Join(independent.DefensesConsidered, " | "), strings.Join(independent.CounterExamples, " | "), independent.Confidence,
+		hypothesis.Title, hypothesis.Summary, hypothesis.SuspectedIssue, strings.Join(hypothesis.MissingObligations, ", "), strings.Join(hypothesis.SupportingFacts, " | "), hypothesis.Confidence,
+		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
 
 	resp, err := client.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: system,
@@ -128,30 +180,44 @@ Snippets:
 		SuggestedChecks    []string `json:"suggested_checks"`
 		Exploitability     string   `json:"exploitability"`
 		ReviewerStance     string   `json:"reviewer_stance"`
+		KeyDifferences     []string `json:"key_differences"`
 	}
 	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
 		return artifacts.Challenge{}, fmt.Errorf("parse challenger json: %w | raw=%s", err, truncate(resp.Text, 400))
 	}
 
+	keyDiffs := uniq(parsed.KeyDifferences)
+	if len(keyDiffs) == 0 {
+		// The LLM may ignore the new field; fall back to the
+		// deterministic comparison so KeyDifferences is never
+		// silently empty just because the model skipped it.
+		keyDiffs = computeKeyDifferences(hypothesis, independent)
+	}
+
 	return artifacts.Challenge{
-		SchemaVersion:      "teecheck.challenge.v1",
-		CaseID:             pack.CaseID,
-		AgentID:            agentID,
-		ExploitNarrative:   firstNonEmpty(parsed.ExploitNarrative, fmt.Sprintf("If the suspected %s gap is real, an attacker may abuse %s.", pack.Category, primaryLabel(pack))),
-		CounterArguments:   uniq(parsed.CounterArguments),
-		RemainingQuestions: uniq(append(parsed.RemainingQuestions, pack.OpenQuestions...)),
-		SuggestedChecks:    uniq(append(parsed.SuggestedChecks, flattenToolHits(toolHits)...)),
-		Exploitability:     normalizeExploitability(parsed.Exploitability, hypothesis.Confidence),
-		ReviewerStance:     firstNonEmpty(parsed.ReviewerStance, "challenge_required"),
+		SchemaVersion:           "teecheck.challenge.v1",
+		CaseID:                  pack.CaseID,
+		AgentID:                 agentID,
+		ExploitNarrative:        firstNonEmpty(parsed.ExploitNarrative, fmt.Sprintf("If the suspected %s gap is real, an attacker may abuse %s.", pack.Category, primaryLabel(pack))),
+		CounterArguments:        uniq(parsed.CounterArguments),
+		RemainingQuestions:      uniq(append(parsed.RemainingQuestions, pack.OpenQuestions...)),
+		SuggestedChecks:         uniq(append(parsed.SuggestedChecks, flattenToolHits(toolHits)...)),
+		Exploitability:          normalizeExploitability(parsed.Exploitability, hypothesis.Confidence),
+		ReviewerStance:          firstNonEmpty(parsed.ReviewerStance, "challenge_required"),
+		IndependentIssuePresent: independent.IssuePresent,
+		KeyDifferences:          keyDiffs,
 	}, nil
 }
 
-func buildChallengeHeuristic(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, agentID string) artifacts.Challenge {
+func buildChallengeHeuristic(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, independent artifacts.ChallengerIndependentView, agentID string) artifacts.Challenge {
 	counterArgs := []string{
 		"The current case may omit helper or wrapper context that completes validation.",
 	}
 	if len(pack.KnowledgeHints) == 0 {
 		counterArgs = append(counterArgs, "No matching knowledge pages were found, which lowers confidence in pattern matching.")
+	}
+	if !independent.IssuePresent {
+		counterArgs = append(counterArgs, "Independent phase-1 review (formed without the Expert hypothesis) found no supporting issue signal: "+independent.Reasoning)
 	}
 	remaining := append([]string{}, pack.OpenQuestions...)
 	if len(remaining) == 0 {
@@ -161,22 +227,27 @@ func buildChallengeHeuristic(pack artifacts.CasePack, hypothesis artifacts.Hypot
 		"Search surrounding wrappers for caller binding or validation helpers.",
 		"Confirm whether failure paths actually stop execution.",
 	}
+	checks = append(checks, independent.CounterExamples...)
 	exploitability := "theoretical"
 	reviewerStance := "challenge_required"
-	if hypothesis.Confidence == "high" {
+	if hypothesis.Confidence == "high" && independent.IssuePresent {
 		exploitability = "likely"
 		reviewerStance = "pressure_test"
+	} else if !independent.IssuePresent {
+		exploitability = "unlikely"
 	}
 	return artifacts.Challenge{
-		SchemaVersion:      "teecheck.challenge.v1",
-		CaseID:             pack.CaseID,
-		AgentID:            agentID,
-		ExploitNarrative:   fmt.Sprintf("If the suspected %s gap is real, an attacker may cross the boundary through %s without the expected safeguards.", pack.Category, primaryLabel(pack)),
-		CounterArguments:   counterArgs,
-		RemainingQuestions: remaining,
-		SuggestedChecks:    checks,
-		Exploitability:     exploitability,
-		ReviewerStance:     reviewerStance,
+		SchemaVersion:           "teecheck.challenge.v1",
+		CaseID:                  pack.CaseID,
+		AgentID:                 agentID,
+		ExploitNarrative:        fmt.Sprintf("If the suspected %s gap is real, an attacker may cross the boundary through %s without the expected safeguards.", pack.Category, primaryLabel(pack)),
+		CounterArguments:        uniq(counterArgs),
+		RemainingQuestions:      uniq(remaining),
+		SuggestedChecks:         uniq(checks),
+		Exploitability:          exploitability,
+		ReviewerStance:          reviewerStance,
+		IndependentIssuePresent: independent.IssuePresent,
+		KeyDifferences:          computeKeyDifferences(hypothesis, independent),
 	}
 }
 
