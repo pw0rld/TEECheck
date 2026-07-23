@@ -160,6 +160,45 @@ type CasePack struct {
 	ExpectedObligations []string        `json:"expected_obligations,omitempty"`
 	OpenQuestions       []string        `json:"open_questions,omitempty"`
 	KnowledgeHints      []KnowledgeHint `json:"knowledge_hints,omitempty"`
+
+	// The fields below are additive (PR-06, §24 "Case Pack 修改") — a Case
+	// Pack produced from a TWEInvestigation carries the relevant slice of
+	// project-understanding and TWE prior knowledge that motivated it,
+	// rather than requiring Expert/Challenger to re-derive it. There is no
+	// JSON schema for CasePack (unlike ArchitectureModel/ProjectInvariant/
+	// ToolFact/TWEInvestigation), so these are plain additive Go fields.
+
+	// RelatedTWEs mirrors TWEInvestigation.TWEIDs — the playbook(s) whose
+	// scenario motivated this case.
+	RelatedTWEs []string `json:"related_twes,omitempty"`
+	// RelatedInvariants mirrors TWEInvestigation.InvariantIDs — the
+	// project-specific obligations this case is evidence for or against.
+	RelatedInvariants []string `json:"related_invariants,omitempty"`
+	// ArchitectureRefs are stable IDs into the run's ArchitectureModel
+	// (§11.3: the full model is persisted once; a Case Pack carries only
+	// the relevant slice by reference, not a copy of the model).
+	ArchitectureRefs []string `json:"architecture_refs,omitempty"`
+	// ToolFactRefs are artifact paths to the ToolFacts (§9.6) this case's
+	// evidence was built from. Distinct from the legacy free-text
+	// ToolFacts field above — these are resolvable references, not prose.
+	ToolFactRefs []string `json:"tool_fact_refs,omitempty"`
+	// RequiredEvidence is the playbook's outstanding evidence checklist
+	// for this investigation (mirrors TWEInvestigation.RequiredEvidence) —
+	// what Expert/Challenger/Verifier still need to obtain or rule out.
+	RequiredEvidence []string `json:"required_evidence,omitempty"`
+	// MissingLinks names the specific roles or evidence items the
+	// Investigator could not yet locate — the "next task", not a
+	// vulnerability or safety conclusion (§7.5).
+	MissingLinks []string `json:"missing_links,omitempty"`
+	// CommonDefenses and CommonFalsePositives are copied from the matched
+	// TWE playbook(s) so downstream agents check them without re-reading
+	// the full TWE catalog.
+	CommonDefenses       []string `json:"common_defenses,omitempty"`
+	CommonFalsePositives []string `json:"common_false_positives,omitempty"`
+	// CoverageGaps mirrors TWEInvestigation.CoverageGaps — known,
+	// disclosed limitations of this case's evidence, so a downstream
+	// agent (or human reviewer) never mistakes silence for completeness.
+	CoverageGaps []string `json:"coverage_gaps,omitempty"`
 }
 
 type Hypothesis struct {
