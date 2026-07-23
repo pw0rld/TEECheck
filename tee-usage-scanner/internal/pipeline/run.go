@@ -329,8 +329,7 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &archModel); err == nil {
 		archPtr = &archModel
 	}
-	var invs []artifacts.ProjectInvariant
-	_ = runfs.ReadJSON(runfs.ProjectInvariantsPath(runDir), &invs)
+	invs, _ := runfs.ReadProjectInvariants(runDir)
 	tweText, _ := os.ReadFile(runfs.TWEAgentContextPath(runDir))
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())

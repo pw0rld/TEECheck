@@ -41,6 +41,85 @@ Finding + 人工复核 ───── SARIF / Review / Benchmark 门禁
 
 **状态**：前四段（Fingerprint / Architecture / Invariant / Planner+事实层）已接入主编排并跑通；多 Agent 复核层已实现；输出层（Finding/SARIF）未接，端到端真跑待建库阶段。
 
+### 2.1 单次审计运行流程
+
+```text
+TWE taxonomy / 经验 playbook                 目标 TEE 仓库
+        │                                         │
+        ▼                                         ▼
+编译为本次运行的前置知识                 Fingerprint 确定性扫描
+        │                                平台 / manifest / trust artifact
+        │                                         │
+        └──────────────────┬──────────────────────┘
+                           ▼
+                ProjectProfile（项目画像）
+                           │
+                           ▼
+                Architecture（参与方、组件、
+                  数据流与信任边界）
+                           │
+                           ▼
+                ProjectInvariant（结合 TWE
+                   生成项目安全不变量）
+                           │
+                           ▼
+                  Planner 拆分调查任务
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+       源码探索与路径追踪         TrustIR / CodeQL 事实查询
+                                        │
+                                        ▼
+                              ToolFact（位置、路径、状态）
+              └────────────┬────────────┘
+                           ▼
+                       Case Pack
+                           │
+                           ▼
+       Expert → Challenger Phase 1 → Challenger Phase 2
+                           │
+                           ▼
+                       Verifier
+                           │
+                           ▼
+                        Arbiter
+                           │
+                           ▼
+                 当前：Findings v2
+                           │
+                           ▼
+          待 PR-08：Finding v3 → SARIF → 人工复核
+                           │
+                           ▼
+          待 PR-09：vulnerable / fixed Benchmark 门禁
+```
+
+这条流程中，TWE 提供“应该检查什么以及如何检查”的前置经验，ProjectProfile、Architecture
+和 ProjectInvariant 将经验落到当前项目；ToolFact 只提供可复现的代码事实，最终安全语义由
+多 Agent 复核并交给人工裁决。
+
+### 2.2 每个阶段负责什么
+
+| 阶段 | 输入 | 主要职责 | 输出 |
+|---|---|---|---|
+| **TWE 前置知识** | TEE 漏洞经验、taxonomy 与 playbook | 描述漏洞场景、攻击者能力、调查步骤、必要证据、常见防御和误报；告诉系统“应该检查什么”，但不直接产生漏洞结论 | 本次运行共享的 TWE 上下文 |
+| **Fingerprint / ProjectProfile** | 目标仓库源码与配置文件 | 确定性扫描 TEE 平台、语言、framework、manifest、trust artifact 和边界信号，为后续推理提供可引用的项目画像 | `ProjectProfile` |
+| **Architecture** | ProjectProfile、TWE 上下文、目标源码 | 识别参与方、组件、角色、资产、入口点、数据流、状态生命周期和信任边界；无法被源码支持的陈述降级为假设或 unknown | `ArchitectureModel`、Architecture Dossier |
+| **ProjectInvariant** | ProjectProfile、Architecture、TWE 上下文 | 把通用漏洞经验实例化为当前项目应满足的安全条件，例如“恢复后的安全版本必须由不可回滚的可信来源约束” | `ProjectInvariant[]` |
+| **Planner** | TWE、Architecture、ProjectInvariant、项目画像 | 选择需要深入的代码路径，把宽泛的安全问题拆成可执行调查，并确定需要源码探索还是事实层查询 | `TWEInvestigation`、候选项与 Evidence Bundle |
+| **源码探索** | Planner 调查任务、目标源码 | 定位入口、调用者、状态读写、持久化与恢复路径，补充工具查询暂时无法表达的业务上下文 | 带源码引用的调查证据 |
+| **TrustIR / CodeQL 事实层** | 事实查询请求、CodeQL DB、事实表 | 提取实体、数据传播、guard、调用路径及代码位置；工具失败、覆盖不完整和 unsupported 均显式保留，不能解释成“没有漏洞” | 不可改写的 `ToolFact` |
+| **Case Pack** | 调查结果、相关架构切片、不变量与 ToolFact 引用 | 把一个候选问题收敛成有边界的复核单元，避免后续 Agent 重新读取无关的全仓库上下文 | `CasePack` |
+| **Expert** | Case Pack、TWE、Architecture、Invariant、ToolFact | 根据现有证据提出漏洞假设，说明攻击前提、攻击步骤、安全影响与缺失证据 | `Hypothesis` |
+| **Challenger Phase 1** | 与 Expert 相同的基础上下文，但不读取 Expert 结论 | 先独立分析当前 Case，形成自己的判断，降低直接被 Expert 结论锚定的风险 | Independent View |
+| **Challenger Phase 2** | Independent View 与 Expert Hypothesis | 对比双方判断，寻找反例、已有防御、不可达路径、错误假设和证据缺口 | `Challenge` |
+| **Verifier** | Hypothesis、Challenge、源码与 ToolFact | 把争议转换成具体工具问题，重新校验引用、路径、guard 和攻击链，并区分“未找到”与“能够证明不存在” | `VerificationMemo`、追加式 Invariant 状态更新 |
+| **Arbiter** | Expert、Challenger、Verifier 结果及原始证据 | 综合各方结果，但不改写 ToolFact；只有证据完整、路径可达且安全影响成立时才能输出 confirmed | 当前为 `Findings v2` |
+| **Finding / 人工复核** | Arbiter 输出、代码证据与复核记录 | 由人决定最终真伪、严重度、披露和修复状态；人工结论追加记录，不覆盖原始工具事实和 Agent 判断 | 待 PR-08 接入的 `Finding v3`、SARIF、`HumanVerdict` |
+| **Benchmark 门禁** | vulnerable/fixed 样本、对照组与最终 Finding | 检查漏洞版本能否命中、修复版本是否干净，并统计对照组误报，防止系统只会套用 TWE 模板 | 待 PR-09 接入的 differential 与 FP 门禁结果 |
+
+上述阶段遵守同一条证据边界：**TWE 提供检查方法，ToolFact 提供代码事实，Agent 负责安全语义判断，HumanVerdict 才是最终人工结论。**
+
 ---
 
 ## 3. 三层结论必须分离（核心纪律）

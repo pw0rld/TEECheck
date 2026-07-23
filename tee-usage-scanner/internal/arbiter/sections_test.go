@@ -92,7 +92,11 @@ func TestArbiterRun_NeverRewritesToolFactOrInvariants(t *testing.T) {
 	}
 	beforeFactHash := hashArbiterFile(t, factPath)
 
-	invs := []artifacts.ProjectInvariant{{InvariantID: "inv-1", Statement: "s", Status: "proposed"}}
+	invs := artifacts.ProjectInvariants{
+		SchemaVersion: "teecheck.project_invariants.v1",
+		RunID:         "run-1",
+		Invariants:    []artifacts.ProjectInvariant{{InvariantID: "inv-1", Statement: "s", Status: "proposed"}},
+	}
 	invPath := runfs.ProjectInvariantsPath(runDir)
 	if err := runfs.WriteJSON(invPath, invs); err != nil {
 		t.Fatal(err)

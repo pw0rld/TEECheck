@@ -77,8 +77,12 @@ func TestLoadCaseContext_ReadsAllFourEvidenceSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	invs := []artifacts.ProjectInvariant{
-		{InvariantID: "inv-1", Statement: "version must propagate", Status: "proposed"},
+	invs := artifacts.ProjectInvariants{
+		SchemaVersion: "teecheck.project_invariants.v1",
+		RunID:         "run-1",
+		Invariants: []artifacts.ProjectInvariant{
+			{InvariantID: "inv-1", Statement: "version must propagate", Status: "proposed"},
+		},
 	}
 	if err := runfs.WriteJSON(runfs.ProjectInvariantsPath(runDir), invs); err != nil {
 		t.Fatal(err)
