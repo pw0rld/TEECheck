@@ -393,6 +393,8 @@ fetch_*.ql 全量抽取 functions/calls/params/field_reads
 
 采用 tee-audit 的 `annotate → facts → fixed-queries` 架构，**替换** TEECheck 现有 `internal/codeql/querygen.go` 的「Go 模板拼出整条 `.ql`」路线。
 
+这里的「替换」是**路线选择**——事实表路线胜过模板路线，作为主路径的 CodeQL 语义；不是一次主路径改写操作（`querygen.go` 本就在旁路 twescan，不在主路径，见 §23.1 勘误）。
+
 依据：`SealedStateRestoreWithoutVersion.ql` 的语义几乎全部由 `GeneratedTrustFacts::isClaimField / isAuthorityPoint / hasSuppressor` 构成，语言相关的只有 `import rust` 与 `DataFlow::Node` 两行。语言耦合被压缩进 `common/*.qll`（527行）与 clause 生成器。
 
 - 现路线新增一门语言的成本 = O(查询数)；
@@ -1018,7 +1020,7 @@ TEECheck/
 │   │   ├── invariants/             # 新增（PR-04）
 │   │   ├── twecontext/             # 已存在，待提交
 │   │   ├── investigations/         # 新增（PR-06）
-│   │   ├── trustirfacts/           # 新增（PR-05），取代 codeql/querygen.go
+│   │   ├── trustirfacts/           # 新增（PR-05）：C 事实层，接进主路径
 │   │   ├── planner/
 │   │   └── ...
 │   ├── codeql/
@@ -1270,17 +1272,37 @@ tee-audit 的 `stages/dossier.py`(97行) 与 `stages/invariants.py`(77行) 是 A
 
 ### 23.1 范围
 
-新建 C 语言的 CodeQL 事实层，并替换 `internal/codeql/querygen.go`。这不是对既有能力的封装——tee-audit 无 C 支持（§4.2），且其形态是批处理而非 operation 接口（§6.1）。
+新建 C 语言的 CodeQL 事实层，并把它**接进主路径**。
 
-### 23.2 为什么必须在本 PR 内替换 querygen.go
+**（勘误）** 摸底后修正原计划的一处失实：`internal/codeql/querygen.go` 并**不在主路径**上。
+调用链是 `querygen.go → internal/twepipeline → cmd/twescan`——一条独立的旁路实验命令
+（rust/binding/config）。主路径 `teecheck run`（preprocessor → cases → expert → challenger →
+verifier → arbiter）根本不 import `internal/codeql`。因此：
 
-`annotate → facts` 与「Go 模板拼整条 `.ql`」对「语言逻辑放在哪里」的答案互斥。并存会导致 PR-05～PR-09 期间维护两套 CodeQL 语义。原计划把该替换放在 PR-10，过晚。
+- PR-05 的真实工作是给主路径**新建**一条到事实层的集成，不是「替换」主路径里的现有件——主路径当前完全没有 CodeQL。
+- `querygen.go`/`twepipeline`/`twescan` 作为旧旁路，其退役是 §28 已列的 PR-10 清理项，PR-05 **不碰**它们。
+- 原验收「querygen 已从主路径移除」测不到东西（它从未进过主路径），删除。「无两套 CodeQL 语义并存」修正为「**主路径只有事实层一套语义**」——旁路 twescan 的旧语义与主路径不在同一条路径，不冲突，PR-10 退役。
+
+### 23.2 首个切片：确定性骨架优先
+
+事实层分两端：**消费端**（事实表 → 薄壳查询 → ToolFact）与**标注端**（LLM 对真实代码提出
+role 标注 → resolver 校验 → 生成事实表）。C-fact-table spike（§23.7）已验证消费端在 C 上成立，
+但标注端未验证，是最不确定的部分。
+
+因此首个切片只做**确定性骨架**，标注端推迟：
+
+- cpp 事实层查询包（rollback/STATE 一族，从 spike 查询包 `c-fact-table-spike-pack/` 起步）；
+- `internal/trustirfacts` Go 包：DB 按 commit 构建、执行、ToolFact 持久化、error/unresolved/unsupported 映射、接进主路径的入口；
+- 事实表先用**确定性方式**填充（如 spike 手工填、或从确定性 fingerprint 派生），**不含 LLM 标注**；
+- 目标：先把确定性链路接通并在 CVE-2026-44362 上跑出 vuln/fixed differential，再在骨架之上加 LLM 标注（§23.3 的标注抽取移到骨架跑通之后）。
+
+这符合垂直切片优先：先接通确定的部分并过 benchmark，把不确定的标注质量隔离到下一步。
 
 ### 23.3 交付内容
 
-新增 `internal/trustirfacts/`：
+新增 `internal/trustirfacts/`（标注抽取端属**骨架跑通之后**，见 §23.2；首个切片只做以下确定性部分）：
 
-- 标注抽取：LLM 对候选符号提出 role 标注，role 取值受 §20.1 搬入的 `enum_registry.yml` 约束；
+- ~~标注抽取：LLM 对候选符号提出 role 标注~~ → 推迟。首片事实表用确定性方式填充，role 取值仍受 §20.1 搬入的 `enum_registry.yml` 约束；
 - resolver：把标注的名字解析到真实符号，未解析的标记 unresolved；
 - 事实生成：输出 `GeneratedTrustFacts.qll`；
 - 通过现有 `internal/codeql/` engine 执行；
@@ -1371,7 +1393,7 @@ CVE-2016-6129 不再映射到任何 TWE——这就是 `codeql/queries-cpp/guard
 - accepted entity 来自权威枚举，不是模型臆测。
 - CodeQL build failure、DB 构建失败、超时映射为 unresolved，不映射为「无问题」。
 - 同一 commit 的 DB 只构建一次，路径在 run 目录中可见。
-- `querygen.go` 已从主路径移除，无两套 CodeQL 语义并存。
+- 主路径只有事实层一套 CodeQL 语义（querygen 在旁路 twescan，PR-10 退役，不在主路径）。
 - role 枚举与 `enum_registry.yml` 一致性有测试保证。
 
 ## 24. PR-06：Rollback Investigation 与 Planner 集成
@@ -1539,7 +1561,7 @@ vulnerable finding present；fixed finding absent/satisfied/guarded；location m
 **已前移，不在此列**：
 
 - tee-audit 七阶段 orchestrator 与 report/report_review/deep_verify → PR-00 资产三分的 C 类；
-- `querygen.go` 旧 CodeQL 生成路径 → PR-05 内替换。
+- `querygen.go` 旧 CodeQL 生成路径在旁路 twescan，非主路径 → 随 twepipeline/twescan 在 PR-10 退役。
 
 所有删除都必须有：调用方清单；artifact 迁移说明；benchmark 等价或改进证据；明确弃用期。
 
@@ -1597,7 +1619,7 @@ PR-09 达到 benchmark 门禁后：
 - [ ] ProjectProfile v2 能输出平台、artifacts 和 manifests。
 - [ ] Architecture Model 的 observed facts 全部通过 citation 校验器，负例 fixture 全部被拒。
 - [ ] Project Invariant 能追溯到 TWE 和 architecture refs。
-- [ ] TrustIR-C 事实层可运行，输出不可变 ToolFact；`querygen.go` 已从主路径移除。
+- [ ] TrustIR-C 事实层可运行，输出不可变 ToolFact，接进主路径（querygen 旁路留待 PR-10）。
 - [ ] Planner 能根据 rollback TWE/Invariant 找到目标流程。
 - [ ] Challenger 第一阶段不读取 Expert 结论（并已记录其独立性限制）。
 - [ ] Verifier 能执行定向事实层 check。
@@ -1614,7 +1636,7 @@ PR-09 达到 benchmark 门禁后：
 3. PR-02：**16 个 TWE 定义与词表一次搬齐** + rollback playbook + TWEContext + token 预算。
 4. PR-03：完成 ProjectProfile v2。
 5. PR-04：生成 rollback Architecture/Invariant + citation 校验器。
-6. **PR-05：先做 §23.7 可行性验证，通过后再实现 TrustIR-C 事实层并替换 `querygen.go`。**
+6. **PR-05：§23.7 可行性验证已通过；实现确定性骨架（cpp 事实层 + trustirfacts）并接进主路径，LLM 标注推迟（§23.2）。**
 7. PR-06：接通 Planner 和 Case Pack。
 8. PR-07：接通独立 Challenger 和 Verifier。
 9. PR-08：接通 Finding、SARIF、review 和 stats。
