@@ -702,9 +702,16 @@ fixed：     版本被传播到 rollback checking。
   "architecture_refs": [],
   "verification_plan": [],
   "unresolved_assumptions": [],
-  "status": "proposed"
+  "status": "proposed",
+  "classification": "standard"
 }
 ```
+
+`classification`（可选，enum 与 §9.5 TWEInvestigation 对齐：`standard|variant|composition|catalog_gap`）
+是 catalog gap 的一等信号：当某项义务不属于任何现有 TWE 时，Invariant Agent 设
+`classification: catalog_gap`，下游据此识别，而不是解析 `related_twes` 里的 sentinel。
+`related_twes` 仍保留 `minItems:1`（catalog gap 时填 sentinel `TWE-CATALOG-GAP`），因此
+两处都指向同一事实，但**权威信号是 `classification`**。
 
 ### 9.4 TWEKnowledgeManifest
 

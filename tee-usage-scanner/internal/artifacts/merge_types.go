@@ -166,22 +166,26 @@ type ArchitectureModel struct {
 // empty-but-present `[]` is a distinct, valid state from the key being
 // absent.
 type ProjectInvariant struct {
-	SchemaVersion         string              `json:"schema_version"`
-	InvariantID           string              `json:"invariant_id"`
-	Statement             string              `json:"statement"`
-	RelatedTWEs           []string            `json:"related_twes"`
-	Parties               []string            `json:"parties,omitempty"`
-	Assets                []string            `json:"assets,omitempty"`
-	Boundaries            []string            `json:"boundaries,omitempty"`
-	Entrypoints           []string            `json:"entrypoints,omitempty"`
-	AuthorityPoints       []string            `json:"authority_points,omitempty"`
-	RequiredProperties    []string            `json:"required_properties,omitempty"`
-	ExpectedDefenses      []string            `json:"expected_defenses,omitempty"`
-	ArchitectureRefs      []string            `json:"architecture_refs,omitempty"`
-	VerificationPlan      []string            `json:"verification_plan"`
-	UnresolvedAssumptions []string            `json:"unresolved_assumptions,omitempty"`
-	Status                string              `json:"status"`
-	Evidence              []EvidenceReference `json:"evidence,omitempty"`
+	SchemaVersion         string   `json:"schema_version"`
+	InvariantID           string   `json:"invariant_id"`
+	Statement             string   `json:"statement"`
+	RelatedTWEs           []string `json:"related_twes"`
+	Parties               []string `json:"parties,omitempty"`
+	Assets                []string `json:"assets,omitempty"`
+	Boundaries            []string `json:"boundaries,omitempty"`
+	Entrypoints           []string `json:"entrypoints,omitempty"`
+	AuthorityPoints       []string `json:"authority_points,omitempty"`
+	RequiredProperties    []string `json:"required_properties,omitempty"`
+	ExpectedDefenses      []string `json:"expected_defenses,omitempty"`
+	ArchitectureRefs      []string `json:"architecture_refs,omitempty"`
+	VerificationPlan      []string `json:"verification_plan"`
+	UnresolvedAssumptions []string `json:"unresolved_assumptions,omitempty"`
+	Status                string   `json:"status"`
+	// Classification mirrors TWEInvestigation.Classification. catalog_gap
+	// marks an obligation no existing TWE covers — a first-class signal so
+	// downstream keys off this rather than parsing the related_twes sentinel.
+	Classification string              `json:"classification,omitempty"`
+	Evidence       []EvidenceReference `json:"evidence,omitempty"`
 }
 
 // ProjectInvariants is the persisted collection produced once per run.

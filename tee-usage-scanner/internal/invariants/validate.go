@@ -45,16 +45,18 @@ func EnforceProposedStatus(inv artifacts.ProjectInvariant) (artifacts.ProjectInv
 	return inv, adj
 }
 
-// ApplyCatalogGap inserts CatalogGapTWEID as the sole related_twes entry
-// when the model left related_twes empty (schema-illegal on its own —
-// related_twes has minItems: 1), and records an unresolved_assumptions
-// entry explaining why. An invariant that already names a real TWE is
-// untouched.
+// ApplyCatalogGap marks an invariant whose related_twes the model left empty
+// as a catalog gap: it sets Classification to "catalog_gap" (the first-class
+// signal downstream keys off), fills related_twes with CatalogGapTWEID (still
+// required — the schema keeps minItems: 1), and records an
+// unresolved_assumptions entry explaining why. An invariant that already
+// names a real TWE is untouched.
 func ApplyCatalogGap(inv artifacts.ProjectInvariant) (artifacts.ProjectInvariant, *Adjustment) {
 	if len(inv.RelatedTWEs) > 0 {
 		return inv, nil
 	}
-	reason := "no existing TWE playbook covers this obligation (catalog gap); related_twes set to the sentinel " + CatalogGapTWEID
+	reason := "no existing TWE playbook covers this obligation (catalog gap); classification set to catalog_gap and related_twes to the sentinel " + CatalogGapTWEID
+	inv.Classification = "catalog_gap"
 	inv.RelatedTWEs = []string{CatalogGapTWEID}
 	inv.UnresolvedAssumptions = append(inv.UnresolvedAssumptions, "catalog_gap: "+reason)
 	return inv, &Adjustment{InvariantID: inv.InvariantID, Kind: "catalog_gap", Reason: reason}

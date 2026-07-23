@@ -9,6 +9,7 @@
     "invariant_id": {"type": "string", "minLength": 1},
     "statement": {"type": "string", "minLength": 1},
     "related_twes": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "classification": {"enum": ["standard", "variant", "composition", "catalog_gap"]},
     "parties": {"$ref": "#/$defs/strings"},
     "assets": {"$ref": "#/$defs/strings"},
     "boundaries": {"$ref": "#/$defs/strings"},

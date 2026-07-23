@@ -42,6 +42,9 @@ func TestEnforceProposedStatus_AlreadyProposedNoAdjustment(t *testing.T) {
 func TestApplyCatalogGap_EmptyRelatedTWEsGetsSentinel(t *testing.T) {
 	inv := artifacts.ProjectInvariant{InvariantID: "INV-1", RelatedTWEs: nil}
 	got, adj := ApplyCatalogGap(inv)
+	if got.Classification != "catalog_gap" {
+		t.Fatalf("classification = %q, want catalog_gap (the first-class signal)", got.Classification)
+	}
 	if len(got.RelatedTWEs) != 1 || got.RelatedTWEs[0] != CatalogGapTWEID {
 		t.Fatalf("related_twes = %v, want [%s]", got.RelatedTWEs, CatalogGapTWEID)
 	}
@@ -64,6 +67,9 @@ func TestApplyCatalogGap_RealTWEsUntouched(t *testing.T) {
 	got, adj := ApplyCatalogGap(inv)
 	if len(got.RelatedTWEs) != 1 || got.RelatedTWEs[0] != "TWE-STATE-001" {
 		t.Fatalf("related_twes changed: %v", got.RelatedTWEs)
+	}
+	if got.Classification == "catalog_gap" {
+		t.Errorf("an invariant naming a real TWE was marked catalog_gap")
 	}
 	if adj != nil {
 		t.Errorf("no-op case recorded an adjustment: %+v", adj)

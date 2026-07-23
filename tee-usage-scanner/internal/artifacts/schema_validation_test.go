@@ -96,6 +96,19 @@ func TestSchemaProjectInvariantV1(t *testing.T) {
 		t.Fatalf("valid ProjectInvariant rejected: %v", err)
 	}
 
+	// classification is optional and additive: absent validates (the base
+	// `data` above omits it), and catalog_gap validates when present.
+	withClass := invariant
+	withClass.Classification = "catalog_gap"
+	if err := schema.Validate(schema.ProjectInvariantV1, marshalJSON(t, withClass)); err != nil {
+		t.Fatalf("ProjectInvariant with classification=catalog_gap rejected: %v", err)
+	}
+	badClass := invariant
+	badClass.Classification = "made_up_class"
+	if err := schema.Validate(schema.ProjectInvariantV1, marshalJSON(t, badClass)); err == nil {
+		t.Fatal("expected an out-of-enum classification to be rejected")
+	}
+
 	if err := schema.Validate(schema.ProjectInvariantV1, withoutField(t, data, "statement")); err == nil {
 		t.Fatal("expected missing statement to be rejected")
 	}
