@@ -874,7 +874,7 @@ teecheck run <repo> \
 
 | 风险 | 后果 | 缓解措施 |
 |---|---|---|
-| **C 事实层从零构建失败** | PR-06 之后全部无法验收 | 部分已退休：C 数据库构建与端到端 differential 已由 C-feasibility spike 验证（§23.7）。剩余风险收窄为「事实表架构能否在 C 上成立」，仍需 §23.7 的前置验证；独立排期 |
+| **C 事实层从零构建失败** | PR-06 之后全部无法验收 | 大部分已退休：C 数据库构建（C-feasibility spike）与**事实表架构 differential**（C-fact-table spike，2026-07-23）均已在 CVE-2026-44362 上验证通过。剩余风险收窄为「LLM 标注+resolver 管线的质量」与「六族的 cpp 移植」，这是 PR-05 的实现工作而非可行性未知项；独立排期 |
 | **`--build-mode=none` 不做真实编译** | 宏/`#ifdef` 走源码默认值，config 门控的弱点可能测不出 | spike 已记录该限制。TF-M 的 profile 宏类案例需真实构建才有保真度——PR-09 对照组中此类案例单独标注，不计入通过 |
 | **内核级仓库的克隆与抽取成本** | 跑多案例时不可接受 | DB 按 commit 构建一次并落为显式 artifact（§23.3）；PR-09 对照组按体量分批 |
 | TWE 过于抽象 | Agent 无法转成代码调查 | 每条 TWE 提供明确 steps、evidence、defenses |
@@ -1330,13 +1330,20 @@ tee-audit 的 `stages/dossier.py`(97行) 与 `stages/invariants.py`(77行) 是 A
 
 `case.yaml` 已经带 `repository` + `vulnerable_revision` + `fixed_revision`，构建所需输入齐备。
 
-仍然开放、本 PR 必须验证的部分——spike 用的是**手写的单条自定义查询**，不是事实表架构，
-且目标是 libtomcrypt 而非 OP-TEE：
+**事实表架构的验证已完成**（2026-07-23，结论 PASS，见
+`tee-usage-scanner/docs/design/C-fact-table-spike.md` 与其查询包
+`c-fact-table-spike-pack/`）：
 
-- 在 CVE-2026-44362 的 vulnerable revision 上，手写一份最小 `GeneratedTrustFacts.qll`（不经 LLM，人工填事实），验证**薄壳查询消费事实表**这一形态能否在 C 上追出 `subkey_version -> key->version -> check_update_version`；
-- 该验证通过前，不投入 7 族查询的完整移植。
+- 在 CVE-2026-44362 上手写了一份 cpp `GeneratedTrustFacts.qll`（不经 LLM，只记录实体身份：`shdr_load_pub_key` 是 producer、`version` 是 rollback 字段、`check_update_version` 是 authority），薄壳查询做纯结构判定（producer 是否真的写了该字段）。
+- vulnerable DB → **命中** `shdr_load_pub_key`（version 未传播）；fixed DB → **空**。事实表两版一字未改，differential 完全由代码结构决定。反向 sanity 查询确认两个 DB 是镜像。
+- 即：**「C 上能不能用 CodeQL」和「C 上能不能用事实表架构」都已结案。**
 
-即：**「C 上能不能用 CodeQL」已结案，「C 上能不能用事实表架构」仍待验证。**
+仍未覆盖、属于 PR-05 正式工作的部分：
+
+- 事实表是**手工填的**；从真实 TrustIR 生成这些子句的 LLM 标注 + resolver 管线尚未构建。本 spike 只证明了**消费端**（薄壳 + C 结构/数据流）成立，不涉及标注质量。
+- 只验了 **STATE/rollback 一族一例**；其余六族的 cpp 薄壳与 `common/*.qll` 移植未验。
+- 本例用**结构判据**（producer 是否写字段）即可判定；真正需要跨函数 C 数据流的族（FLOW、LEAK）可能撞上 `--build-mode=none` 的宏/`#ifdef` 限制。
+- DB 每版 313 MiB，内核级案例更大——§23.3 的按 commit 缓存是硬要求。
 
 ### 23.8 spike 与本计划的分歧
 
