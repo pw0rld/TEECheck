@@ -13,6 +13,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/investigations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
@@ -77,12 +78,48 @@ type RunConfig struct {
 	// executor fail explicitly when the field is missing rather
 	// than silently bypass policy and observability.
 	Executor executor.Executor
+
+	// TWEContext, Architecture, and Invariants are §7.5's prior-knowledge
+	// injection into the system prompt (see PriorKnowledge's doc comment).
+	// Each is independently optional; a caller that has not wired one up
+	// yet (e.g. internal/pipeline's legacy Rust-focused L3 run) gets that
+	// section omitted from the prompt rather than a build error.
+	TWEContext   string
+	Architecture *artifacts.ArchitectureModel
+	Invariants   []artifacts.ProjectInvariant
+
+	// TWEPlaybooks maps a TWE ID to the playbook-derived context a Case
+	// Pack built for that TWE should carry (§24 "Case Pack 修改": common
+	// defenses / common false positives). A TWE ID with no entry here
+	// still gets a Case Pack — just with those two fields empty.
+	TWEPlaybooks map[string]TWEPlaybookSummary
+}
+
+// TWEPlaybookSummary is the subset of a twecontext.Playbook a Case Pack
+// needs (§24). It is a plain-data mirror rather than an import of
+// internal/twecontext, so this package does not need to depend on playbook
+// YAML loading — the caller converts twecontext.Catalog.All() into this map
+// keyed by TWE ID.
+type TWEPlaybookSummary struct {
+	CommonDefenses       []string
+	CommonFalsePositives []string
 }
 
 // RunResult is the return value of Run. Bundle is always non-nil.
 type RunResult struct {
 	Bundle *artifacts.EvidenceBundle
 	Err    error
+
+	// Investigations and CasePacks are the §7.5/§24 output of any
+	// `investigations` entries the LLM's `done` payload declared: each
+	// raw entry was built (internal/investigations.Build), grounded
+	// against Architecture/Invariants/the repository
+	// (internal/investigations.Validate), persisted under
+	// runfs.InvestigationPath, and rendered into a bounded Case Pack
+	// (internal/investigations.BuildCasePack). Empty when the LLM
+	// declared none this run — that is a normal outcome, not an error.
+	Investigations []artifacts.TWEInvestigation
+	CasePacks      []artifacts.CasePack
 }
 
 // Run drives the L3 LLM planner loop until done, budget exhaustion,
@@ -132,7 +169,8 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	observedPaths := map[string]bool{}
 
 	obligations := LoadObligations(cfg.KnowledgeRoot)
-	systemPrompt := BuildSystemPrompt(cfg.Registry.Names(), obligations)
+	knowledge := PriorKnowledge{TWEText: cfg.TWEContext, Architecture: cfg.Architecture, Invariants: cfg.Invariants}
+	systemPrompt := BuildSystemPrompt(cfg.Registry.Names(), obligations, knowledge)
 	roundsLog := runfs.RoundsLogPath(cfg.RunDir)
 
 	var donePayload actions.DonePayload
@@ -308,13 +346,16 @@ loop:
 			}
 
 			result := cfg.Registry.Run(ctx, actions.ActionRequest{
-				Name:     act.Name,
-				Args:     act.Args,
-				RepoRoot: cfg.RepoRoot,
-				Executor: cfg.Executor,
-				RunID:    cfg.RunID,
-				Agent:    cfg.AgentID,
-				Round:    roundNum,
+				Name:       act.Name,
+				Args:       act.Args,
+				RepoRoot:   cfg.RepoRoot,
+				RunDir:     cfg.RunDir,
+				Repository: cfg.Profile.RepoURL,
+				Commit:     cfg.Profile.Commit,
+				Executor:   cfg.Executor,
+				RunID:      cfg.RunID,
+				Agent:      cfg.AgentID,
+				Round:      roundNum,
 			})
 			loopDet.Record(act.Name, argsStr)
 
@@ -396,7 +437,90 @@ loop:
 		fmt.Fprintf(os.Stdout, "[planner] evidence bundle written to %s\n", bundlePath)
 	}
 
-	return RunResult{Bundle: bundle, Err: runErr}
+	invs, packs, invErrors := processInvestigations(donePayload.Investigations, cfg, state)
+	if len(invErrors) > 0 {
+		bundle.Errors = append(bundle.Errors, invErrors...)
+	}
+
+	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: packs}
+}
+
+// processInvestigations converts the LLM's loosely-typed `done.investigations`
+// entries (§7.5, §9.5) into grounded, persisted artifacts.TWEInvestigation
+// and bounded artifacts.CasePack values. It never itself renders a
+// vulnerability verdict — Build/Validate/BuildCasePack (internal/
+// investigations) only classify, ground references, and bound the pack;
+// see that package's doc comment. Each successfully built investigation is
+// also appended to state.Investigations so a later planner pass in the same
+// audit session (see internal/pipeline's --samples loop) sees it via
+// BuildRoundPrompt's "ACTIVE TWE INVESTIGATIONS" section.
+func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerState) ([]artifacts.TWEInvestigation, []artifacts.CasePack, []artifacts.RoundError) {
+	if len(raw) == 0 {
+		return nil, nil, nil
+	}
+
+	var arch artifacts.ArchitectureModel
+	if cfg.Architecture != nil {
+		arch = *cfg.Architecture
+	}
+	validationIn := investigations.ValidationInput{
+		Architecture: arch,
+		Invariants:   cfg.Invariants,
+		RepoRoot:     cfg.RepoRoot,
+	}
+
+	var invs []artifacts.TWEInvestigation
+	var packs []artifacts.CasePack
+	var errs []artifacts.RoundError
+	for i, m := range raw {
+		data, err := json.Marshal(m)
+		if err != nil {
+			errs = append(errs, artifacts.RoundError{Round: -1, Action: fmt.Sprintf("done.investigations[%d]", i), Error: fmt.Sprintf("remarshal: %v", err)})
+			continue
+		}
+		var wire investigations.WireInvestigation
+		if err := json.Unmarshal(data, &wire); err != nil {
+			errs = append(errs, artifacts.RoundError{Round: -1, Action: fmt.Sprintf("done.investigations[%d]", i), Error: fmt.Sprintf("parse: %v", err)})
+			continue
+		}
+
+		inv := investigations.Build(wire)
+		inv, _ = investigations.Validate(inv, validationIn)
+
+		if cfg.RunDir != "" {
+			if _, err := investigations.Persist(cfg.RunDir, inv); err != nil {
+				errs = append(errs, artifacts.RoundError{Round: -1, Action: "investigations.Persist:" + inv.InvestigationID, Error: err.Error()})
+			}
+		}
+
+		invs = append(invs, inv)
+		if state != nil {
+			state.AddInvestigations([]artifacts.TWEInvestigation{inv})
+		}
+
+		playbook := cfg.TWEPlaybooks[firstOrEmpty(inv.TWEIDs)]
+		pack := investigations.BuildCasePack(inv, investigations.CasePackInput{
+			CaseID:               inv.InvestigationID,
+			Focus:                cfg.Profile.Focus,
+			CommonDefenses:       playbook.CommonDefenses,
+			CommonFalsePositives: playbook.CommonFalsePositives,
+		})
+		if cfg.RunDir != "" {
+			path := filepath.Join(runfs.CasePacksDir(cfg.RunDir), pack.CaseID+".json")
+			if err := runfs.WriteJSON(path, pack); err != nil {
+				errs = append(errs, artifacts.RoundError{Round: -1, Action: "case_pack.write:" + pack.CaseID, Error: err.Error()})
+			}
+		}
+		packs = append(packs, pack)
+	}
+	return invs, packs, errs
+}
+
+func firstOrEmpty(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func truncate(s string, max int) string {

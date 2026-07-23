@@ -25,6 +25,18 @@ type ActionRequest struct {
 	// injected by the planner, not supplied by the LLM.
 	RepoRoot string `json:"-"`
 
+	// RunDir is the absolute path to this run's artifact directory. Like
+	// RepoRoot, it is injected by the planner. Fact-layer actions need it
+	// to build (or reuse) the per-commit CodeQL database and persist the
+	// resulting ToolFact as an explicit run artifact (§23.3).
+	RunDir string `json:"-"`
+	// Repository and Commit identify the pinned (repo URL, commit) a
+	// fact-layer call runs against. Injected by the planner from the same
+	// project identity PromptProfile carries — never supplied by the LLM,
+	// which must not be trusted to name its own audit target.
+	Repository string `json:"-"`
+	Commit     string `json:"-"`
+
 	// Executor is the chokepoint for subprocess-class actions
 	// (ripgrep, semgrep, codeql, ...). It is non-nil for production
 	// callers; in-process actions (read_file, list_dir, ...) ignore
