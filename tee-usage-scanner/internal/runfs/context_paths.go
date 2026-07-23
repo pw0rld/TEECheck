@@ -53,6 +53,12 @@ func CallGraphToolFactsDir(runDir string) string {
 	return filepath.Join(ToolFactsDir(runDir), "callgraph")
 }
 
+// TrustIRToolFactPath is the persisted location of one TrustIR ToolFact,
+// named by its FactID. Mirrors InvestigationPath's runDir+id shape below.
+func TrustIRToolFactPath(runDir, factID string) string {
+	return filepath.Join(TrustIRToolFactsDir(runDir), factID+".json")
+}
+
 func InvestigationsDir(runDir string) string {
 	return filepath.Join(runDir, "03_investigations")
 }
