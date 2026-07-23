@@ -53,14 +53,22 @@ func RunWithEvents(cfg config.Config, rec events.Recorder, blobs *events.BlobSto
 			return fmt.Errorf("read case pack %s: %w", path, err)
 		}
 
+		// PR-07 (§7.6, §25): the Expert reads the same TWE prior
+		// knowledge, the case's Architecture slice and Project
+		// Invariants, and the referenced ToolFacts, in addition to
+		// the Case Pack it already consumed. loadCaseContext is
+		// read-only against ArchitectureModel/ProjectInvariants/
+		// ToolFacts — nothing here rewrites them (§3.5).
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+
 		var hypothesis artifacts.Hypothesis
 		if strings.EqualFold(cfg.ExpertMode, "llm") {
-			hypothesis, err = buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, cfg.AgentID, cfg.LLMTemp)
+			hypothesis, err = buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
 			if err != nil {
 				return fmt.Errorf("expert llm for %s: %w", pack.CaseID, err)
 			}
 		} else {
-			hypothesis = buildHypothesisHeuristic(pack, cfg.AgentID)
+			hypothesis = buildHypothesisHeuristic(pack, caseCtx, cfg.AgentID)
 		}
 
 		target := filepath.Join(runfs.ExpertDir(cfg.RunDir), fmt.Sprintf("hypothesis-%03d.json", idx+1))
@@ -98,25 +106,32 @@ func emitClaimEvents(rec events.Recorder, runID, agentID string, h artifacts.Hyp
 // (citations.ResolveFacts / citations.FlattenFacts) so the verifier
 // can use the same primitives without code duplication.
 
-func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, agentID string, temperature float64) (artifacts.Hypothesis, error) {
+func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.Hypothesis, error) {
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, append(pack.ExpectedObligations, pack.TargetSymbols...), 8)
 	if err != nil {
 		return artifacts.Hypothesis{}, err
 	}
 
-	system := `You are the Expert Agent in TEECheck. Analyze the bounded case pack and return exactly one JSON object.
+	system := `You are the Expert Agent in TEECheck. Analyze the bounded case pack — together with the TWE prior knowledge, Architecture slice, Project Invariants, and ToolFacts provided below — and return exactly one JSON object.
 
 Every claim you make about the code MUST be anchored to a specific
 range of source bytes. Use the cited_facts field for this — it is
 how downstream agents validate that your claims still hold against
 the live repo. Claims you cannot anchor are still allowed (use
 cited_facts with an empty cited list), but they will be treated as
-unverified by the verifier.`
+unverified by the verifier.
+
+ToolFacts are immutable evidence already produced by the fact layer.
+You may cite them by fact_id in your reasoning, but you MUST NOT
+restate a ToolFact as if it were your own new finding, and you must
+never claim to have changed one.`
 	user := fmt.Sprintf(`Return a JSON object with fields:
 - title
 - summary
 - suspected_issue
 - missing_obligations (array of strings)
+- attack_premises (array of strings — concrete preconditions the attack needs, distinct from missing_obligations)
+- classification ("standard"|"variant"|"composition"|"catalog_gap")
 - cited_facts (array of objects, see below)
 - confidence ("low"|"medium"|"high")
 - needs_verification (boolean)
@@ -165,6 +180,24 @@ Case:
 - graph_facts: %s
 - open_questions: %s
 
+- related_twes: %s
+- common_defenses: %s
+- common_false_positives: %s
+- missing_links: %s
+- coverage_gaps: %s
+
+TWE prior knowledge:
+%s
+
+Architecture slice (project-specific; from the Architecture Agent):
+%s
+
+Project Invariants relevant to this case:
+%s
+
+ToolFacts referenced by this case (immutable — cite by fact_id, do not restate as your own finding):
+%s
+
 Knowledge hints:
 %s
 
@@ -173,7 +206,10 @@ Tool hits:
 
 Snippets:
 %s
-`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "), formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
+`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
+		strings.Join(pack.RelatedTWEs, ", "), strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
+		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants), renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
+		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
 
 	resp, err := client.Generate(ctx, llm.GenerateRequest{
 		SystemPrompt: system,
@@ -192,14 +228,19 @@ Snippets:
 		Summary            string   `json:"summary"`
 		SuspectedIssue     string   `json:"suspected_issue"`
 		MissingObligations []string `json:"missing_obligations"`
+		// AttackPremises / Classification are additive (PR-07, §7.6):
+		// zero value ("" / nil) if the model ignores the new fields,
+		// which downstream code treats the same as "not classified".
+		AttackPremises []string `json:"attack_premises"`
+		Classification string   `json:"classification"`
 		// CitedFacts is the v1.1.1 canonical shape. SupportingFacts
 		// is accepted as a transitional fallback for prompt
 		// versions that don't ask for cited_facts (e.g. the
 		// heuristic path or a model that ignores instructions).
-		CitedFacts []citations.CitedFact `json:"cited_facts"`
-		SupportingFacts []string `json:"supporting_facts"`
-		Confidence         string   `json:"confidence"`
-		NeedsVerification  bool     `json:"needs_verification"`
+		CitedFacts      []citations.CitedFact `json:"cited_facts"`
+		SupportingFacts []string              `json:"supporting_facts"`
+		Confidence      string                `json:"confidence"`
+		NeedsVerification bool                `json:"needs_verification"`
 	}
 	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
 		return artifacts.Hypothesis{}, fmt.Errorf("parse expert json: %w | raw=%s", err, truncate(resp.Text, 400))
@@ -235,6 +276,8 @@ Snippets:
 		Summary:            firstNonEmpty(parsed.Summary, "The expert agent found a bounded concern that needs follow-up review."),
 		SuspectedIssue:     firstNonEmpty(parsed.SuspectedIssue, pack.Category+" obligations may be incompletely enforced."),
 		MissingObligations: uniq(parsed.MissingObligations),
+		AttackPremises:     uniq(parsed.AttackPremises),
+		Classification:     normalizeClassification(parsed.Classification),
 		SupportingFacts:    uniq(supportingFacts),
 		CitedFacts:         cleanedFacts,
 		UntypedFacts:       uniq(untyped),
@@ -245,7 +288,7 @@ Snippets:
 	}, nil
 }
 
-func buildHypothesisHeuristic(pack artifacts.CasePack, agentID string) artifacts.Hypothesis {
+func buildHypothesisHeuristic(pack artifacts.CasePack, caseCtx caseContext, agentID string) artifacts.Hypothesis {
 	title := fmt.Sprintf("Potential %s weakness in %s", pack.Category, primaryLabel(pack))
 	summary := fmt.Sprintf("The case suggests that %s may be incomplete around %s.", strings.Join(pack.ExpectedObligations, ", "), primaryLabel(pack))
 	suspectedIssue := fmt.Sprintf("%s obligations may be incompletely enforced before the sensitive path proceeds.", pack.Category)
@@ -269,6 +312,34 @@ func buildHypothesisHeuristic(pack artifacts.CasePack, agentID string) artifacts
 	if len(facts) == 0 {
 		facts = append(facts, pack.GraphFacts...)
 	}
+
+	// PR-07 (§7.6): attack premises name what else must hold for the
+	// hypothesis to matter, sourced from the case's own coverage gaps
+	// / missing links / unresolved invariant assumptions rather than
+	// invented — the heuristic path never fabricates evidence it does
+	// not have.
+	var premises []string
+	premises = append(premises, pack.MissingLinks...)
+	for _, inv := range caseCtx.invariants {
+		premises = append(premises, inv.UnresolvedAssumptions...)
+	}
+
+	// Classification defaults to "standard" when the case names at
+	// least one related TWE (the common case); a case with no related
+	// TWE but with an invariant classified catalog_gap propagates
+	// that; otherwise leave unclassified (heuristic mode does not
+	// guess between variant/composition without an LLM).
+	classification := ""
+	if len(pack.RelatedTWEs) > 0 {
+		classification = "standard"
+	}
+	for _, inv := range caseCtx.invariants {
+		if inv.Classification == "catalog_gap" {
+			classification = "catalog_gap"
+			break
+		}
+	}
+
 	return artifacts.Hypothesis{
 		SchemaVersion:      "teecheck.hypothesis.v1",
 		CaseID:             pack.CaseID,
@@ -277,10 +348,27 @@ func buildHypothesisHeuristic(pack artifacts.CasePack, agentID string) artifacts
 		Summary:            summary,
 		SuspectedIssue:     suspectedIssue,
 		MissingObligations: uniq(missing),
+		AttackPremises:     uniq(premises),
+		Classification:     classification,
 		SupportingFacts:    uniq(facts),
 		KnowledgeHints:     pack.KnowledgeHints,
 		Confidence:         confidence,
 		NeedsVerification:  needsVerification,
+	}
+}
+
+// normalizeClassification clamps an LLM-supplied classification to
+// the vocabulary shared with ProjectInvariant.Classification /
+// TWEInvestigation.Classification (schemas/project-invariant.v1.json).
+// Anything else is dropped rather than persisted verbatim, since a
+// downstream consumer that switches on this value must be able to
+// trust the enum.
+func normalizeClassification(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "standard", "variant", "composition", "catalog_gap":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
 	}
 }
 

@@ -167,7 +167,7 @@ func TestBuildHypothesisLLM_PopulatesCitedFactsAndFlattens(t *testing.T) {
 		TargetFiles:   []string{"src/auth.rs"},
 		TargetSymbols: []string{"check"},
 	}
-	h, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, "expert-001", 0)
+	h, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "expert-001", 0)
 	if err != nil {
 		t.Fatalf("buildHypothesisLLM: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestBuildHypothesisLLM_LegacySupportingFactsGoToUntypedFacts(t *testing.T) 
 	stub := &stubLLM{responseJSON: string(respBytes)}
 
 	pack := artifacts.CasePack{CaseID: "case-001"}
-	h, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, "expert-001", 0)
+	h, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "expert-001", 0)
 	if err != nil {
 		t.Fatalf("buildHypothesisLLM: %v", err)
 	}
