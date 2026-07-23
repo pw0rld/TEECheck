@@ -1,6 +1,10 @@
 package artifacts
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+)
 
 // Canonical schema_version values for the §9 contracts, matching the "const"
 // declared in each schemas/*.json file. schema_version is never inferred
@@ -43,6 +47,32 @@ type EvidenceReference struct {
 	ArtifactRef string `json:"artifact_ref,omitempty"`
 	Tool        string `json:"tool,omitempty"`
 	Note        string `json:"note,omitempty"`
+}
+
+// CitedBytes converts this EvidenceReference into the shape
+// internal/citations validates against (PR-04's bridge between the two
+// contracts — see internal/architecture's package doc for why this is a
+// pure, hash-free conversion rather than a stored-hash field on
+// EvidenceReference). citations.CitedBytes.Valid/Resolve then decide
+// whether it is actually checkable: File == "" (an artifact_ref-only
+// reference into a persisted tool result) or StartLine < 1 (evidence
+// naming a path but no line, e.g. "this manifest file exists") both
+// produce a CitedBytes that Valid() reports false for a byte-range
+// check — callers that want to accept path-only evidence must check
+// File/StartLine themselves before falling back to a plain file-exists
+// check; this method only handles the byte-range case.
+//
+// A citation with StartLine set but EndLine omitted (EndLine < StartLine,
+// including the zero value) is normalized to a single-line range: the JSON
+// contract asks for an inclusive start/end pair, but a citation naming one
+// line only should not be rejected purely for omitting a redundant
+// end_line.
+func (e EvidenceReference) CitedBytes() citations.CitedBytes {
+	end := e.EndLine
+	if end < e.StartLine {
+		end = e.StartLine
+	}
+	return citations.CitedBytes{File: e.File, StartLine: e.StartLine, EndLine: end}
 }
 
 // ProfileSignal is a deterministic fingerprint observation. Candidate role
