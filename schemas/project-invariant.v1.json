@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/project-invariant.v1.json",
+  "title": "TEECheck ProjectInvariant v1",
+  "type": "object",
+  "required": ["schema_version", "invariant_id", "statement", "related_twes", "verification_plan", "status"],
+  "properties": {
+    "schema_version": {"const": "teecheck.project_invariant.v1"},
+    "invariant_id": {"type": "string", "minLength": 1},
+    "statement": {"type": "string", "minLength": 1},
+    "related_twes": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "classification": {"enum": ["standard", "variant", "composition", "catalog_gap"]},
+    "parties": {"$ref": "#/$defs/strings"},
+    "assets": {"$ref": "#/$defs/strings"},
+    "boundaries": {"$ref": "#/$defs/strings"},
+    "entrypoints": {"$ref": "#/$defs/strings"},
+    "authority_points": {"$ref": "#/$defs/strings"},
+    "required_properties": {"$ref": "#/$defs/strings"},
+    "expected_defenses": {"$ref": "#/$defs/strings"},
+    "architecture_refs": {"$ref": "#/$defs/strings"},
+    "verification_plan": {"$ref": "#/$defs/strings"},
+    "unresolved_assumptions": {"$ref": "#/$defs/strings"},
+    "status": {"enum": ["proposed", "grounded", "satisfied", "violated_candidate", "unresolved", "not_applicable"]},
+    "evidence": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false,
+  "$defs": {"strings": {"type": "array", "items": {"type": "string"}}}
+}

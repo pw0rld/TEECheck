@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "repo": {
+    "name": "example-agent-registry",
+    "root": "/repo",
+    "commit": "unknown",
+    "languages": ["typescript"]
+  },
+  "candidate_id": "C-TWE-BIND-001-001",
+  "twe_id": "TWE-BIND-001",
+  "taxonomy_family": "Binding",
+  "tee_dimension": "incorrect_usage",
+  "trust_context": "agent_registration",
+  "evidence_spans": [
+    {
+      "id": "EV1",
+      "kind": "code",
+      "file": "src/register.ts",
+      "start_line": 21,
+      "end_line": 29,
+      "quote": "const receipt = await verifyReceipt(req.receipt); if (!receipt.valid) throw ...; registry.registerAgent(req.agentAddress);"
+    }
+  ],
+  "claim_producers": [
+    {
+      "id": "CP1",
+      "kind": "attestation_verifier",
+      "selector": {"language": "typescript", "file": "src/register.ts", "qualified_name": "verifyReceipt", "line": 21},
+      "output_object": "receipt",
+      "output_type": "AttestationReceipt",
+      "evidence_span_ids": ["EV1"]
+    }
+  ],
+  "claim_fields": [
+    {
+      "id": "CF1",
+      "producer_id": "CP1",
+      "selector": "receipt.publicKey",
+      "role": "attested_public_key",
+      "semantic_type": "public_key",
+      "security_state_after_producer": "authentic",
+      "evidence_span_ids": ["EV1"]
+    }
+  ],
+  "authority_points": [
+    {
+      "id": "AP1",
+      "kind": "registration_acceptance",
+      "selector": {"language": "typescript", "file": "src/register.ts", "qualified_name": "registry.registerAgent", "line": 29},
+      "authority_subject": {"selector": "req.agentAddress", "role": "registered_agent"},
+      "protected_asset": "trusted_agent_registry",
+      "evidence_span_ids": ["EV1"]
+    }
+  ],
+  "binding_relations": [],
+  "required_obligations": [
+    {
+      "id": "O1",
+      "twe_id": "TWE-BIND-001",
+      "family": "Binding",
+      "authority_point_id": "AP1",
+      "required_relation": {
+        "from_claim_field_id": "CF1",
+        "to_authority_subject": "AP1.authority_subject",
+        "accepted_relation_kinds": ["equal", "derived_equal", "hash_equal", "signature_covers", "registry_lookup_matches"]
+      },
+      "must_dominate": true
+    }
+  ],
+  "guards": [],
+  "flow_sources": [],
+  "flow_sinks": [],
+  "state_objects": [],
+  "config_sources": [],
+  "observable_sinks": [],
+  "suppressors": []
+}

@@ -1,0 +1,86 @@
+{
+  "schema_version": "teecheck.findings.v2",
+  "run_id": "oasis-full-001",
+  "findings": [
+    {
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:001",
+      "slice_id": "oasis-sdk@b559f59:tee:boundary:001",
+      "status": "needs_review",
+      "severity": "low",
+      "confidence": "medium",
+      "files": [
+        "tests/runtimes/components-rofl/src/main.rs"
+      ],
+      "summary": "Final judgment remains unchanged: the provided evidence does not establish a concrete boundary flaw in tests/runtimes/components-rofl/src/main.rs. The visible concern is limited to a test-scoped App implementation returning a fixed AppId, with no shown untrusted input handling, authorization logic, caller binding, attestation checks, or rejection behavior. This is insufficient to confirm a runtime-entry security issue, though a narrow framework-level review would still be appropriate to ensure AppId is not trusted as self-authenticating identity elsewhere.",
+      "evidence": [
+        "The target file is under tests/: tests/runtimes/components-rofl/src/main.rs, which strongly suggests fixture or integration-test context.",
+        "The described snippet only shows impl App for TestApp with fn id() -\u003e AppId returning a fixed/example identifier.",
+        "No boundary ingress, request handler, external input processing, authorization check, caller verification, or secure failure path is visible in the supplied material.",
+        "A fixed AppId accessor is not, by itself, evidence of a trust-boundary bypass; it may be declarative metadata required by the framework.",
+        "The expert hypothesis depends on assumptions about surrounding framework behavior that are not evidenced in this case record.",
+        "The challenger's position is better supported by the available facts: exploitability is theoretical and the snippet alone is incomplete.",
+        "Verification explicitly labeled the case inconclusive and noted no static analysis findings.",
+        "The follow-up queries could not be executed, so no additional framework evidence was obtained to elevate this beyond a review-needed concern."
+      ]
+    },
+    {
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:002",
+      "slice_id": "oasis-sdk@b559f59:tee:boundary:002",
+      "status": "no_issue_observed",
+      "severity": "low",
+      "confidence": "medium",
+      "files": [
+        "runtime-sdk-macros/src/error_derive.rs"
+      ],
+      "summary": "No direct boundary security issue is observable in `runtime-sdk-macros/src/error_derive.rs` from the available evidence. The file appears to be a compile-time procedural macro for error code generation, not a runtime ingress or TEE trust-boundary enforcement point. The original boundary concern seems more likely to be a scoping or tagging mismatch than a demonstrated vulnerability in this file.",
+      "evidence": [
+        "The reviewed file is `runtime-sdk-macros/src/error_derive.rs`, whose described contents match a procedural macro implementation using `darling`, `syn`, and `quote`.",
+        "The visible data model (`ident`, `data`, `module_name`) is consistent with parsing enum metadata for code generation rather than handling runtime requests.",
+        "No provided snippet shows caller identity extraction, authorization checks, trust-boundary revalidation, attestation, ingress decoding, or fail-closed dispatch logic.",
+        "Procedural macros execute at compile time; absent evidence that generated output introduces unsafe security behavior, this file is not itself a runtime-facing attack surface.",
+        "The expert hypothesis itself acknowledged uncertainty about whether surrounding context changes the trust boundary and whether this file is the true boundary implementation.",
+        "The challenger's position is better supported by the evidence: any security impact here is theoretical and indirect, not demonstrated."
+      ]
+    },
+    {
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:003",
+      "slice_id": "oasis-sdk@b559f59:tee:boundary:003",
+      "status": "needs_review",
+      "severity": "medium",
+      "confidence": "medium",
+      "files": [
+        "runtime-sdk-macros/src/generators.rs"
+      ],
+      "summary": "Final judgment remains inconclusive. The available evidence only shows utility-level macro support in `runtime-sdk-macros/src/generators.rs`, not a confirmed runtime ingress boundary. There is no direct evidence of missing trust-boundary revalidation, authorization, caller binding, or secure failure behavior at the actual entry path. This is best treated as a boundary-location uncertainty that merits manual follow-up rather than a confirmed issue.",
+      "evidence": [
+        "The case targets `runtime-sdk-macros/src/generators.rs`, but the supplied snippet only contains helper utilities such as `wrap_in_const` and the start of `sdk_crate_path()`.",
+        "`wrap_in_const` simply wraps generated tokens in an anonymous const block and does not itself implement or demonstrate boundary validation, authorization, caller binding, or fail-closed behavior.",
+        "No static tool hits were provided, and no target symbols were identified, limiting confidence that this file owns the runtime-facing boundary.",
+        "The verification record is explicitly inconclusive and states there is no direct evidence that `generators.rs` is where external input first crosses into trusted runtime execution.",
+        "The challenger's explanation is consistent with the observed code: utility macro support is not the same as the actual ingress boundary, and checks may be implemented in generated expansions or downstream runtime layers.",
+        "The follow-up queries could not be executed because the requested agents were unavailable, so the missing context about macro expansions and real boundary ownership remains unresolved."
+      ]
+    },
+    {
+      "finding_id": "oasis-sdk@b559f59:tee:boundary:004",
+      "slice_id": "oasis-sdk@b559f59:tee:boundary:004",
+      "status": "needs_review",
+      "severity": "medium",
+      "confidence": "medium",
+      "files": [
+        "runtime-sdk-macros/src/module_derive/module.rs"
+      ],
+      "summary": "No concrete vulnerability is established in runtime-sdk-macros/src/module_derive/module.rs from the available record. The file appears to be macro/code-generation scaffolding, and the evidence does not show that it is itself the runtime ingress trust boundary or that required protections are missing in generated code or surrounding framework logic. This remains a boundary-mapping uncertainty that warrants review, but not a confirmed or likely issue.",
+      "evidence": [
+        "The target file is runtime-sdk-macros/src/module_derive/module.rs.",
+        "Available evidence describes the file as part of a procedural macro/code-generation component rather than obvious direct runtime execution logic.",
+        "The provided snippet reportedly shows DeriveModule state and a preprocess skeleton only, without visible authentication, authorization, caller binding, trust-boundary revalidation, dispatch, or secure failure behavior.",
+        "No tool hits or static findings corroborate a missing control or exploit path.",
+        "From the provided material alone, it is not demonstrated that this file itself implements the runtime-facing ingress boundary.",
+        "The expert hypothesis is plausible at a high level because the case is tagged as a boundary candidate with expected obligations including revalidation, authorization/caller binding, and secure failure behavior.",
+        "The challenger's point stands: absence of visible checks in a partial macro-preprocessing snippet is insufficient to infer a vulnerability, since enforcement may reside in generated expansion, trait contracts, or surrounding runtime/framework code.",
+        "Follow-up queries produced no additional evidence because the requested agents were unavailable, leaving the record inconclusive."
+      ]
+    }
+  ]
+}

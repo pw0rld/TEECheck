@@ -1,0 +1,175 @@
+package codeql
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twe"
+)
+
+// WriteQueryPack writes a generated query into destDir as a minimal CodeQL
+// query pack: the .ql file plus a qlpack.yml declaring the given library
+// dependency (e.g. codeql/rust-all or codeql/cpp-all). For Rust, combine with
+// AnalyzeOptions.AdditionalPacks pointing at a bundle's resolved rust libraries
+// (see RustLibrariesPath); cpp-all resolves top-level with no extra packs.
+// Returns the path to the written query file.
+func WriteQueryPack(destDir, fileName, queryContent, depPack string) (string, error) {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return "", err
+	}
+	if depPack == "" {
+		depPack = "codeql/rust-all"
+	}
+	qlpack := "name: teecheck/generated\nversion: 0.0.1\ndependencies:\n  " + depPack + ": \"*\"\n"
+	if err := os.WriteFile(filepath.Join(destDir, "qlpack.yml"), []byte(qlpack), 0o644); err != nil {
+		return "", err
+	}
+	queryPath := filepath.Join(destDir, fileName)
+	if err := os.WriteFile(queryPath, []byte(queryContent), 0o644); err != nil {
+		return "", err
+	}
+	return queryPath, nil
+}
+
+// GenerateBindingQuery emits a self-contained CodeQL query for one TWE-BIND
+// site. Unlike a static hand-written module, the query is derived from the
+// TrustIR the LLM produced: the authority function is located by the
+// authority_subject role's source position, and the attested field to look for
+// comes from the claim_field role's symbol. Nothing about the target code
+// (function names, field names) is hardcoded in the module — it all flows in
+// from TrustIR, which is the point of query generation.
+//
+// The binding relation is the one proven to discriminate in the M2 spike: a
+// violation is a function holding the authority point that never references the
+// attested field. Hardening this to full inter-procedural data flow is future
+// work — the spike found Rust content-flow (tracking a value through a field
+// read) needs more modeling than DataFlow::localFlow gives out of the box.
+func GenerateBindingQuery(cand twe.TrustIRCandidate) (string, error) {
+	claim, ok := cand.Roles["claim_field"]
+	if !ok {
+		return "", fmt.Errorf("candidate %s: missing role claim_field", cand.SiteID)
+	}
+	authority, ok := cand.Roles["authority_subject"]
+	if !ok {
+		return "", fmt.Errorf("candidate %s: missing role authority_subject", cand.SiteID)
+	}
+	claimVar := attestedVarName(claim.Loc.Symbol)
+	if claimVar == "" {
+		return "", fmt.Errorf("candidate %s: cannot derive attested variable from claim symbol %q", cand.SiteID, claim.Loc.Symbol)
+	}
+	authFile := filepath.Base(authority.Loc.Path)
+	if authFile == "" || authFile == "." || authority.Loc.Line <= 0 {
+		return "", fmt.Errorf("candidate %s: authority_subject needs a file and line", cand.SiteID)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "/**\n")
+	fmt.Fprintf(&b, " * @name TWE-BIND-001 generated for %s\n", cand.SiteID)
+	fmt.Fprintf(&b, " * @description Authority granted at %s:%d without any use of the attested value %q.\n", authFile, authority.Loc.Line, claimVar)
+	fmt.Fprintf(&b, " * @kind problem\n")
+	fmt.Fprintf(&b, " * @problem.severity error\n")
+	fmt.Fprintf(&b, " * @id teecheck/generated/binding/%s\n", sanitizeID(cand.SiteID))
+	fmt.Fprintf(&b, " * @tags security\n")
+	fmt.Fprintf(&b, " */\n\n")
+	b.WriteString("import rust\n\n")
+	b.WriteString("from Function f\n")
+	b.WriteString("where\n")
+	fmt.Fprintf(&b, "  // authority point located by TrustIR: %s:%d\n", authFile, authority.Loc.Line)
+	b.WriteString("  exists(AstNode a |\n")
+	b.WriteString("    a.getEnclosingCallable() = f and\n")
+	fmt.Fprintf(&b, "    a.getLocation().getFile().getBaseName() = %q and\n", authFile)
+	fmt.Fprintf(&b, "    a.getLocation().getStartLine() = %d\n", authority.Loc.Line)
+	b.WriteString("  ) and\n")
+	fmt.Fprintf(&b, "  // the attested value %q is never read in the authority function — it was\n", claimVar)
+	b.WriteString("  // bound and then dropped, so authority is not tied to the attested subject\n")
+	b.WriteString("  not exists(NameRef nr |\n")
+	b.WriteString("    nr.getEnclosingCallable() = f and\n")
+	fmt.Fprintf(&b, "    nr.getText() = %q\n", claimVar)
+	b.WriteString("  )\n")
+	// Surface the function name CodeQL resolved so downstream matching and
+	// review can name the code element, not just its location.
+	fmt.Fprintf(&b, "select f, \"TWE-BIND-001: \" + f.getName().getText() + \" grants authority without using the attested value '%s' (%s)\"\n", claimVar, cand.SiteID)
+	return b.String(), nil
+}
+
+// GenerateConfigQuery emits a query for one TWE-CONFIG site (a weak trust mode
+// reaching production authority). It pins the mode-selecting function by the
+// mode_selector role's location and flags it when it reaches an acceptance
+// (a Result Ok) — the simulation branch's accept. In a hardened build the
+// accept is gated out (e.g. behind #[cfg(feature = "simulation")]) and is not
+// in the database, so the function has no acceptance and is not flagged.
+//
+// First-cut relation: "the mode-selecting function contains an acceptance".
+// Hardening (a real path check that the accept bypasses verification) is
+// future work, like the binding module.
+func GenerateConfigQuery(cand twe.TrustIRCandidate) (string, error) {
+	mode, ok := cand.Roles["mode_selector"]
+	if !ok {
+		return "", fmt.Errorf("candidate %s: missing role mode_selector", cand.SiteID)
+	}
+	if _, ok := cand.Roles["authority_point"]; !ok {
+		return "", fmt.Errorf("candidate %s: missing role authority_point", cand.SiteID)
+	}
+	modeFile := filepath.Base(mode.Loc.Path)
+	if modeFile == "" || modeFile == "." || mode.Loc.Line <= 0 {
+		return "", fmt.Errorf("candidate %s: mode_selector needs a file and line", cand.SiteID)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "/**\n")
+	fmt.Fprintf(&b, " * @name TWE-CONFIG-001 generated for %s\n", cand.SiteID)
+	fmt.Fprintf(&b, " * @description A weak trust mode selected at %s:%d reaches an acceptance without gating.\n", modeFile, mode.Loc.Line)
+	fmt.Fprintf(&b, " * @kind problem\n")
+	fmt.Fprintf(&b, " * @problem.severity error\n")
+	fmt.Fprintf(&b, " * @id teecheck/generated/config/%s\n", sanitizeID(cand.SiteID))
+	fmt.Fprintf(&b, " * @tags security\n")
+	fmt.Fprintf(&b, " */\n\n")
+	b.WriteString("import rust\n\n")
+	b.WriteString("from Function f\n")
+	b.WriteString("where\n")
+	fmt.Fprintf(&b, "  // mode selector located by TrustIR: %s:%d\n", modeFile, mode.Loc.Line)
+	b.WriteString("  exists(AstNode m |\n")
+	b.WriteString("    m.getEnclosingCallable() = f and\n")
+	fmt.Fprintf(&b, "    m.getLocation().getFile().getBaseName() = %q and\n", modeFile)
+	fmt.Fprintf(&b, "    m.getLocation().getStartLine() = %d\n", mode.Loc.Line)
+	b.WriteString("  ) and\n")
+	b.WriteString("  // the mode-selecting function reaches an acceptance (returns Ok); in a\n")
+	b.WriteString("  // hardened build the weak-mode accept is gated out and absent here\n")
+	b.WriteString("  exists(NameRef ok |\n")
+	b.WriteString("    ok.getEnclosingCallable() = f and\n")
+	b.WriteString("    ok.getText() = \"Ok\"\n")
+	b.WriteString("  )\n")
+	fmt.Fprintf(&b, "select f, \"TWE-CONFIG-001: \" + f.getName().getText() + \" lets a weak trust mode reach acceptance (%s)\"\n", cand.SiteID)
+	return b.String(), nil
+}
+
+// attestedVarName pulls the base binding out of a claim symbol: the variable
+// that holds the attested value. "report.pubkey" -> "report", "_report" ->
+// "_report". The query then checks whether that binding is ever read in the
+// authority function; if it is only bound and dropped, authority is unbound.
+func attestedVarName(symbol string) string {
+	s := strings.TrimSpace(symbol)
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "."); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// sanitizeID makes a site id safe for a CodeQL @id (lowercase, hyphen-joined).
+func sanitizeID(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}

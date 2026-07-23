@@ -1,0 +1,49 @@
+families:
+  Flow:
+    name: Trust Boundary Flow
+    definition: Secret, trusted, host-controlled, or verifier-controlled data crosses a TEE trust boundary incorrectly.
+    codeql_strategy: dataflow_or_taint
+  Guard:
+    name: Verification Gap
+    definition: Required TEE verification is missing, incomplete, bypassable, or misinterpreted before authority.
+    codeql_strategy: guard_dominance
+  Binding:
+    name: Binding Weakness
+    definition: TEE artifacts, keys, identities, reports, or authority subjects are not properly linked.
+    codeql_strategy: relation_checking
+  State:
+    name: State Continuity
+    definition: Sealed state, checkpoints, epochs, or authorizations lack continuity or replay resistance.
+    codeql_strategy: structural_continuity
+  Config:
+    name: Configuration Integrity
+    definition: Build flags, debug modes, feature flags, or deployment configs weaken TEE guarantees.
+    codeql_strategy: config_to_authority
+  Design:
+    name: Design Appropriateness
+    definition: TEE is placed incorrectly or the claimed trust model has bypasses.
+    codeql_strategy: graph_review_limited_static
+  Leakage:
+    name: Output and Metadata Leakage
+    definition: Observable output, error detail, or metadata reveals enclave secret state or secret-dependent data.
+    codeql_strategy: dataflow_or_taint
+tee_dimensions:
+  - incorrect_usage
+  - inappropriate_design
+trust_contexts:
+  - identity_registration
+  - worker_registration
+  - prover_registration
+  - oracle_registration
+  - agent_registration
+  - key_release
+  - secret_provisioning
+  - confidential_input_encryption
+  - attested_output_acceptance
+  - proof_acceptance
+  - oracle_update
+  - state_resume
+  - state_migration
+  - committee_threshold_action
+  - production_deployment
+  - observable_output

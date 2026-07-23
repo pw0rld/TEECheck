@@ -61,3 +61,23 @@ func TestGrepAdapterNoResults(t *testing.T) {
 		t.Fatalf("expected 0 findings, got %d", len(findings))
 	}
 }
+
+func TestGrepAdapterAggregatesGenericBoundaryEvidence(t *testing.T) {
+	dir := t.TempDir()
+	content := "func handle(input []byte, length int) {\n\tif length > len(input) { return }\n\tcleanup(input)\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "sample.c"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := grep.New().Run(context.Background(), staticcheck.CheckRequest{
+		RepoRoot: dir, TargetFiles: []string{"sample.c"}, Category: "boundary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected one aggregated window, got %d", len(findings))
+	}
+	if findings[0].RuleID == "" || findings[0].EndLine == 0 {
+		t.Fatalf("expected structured window finding: %+v", findings[0])
+	}
+}

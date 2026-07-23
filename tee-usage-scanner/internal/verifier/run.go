@@ -50,6 +50,7 @@ func Run(cfg config.Config) error {
 
 		// Run static checks
 		var scFindings []staticcheck.CheckFinding
+		var toolRuns []string
 		if enabledTools != nil {
 			req := staticcheck.CheckRequest{
 				RepoRoot:    manifest.LocalPath,
@@ -60,14 +61,17 @@ func Run(cfg config.Config) error {
 			for _, toolName := range enabledTools {
 				results, err := reg.RunByName(context.Background(), toolName, req)
 				if err != nil {
+					toolRuns = append(toolRuns, fmt.Sprintf("%s: failed", toolName))
 					fmt.Printf("Warning: static check %s failed: %v\n", toolName, err)
 					continue
 				}
+				toolRuns = append(toolRuns, fmt.Sprintf("%s: completed (%d findings)", toolName, len(results)))
 				scFindings = append(scFindings, results...)
 			}
 		}
 
 		memo := buildMemo(pack, hypothesis, challenge, cfg.AgentID, scFindings)
+		memo.ChecksRun = toolRuns
 		// Even in heuristic mode (no LLM judgment), record the
 		// citation validation so downstream consumers see a
 		// consistent shape.
@@ -86,10 +90,15 @@ func buildMemo(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 	status := "inconclusive"
 	var checks []string
 	var confirmed []string
+	var candidates []string
 	var contradictions []string
 
 	for _, f := range scFindings {
 		checks = append(checks, fmt.Sprintf("%s: %s", f.ToolName, f.RuleID))
+		if strings.HasPrefix(f.RuleID, "generic-") {
+			candidates = append(candidates, fmt.Sprintf("%s:%d-%d %s (via %s)", f.Path, f.StartLine, f.EndLine, f.Message, f.ToolName))
+			continue
+		}
 		lower := strings.ToLower(f.Message)
 		if strings.Contains(lower, "todo") || strings.Contains(lower, "fixme") || strings.Contains(lower, "missing") {
 			confirmed = append(confirmed, fmt.Sprintf("%s:%d %s (via %s)", f.Path, f.StartLine, f.Message, f.ToolName))
@@ -129,6 +138,7 @@ func buildMemo(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 		Status:         status,
 		ChecksRun:      checks,
 		ConfirmedFacts: confirmed,
+		CandidateFacts: candidates,
 		Contradictions: contradictions,
 		Notes:          notes,
 	}
@@ -539,7 +549,9 @@ func emitVerifierClaimEvents(rec events.Recorder, runID, agentID string, memo ar
 
 // formatExpertCitationStatus renders the per-fact validation list
 // as the prompt block the verifier reads. One line per fact:
-//   [<status>] <fact text> [optional: -- reason]
+//
+//	[<status>] <fact text> [optional: -- reason]
+//
 // followed by indented citation references when available, so the
 // LLM can quote them verbatim if it decides to corroborate.
 func formatExpertCitationStatus(validation []citations.CitationValidation) string {

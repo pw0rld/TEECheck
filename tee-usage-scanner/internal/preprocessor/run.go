@@ -40,7 +40,22 @@ func Run(cfg config.Config) error {
 	if err := runfs.WriteJSON(runfs.ProjectProfilePath(cfg.RunDir), profile); err != nil {
 		return fmt.Errorf("write project profile: %w", err)
 	}
+	profileV2, err := buildProfileV2(manifest, profile, cfg.KnowledgeRoot)
+	if err != nil {
+		return fmt.Errorf("build project profile v2: %w", err)
+	}
+	if err := runfs.WriteJSON(runfs.ContextProjectProfilePath(cfg.RunDir), profileV2); err != nil {
+		return fmt.Errorf("write project profile v2: %w", err)
+	}
+	tweContextWritten, err := compileTWEKnowledge(cfg.KnowledgeRoot, cfg.RunDir)
+	if err != nil {
+		return fmt.Errorf("compile TWE prior knowledge: %w", err)
+	}
 	fmt.Printf("Project profile written to %s\n", runfs.ProjectProfilePath(cfg.RunDir))
+	fmt.Printf("Project profile v2 written to %s\n", runfs.ContextProjectProfilePath(cfg.RunDir))
+	if tweContextWritten {
+		fmt.Printf("TWE agent context written to %s\n", runfs.TWEAgentContextPath(cfg.RunDir))
+	}
 	return nil
 }
 

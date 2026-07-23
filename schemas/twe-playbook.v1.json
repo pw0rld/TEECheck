@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/twe-playbook.v1.json",
+  "title": "TEECheck TWE Prior-Knowledge Playbook v1",
+  "type": "object",
+  "required": [
+    "schema_version", "id", "name", "family", "scenario",
+    "attacker_capabilities", "look_for", "investigation_steps",
+    "required_evidence", "common_defenses", "common_false_positives",
+    "related_twes", "trustir_hints"
+  ],
+  "properties": {
+    "schema_version": {"const": "teecheck.twe_playbook.v1"},
+    "id": {"type": "string", "pattern": "^TWE-[A-Z0-9-]+$"},
+    "name": {"type": "string", "minLength": 1},
+    "family": {"enum": ["Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"]},
+    "scenario": {"type": "string", "minLength": 1},
+    "attacker_capabilities": {"$ref": "#/$defs/non_empty_strings"},
+    "look_for": {"$ref": "#/$defs/non_empty_strings"},
+    "investigation_steps": {"$ref": "#/$defs/non_empty_strings"},
+    "required_evidence": {"$ref": "#/$defs/non_empty_strings"},
+    "common_defenses": {"$ref": "#/$defs/non_empty_strings"},
+    "common_false_positives": {"$ref": "#/$defs/non_empty_strings"},
+    "related_twes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "trustir_hints": {"$ref": "#/$defs/non_empty_strings"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "non_empty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

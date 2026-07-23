@@ -1,0 +1,37 @@
+TEECheck
+Copyright 2026 The TEECheck Authors
+
+This product includes software developed by The TEECheck Authors,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+tee-audit
+  Location:  tee-audit/
+  Upstream:  https://github.com/pinshenxu/tee-audit
+  Baseline:  f8053a18190d5e6c4cfe0da3e66e0df770832dfe
+  License:   MIT (see tee-audit/LICENSE)
+
+  Imported by git subtree with full upstream history preserved. Provenance
+  and the asset triage applied on import are documented in
+  tee-audit/ATTRIBUTION.md.
+
+OP-TEE OS source slices
+  Location:  teecheck-benchmark/datasets/CVE-*/
+  Upstream:  https://github.com/OP-TEE/optee_os
+  License:   BSD-2-Clause
+
+  Benchmark datasets embed vulnerable/fixed source revisions of OP-TEE OS
+  and other upstream projects for evaluation purposes. Each dataset's
+  case.yaml records its project, repository and license.
+
+Other benchmark upstreams
+  Location:  teecheck-benchmark/datasets/CVE-*/
+  Projects:  Trusted Firmware-M, Open Enclave SDK, Occlum, Linux kernel,
+             LibTomCrypt, regex, RustCrypto AEADs
+
+  Each dataset carries its own upstream repository and license in case.yaml.
+  Sources are included verbatim for reproducible evaluation and remain under
+  their original licenses.

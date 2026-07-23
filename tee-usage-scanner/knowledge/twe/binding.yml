@@ -1,0 +1,22 @@
+id: TWE-BIND-001
+name: Unbound Attested Subject Authority
+family: Binding
+summary: >
+  Verifies a TEE attestation artifact but grants authority to a subject that
+  is not bound to the subject proven by that artifact. A valid quote can be
+  replayed to register or authorize an attacker-controlled key.
+applicable_contexts: [worker_registration, key_release]
+required_trustir: [claim_field, authority_subject]
+allowed_enums:
+  claim_field: [attested_public_key, runtime_public_key, worker_identity]
+  authority_subject: [registered_worker, key_release_recipient]
+codeql_modules:
+  - binding/missing_subject_binding.ql
+violation_condition: >
+  Authority is granted to authority_subject without an accepted data-flow
+  binding relation from claim_field.
+accepted_suppressors:
+  - authority_subject_derived_from_claim
+  - checked_inside_verifier
+  - test_or_dev_only
+fixtures: [TWE-BIND-0001]

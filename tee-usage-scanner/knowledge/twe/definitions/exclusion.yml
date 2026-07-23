@@ -1,0 +1,41 @@
+# Migrated verbatim from tee-audit's trustir/spec/exclusion.yml (PR-02 of the
+# TEECheck/tee-audit merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1).
+#
+# Vendor / generated / proto path exclusion for iteration-3 repo-wide enumeration.
+#
+# The CodeQL fetch queries (codeql/trustir/{go,rust}/fetch/*.ql) and the Python
+# EnumItem pipeline (codeql_runner.run_fetch_queries) both consult these globs so
+# the LLM classification sees only the repo's OWN trust-relevant code, not vendored
+# dependencies, generated protobuf, or build output. What was excluded is always
+# LOGGED (counts + sampled paths) so coverage stays honest — never silently truncated.
+#
+# Globs are matched against the repo-relative path of each enumerated AST node's
+# file. Matching is fnmatch-style (case-insensitive on the path segments).
+deny_globs:
+  # Vendored dependencies (Go modules, JS, generic)
+  - "**/vendor/**"
+  - "**/third_party/**"
+  - "**/thirdparty/**"
+  - "**/node_modules/**"
+  - "**/.deps/**"
+  # Rust cargo dependency cache (~/.cargo/registry/...) — without this, the
+  # macro-expanded dep tree (serde/darling/syn/...) floods Rust enumeration.
+  - "**/.cargo/registry/**"
+  - "**/cargo-home/registry/**"
+  # Rust toolchain stdlib sources (~/.rustup/toolchains/...)
+  - "**/.rustup/toolchains/**"
+  # Generated protobuf / codegen (Go especially)
+  - "**/*.pb.go"
+  - "**/*_gen.go"
+  - "**/*.pb.rs"
+  - "**/generated/**"
+  - "**/codegen/**"
+  # Build output / caches
+  - "**/target/**"
+  - "**/build/**"
+  - "**/dist/**"
+  - "**/.git/**"
+  # Test fixtures that would pollute enumeration (tests are scope-excluded separately
+  # by the existing TestScope.qll, but keep them out of the LLM classification batch)
+  - "**/testdata/**"
+  - "**/fixtures/**"

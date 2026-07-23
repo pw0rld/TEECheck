@@ -13,6 +13,19 @@ import (
 type DonePayload struct {
 	Summary    string           `json:"summary"`
 	Candidates []map[string]any `json:"candidates"`
+
+	// Investigations is the §7.5/§9.5 counterpart of Candidates: each
+	// entry is a loosely-typed TWEInvestigation the LLM believes it built
+	// this run (twe_ids, filled/missing roles, required evidence,
+	// counterevidence, coverage gaps, tool fact refs — see
+	// internal/investigations.WireInvestigation, whose JSON tags this
+	// mirrors). Like Candidates, it stays []map[string]any here: the main
+	// loop (internal/planner) is what converts, classifies, and grounds
+	// each entry via internal/investigations before it becomes a
+	// persisted artifacts.TWEInvestigation. Optional — an LLM/run that
+	// found nothing worth tracking as a formal investigation this round
+	// omits it entirely.
+	Investigations []map[string]any `json:"investigations,omitempty"`
 }
 
 // DoneHandler implements the terminal `done` action. It validates

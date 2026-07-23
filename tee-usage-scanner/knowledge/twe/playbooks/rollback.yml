@@ -1,0 +1,73 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-STATE-001
+name: Trusted State Rollback
+family: State
+
+scenario: >
+  An attacker who controls untrusted persistence restores an older version of
+  TEE-protected state, or causes version metadata to be lost before a rollback
+  guard. Integrity or signature verification still succeeds, but the trusted
+  computation accepts stale security state because freshness is not anchored
+  outside the replayable state and is not propagated to the enforcement point.
+
+attacker_capabilities:
+  - control_host_storage
+  - replay_previous_snapshot
+  - restart_tee_instance
+  - choose_an_older_signed_artifact
+
+look_for:
+  - all_host_to_tee_and_tee_to_host_interfaces
+  - state_save_restore_and_signed_artifact_load_flows
+  - sealed_or_signed_state_kept_in_untrusted_storage
+  - counters_epochs_versions_heights_and_revocation_state
+  - propagation_of_freshness_fields_to_rollback_guards
+  - version_or_epoch_fields_that_are_declared_but_never_assigned_before_a_guard_reads_them
+  - security_decisions_reached_from_restored_or_loaded_state
+
+investigation_steps:
+  - enumerate_trust_boundary_interfaces
+  - identify_security_sensitive_persistent_or_signed_state
+  - trace_state_persistence_and_restore_or_artifact_loading
+  - determine_which_inputs_the_host_can_replay_or_downgrade
+  - trace_version_epoch_or_counter_fields_to_the_runtime_object
+  - locate_rollback_checks_and_external_freshness_anchors
+  - test_whether_state_and_its_freshness_value_can_be_rolled_back_together
+  - verify_the_guards_input_is_actually_written_by_the_load_or_provisioning_path_and_not_left_at_a_default
+  - trace_accepted_stale_state_to_an_authority_or_security_effect
+  - construct_an_evidence_anchored_attack_sequence
+
+required_evidence:
+  - attacker_selectable_historical_state_or_artifact
+  - reachable_restore_or_load_path
+  - freshness_anchor_is_itself_replayable_alongside_the_state
+  - freshness_value_is_never_propagated_from_load_or_provisioning_into_the_guards_input
+  - security_relevant_effect_after_stale_state_is_accepted
+
+common_defenses:
+  - hardware_monotonic_counter
+  - tpm_or_secure_nv_counter
+  - remote_trusted_epoch
+  - consensus_finalized_height
+  - append_only_commitment
+  - correctly_propagated_signed_version_to_rollback_database
+  - mandatory_reprovisioning_after_restore
+
+common_false_positives:
+  - restored_state_is_only_a_non_security_cache
+  - restore_or_downgrade_path_is_test_only_or_unreachable
+  - a_non_replayable_anchor_is_checked_before_any_security_effect
+  - a_downstream_independent_system_rejects_the_stale_state
+  - the_version_is_propagated_and_the_rollback_database_fails_closed
+  - the_guards_input_is_confirmed_written_from_a_live_source_on_every_call_path_to_it
+
+related_twes:
+  - TWE-STATE-REPLAY
+  - TWE-CONFIG-WEAK-MODE
+
+trustir_hints:
+  - enumerate_boundary_entrypoints
+  - enumerate_persistence_and_artifact_load_operations
+  - trace_restore_or_version_to_authority
+  - find_freshness_and_rollback_guards
+  - compare_vulnerable_and_fixed_field_propagation

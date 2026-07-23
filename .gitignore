@@ -1,0 +1,20 @@
+# Go build output
+tee-usage-scanner/runner
+tee-usage-scanner/teecheck
+
+# Node build output. Deliberately narrow: the web UI source lives on
+# v1.2-multi-ai-review-ui and carries its own web/.gitignore, so ignoring
+# tee-usage-scanner/web/ wholesale would hide that source if the branch
+# ever merges here.
+node_modules/
+dist/
+*.tsbuildinfo
+tee-usage-scanner/web/vite.config.js
+tee-usage-scanner/web/vite.config.d.ts
+
+# Tool state
+.codex
+.superpowers/
+
+# Run artifacts
+runs/

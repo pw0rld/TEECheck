@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/finding.v3.json",
+  "title": "TEECheck UnifiedFinding v3",
+  "type": "object",
+  "required": ["schema_version", "finding_id", "summary", "agent_assessment"],
+  "properties": {
+    "schema_version": {"const": "teecheck.finding.v3"},
+    "finding_id": {"type": "string"},
+    "related_twes": {"$ref": "#/$defs/strings"},
+    "related_invariants": {"$ref": "#/$defs/strings"},
+    "architecture_refs": {"$ref": "#/$defs/strings"},
+    "classification": {"type": "string"},
+    "summary": {"type": "string"},
+    "tool_fact_refs": {"$ref": "#/$defs/strings"},
+    "agent_assessment": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["supported", "contested", "needs_context", "rejected"]},
+        "severity": {"type": "string"}, "confidence": {"type": "string"},
+        "summary": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "attack_path": {"type": "array", "items": {"type": "object"}},
+    "anchored_evidence": {"type": "array", "items": {"type": "object"}},
+    "unanchored_hypotheses": {"$ref": "#/$defs/strings"},
+    "coverage_gaps": {"$ref": "#/$defs/strings"},
+    "human_verdict": {
+      "type": ["object", "null"],
+      "properties": {
+        "verdict": {"type": "string"}, "reason_code": {"type": "string"},
+        "corrected_severity": {"type": "string"},
+        "confidence_override": {"type": "string"}, "reviewed_at": {"type": "string"}
+      },
+      "required": ["verdict"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {"strings": {"type": "array", "items": {"type": "string"}}}
+}
