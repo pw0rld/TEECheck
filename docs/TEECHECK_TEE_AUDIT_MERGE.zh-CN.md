@@ -1306,7 +1306,7 @@ role 标注 → resolver 校验 → 生成事实表）。C-fact-table spike（§
 - resolver：把标注的名字解析到真实符号，未解析的标记 unresolved；
 - 事实生成：输出 `GeneratedTrustFacts.qll`；
 - 通过现有 `internal/codeql/` engine 执行；
-- CodeQL DB **每 run 按 commit 构建一次**，落到 run 目录作为显式 artifact（不是缓存副作用）。构建方式采用 spike 验证过的路径：`git clone <repository>@<revision>` 取全树 + `--build-mode=none`，输入取自 `case.yaml` 的 `repository`/`vulnerable_revision`/`fixed_revision`。**不得退回单文件或 stub 头文件方案**——spike 已证伪，两者抽出的函数数均为 0；
+- CodeQL DB **每 run 按 commit 构建一次**，落到 run 目录作为显式 artifact（不是缓存副作用）。构建方式采用 spike 验证过的路径：`git clone <repository>@<revision>` 取全树 + `--build-mode=none`，输入取自数据集：`repository` 与 `vulnerable_revision` 在 `case.yaml`，`fixed_revision` 在 `oracle.yaml`（PR-05 摸底核对了全部数据集，两处都读）。**不得退回单文件或 stub 头文件方案**——spike 已证伪，两者抽出的函数数均为 0；
 - ToolFact persistence；error/unsupported/unresolved mapping。
 
 新增 `codeql/trustir/cpp/`：
@@ -1357,7 +1357,7 @@ role 标注 → resolver 校验 → 生成事实表）。C-fact-table spike（§
 | 单文件 fixture 方案 | 已证伪：`--build-mode=none` 对无头文件的单文件抽出 0 个函数；stub 头文件同样为 0。必须全树 |
 | 端到端 differential | CVE-2016-6129 已跑通：vulnerable 命中、fixed 干净、scoped 后无误报 |
 
-`case.yaml` 已经带 `repository` + `vulnerable_revision` + `fixed_revision`，构建所需输入齐备。
+数据集已带 `repository` + `vulnerable_revision`（`case.yaml`）+ `fixed_revision`（`oracle.yaml`），构建所需输入齐备。
 
 **事实表架构的验证已完成**（2026-07-23，结论 PASS，见
 `tee-usage-scanner/docs/design/C-fact-table-spike.md` 与其查询包
