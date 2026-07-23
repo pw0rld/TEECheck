@@ -371,3 +371,40 @@ func TestValidateAndDowngrade_PathOnlyEvidenceMissingFileDowngrades(t *testing.T
 		t.Fatalf("state = %q, want unknown", got.Components[0].State)
 	}
 }
+
+// TestValidateAndDowngrade_SourceFileOnlyRequiresSymbol guards a hole found in
+// review: a source citation with a real file but no line number skipped the
+// symbol check entirely, letting "observed component Foo in X.c" stand when
+// Foo is nowhere in X.c, just by omitting the line number. File existence is
+// enough only for manifest/doc-style evidence (covered by
+// TestValidateAndDowngrade_PathOnlyEvidenceExistenceOnly), never for source.
+func TestValidateAndDowngrade_SourceFileOnlyRequiresSymbol(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "real.c"),
+		[]byte("int actual_symbol(void) { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := artifacts.ArchitectureModel{
+		Components: []artifacts.ArchitectureElement{{
+			ID: "c1", Kind: "component", Name: "NonexistentSymbolXYZ",
+			State: artifacts.EvidenceObserved,
+			Evidence: []artifacts.EvidenceReference{{
+				Kind: "source", File: "real.c", Note: "NonexistentSymbolXYZ",
+			}},
+		}},
+	}
+	got, adj := ValidateAndDowngrade(model, repo)
+	if got.Components[0].State == artifacts.EvidenceObserved {
+		t.Fatalf("source file-only citation kept observed though symbol absent; adj=%v", adj)
+	}
+
+	// The same shape but with the symbol genuinely in the file must survive:
+	// file-only is a weaker anchor, not a rejected one.
+	model.Components[0].Name = "actual_symbol"
+	model.Components[0].State = artifacts.EvidenceObserved
+	model.Components[0].Evidence[0].Note = "actual_symbol"
+	got2, _ := ValidateAndDowngrade(model, repo)
+	if got2.Components[0].State != artifacts.EvidenceObserved {
+		t.Fatalf("source file-only citation whose symbol IS in the file was wrongly downgraded to %q", got2.Components[0].State)
+	}
+}

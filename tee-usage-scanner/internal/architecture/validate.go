@@ -195,6 +195,22 @@ func downgradeTarget(hasDependencies bool) artifacts.EvidenceState {
 // a persisted tool result, not source bytes; that is PR-05's fact-layer
 // integrity to check, not this validator's, so it is accepted here without
 // a file check.
+// fileIsSufficientEvidence reports whether a file-only citation (no line
+// range) can back an observed/documented statement on the strength of the
+// file existing alone. True for manifest/config/doc-style evidence, where the
+// statement's Name is a human description rather than a token that must appear
+// in the file. False for source evidence, where a file-only citation with no
+// verifiable symbol is exactly the hole that lets a fabricated "observed"
+// stand — see checkEvidence.
+func fileIsSufficientEvidence(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "manifest", "config", "configuration", "deployment",
+		"doc", "documentation", "code_or_config":
+		return true
+	}
+	return false
+}
+
 func checkEvidence(evidence []artifacts.EvidenceReference, expectedSymbol, repoRoot string) (reason string, ok bool) {
 	if len(evidence) == 0 {
 		return "no evidence attached to an observed/documented statement", false
@@ -209,6 +225,31 @@ func checkEvidence(evidence []artifacts.EvidenceReference, expectedSymbol, repoR
 		if ref.StartLine < 1 {
 			if _, err := os.Stat(resolveRepoPath(repoRoot, ref.File)); err != nil {
 				return fmt.Sprintf("cited file does not exist: %s (%v)", ref.File, err), false
+			}
+			// For manifest/doc-style evidence the file's mere existence is
+			// the evidence — the statement's Name is a description ("SGX
+			// enclave configuration"), not a token to find inside the file.
+			if fileIsSufficientEvidence(ref.Kind) {
+				continue
+			}
+			// For source evidence, file existence proves nothing about
+			// content. Accepting it here would let "observed component Foo
+			// in X.c" stand when Foo is nowhere in X.c, just by omitting the
+			// line number. Require the declared symbol to appear somewhere
+			// in the file.
+			symbol := strings.TrimSpace(ref.Note)
+			if symbol == "" {
+				symbol = expectedSymbol
+			}
+			if symbol == "" {
+				return fmt.Sprintf("source citation %s has no line range and no symbol to verify", ref.File), false
+			}
+			body, err := os.ReadFile(resolveRepoPath(repoRoot, ref.File))
+			if err != nil {
+				return fmt.Sprintf("could not read cited file %s: %v", ref.File, err), false
+			}
+			if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(symbol)) {
+				return fmt.Sprintf("cited file %s does not contain declared symbol %q", ref.File, symbol), false
 			}
 			continue
 		}
