@@ -1,0 +1,10 @@
+name: teecheck/trustir-cpp
+version: 0.1.0
+description: >-
+  TrustIR TEE-weakness query pack for C/C++, driven by a generated fact table
+  (docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §6.2, §23). First slice covers only
+  the STATE/rollback family; the other six families follow the same shape
+  once this skeleton lands (§23.2). See docs/design/C-fact-table-spike.md for
+  the end-to-end evidence this architecture works on C.
+dependencies:
+  codeql/cpp-all: "*"
