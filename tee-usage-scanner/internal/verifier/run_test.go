@@ -146,7 +146,7 @@ func TestBuildMemoLLM_ExpertValidationReachesPromptAndMemo(t *testing.T) {
 
 	pack := artifacts.CasePack{CaseID: "case-001", Category: "tee", Priority: "high"}
 	memo, err := buildMemoLLM(context.Background(), stub, bus, repo,
-		pack, hypothesisWithFacts(expertFacts), artifacts.Challenge{},
+		pack, hypothesisWithFacts(expertFacts), artifacts.Challenge{}, caseContext{},
 		"verifier-001", 0, nil, expertValidation)
 	if err != nil {
 		t.Fatalf("buildMemoLLM: %v", err)
@@ -201,7 +201,7 @@ func TestBuildMemoLLM_ResolvesAndFlattensVerifierFacts(t *testing.T) {
 	bus := agentbus.New(0)
 	pack := artifacts.CasePack{CaseID: "case-001"}
 	memo, err := buildMemoLLM(context.Background(), stub, bus, repo,
-		pack, hypothesisWithFacts(nil), artifacts.Challenge{},
+		pack, hypothesisWithFacts(nil), artifacts.Challenge{}, caseContext{},
 		"verifier-001", 0, nil, nil)
 	if err != nil {
 		t.Fatalf("buildMemoLLM: %v", err)
@@ -266,7 +266,7 @@ func TestBuildMemoLLM_LegacyTextOnlyLandsInUntypedFields(t *testing.T) {
 
 	memo, err := buildMemoLLM(context.Background(), stub, bus, repo,
 		artifacts.CasePack{CaseID: "case-001"},
-		hypothesisWithFacts(nil), artifacts.Challenge{},
+		hypothesisWithFacts(nil), artifacts.Challenge{}, caseContext{},
 		"verifier-001", 0, nil, nil)
 	if err != nil {
 		t.Fatalf("buildMemoLLM: %v", err)

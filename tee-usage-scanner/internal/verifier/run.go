@@ -48,14 +48,27 @@ func Run(cfg config.Config) error {
 			return fmt.Errorf("read challenge: %w", err)
 		}
 
-		// Run static checks
+		// PR-07 (§7.8, §25): load the TWE knowledge, Architecture
+		// slice, Project Invariants, and referenced ToolFacts for
+		// this case. Read-only against ToolFacts and
+		// project_invariants.v1.json (§3.5) — see updates.go for the
+		// append-only log the Verifier's proposed status changes go
+		// to instead.
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+
+		// Run static checks. Keywords are dispute-driven (§7.8:
+		// "将双方争议转换成具体工具问题"): beyond the case's own
+		// expected_obligations/target_symbols, this also searches for
+		// the case's required_evidence, the relevant invariants'
+		// required_properties/expected_defenses, and the Challenger's
+		// suggested_checks.
 		var scFindings []staticcheck.CheckFinding
 		var toolRuns []string
 		if enabledTools != nil {
 			req := staticcheck.CheckRequest{
 				RepoRoot:    manifest.LocalPath,
 				TargetFiles: pack.TargetFiles,
-				Keywords:    append(pack.ExpectedObligations, pack.TargetSymbols...),
+				Keywords:    disputeDrivenKeywords(pack, challenge, caseCtx.invariants),
 				Category:    pack.Category,
 			}
 			for _, toolName := range enabledTools {
@@ -76,6 +89,16 @@ func Run(cfg config.Config) error {
 		// citation validation so downstream consumers see a
 		// consistent shape.
 		memo.ExpertCitationValidation = citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
+		memo.EvidenceDistinctions = computeEvidenceDistinctions(caseCtx, enabledTools != nil, scFindings)
+		memo.ArchitectureChecks = renderArchitectureChecks(caseCtx.archModel)
+		memo.InvariantChecks = renderInvariantChecks(caseCtx.invariants)
+		memo.InvariantUpdates = computeInvariantUpdates(caseCtx.invariants, memo.Status)
+		if err := appendInvariantUpdates(cfg.RunDir, pack.CaseID, memo.InvariantUpdates); err != nil {
+			// Non-fatal: the memo already carries the same updates,
+			// so a log-append failure loses the standalone log but
+			// not the case's own record of what the Verifier decided.
+			fmt.Printf("Warning: failed to append invariant status updates for %s: %v\n", pack.CaseID, err)
+		}
 		target := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1))
 		if err := runfs.WriteJSON(target, memo); err != nil {
 			return fmt.Errorf("write verification memo %s: %w", memo.CaseID, err)
@@ -218,12 +241,15 @@ func RunWithBusAndEvents(cfg config.Config, bus *agentbus.Bus, rec events.Record
 			return fmt.Errorf("read challenge: %w", err)
 		}
 
+		// PR-07 (§7.8, §25): see the parallel comment in Run() above.
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+
 		var scFindings []staticcheck.CheckFinding
 		if enabledTools != nil {
 			req := staticcheck.CheckRequest{
 				RepoRoot:    manifest.LocalPath,
 				TargetFiles: pack.TargetFiles,
-				Keywords:    append(pack.ExpectedObligations, pack.TargetSymbols...),
+				Keywords:    disputeDrivenKeywords(pack, challenge, caseCtx.invariants),
 				Category:    pack.Category,
 			}
 			for _, toolName := range enabledTools {
@@ -243,11 +269,18 @@ func RunWithBusAndEvents(cfg config.Config, bus *agentbus.Bus, rec events.Record
 		expertValidation := citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
 
 		bus.ResetDialog(pack.CaseID)
-		memo, err := buildMemoLLM(context.Background(), client, bus, manifest.LocalPath, pack, hypothesis, challenge, cfg.AgentID, cfg.LLMTemp, scFindings, expertValidation)
+		memo, err := buildMemoLLM(context.Background(), client, bus, manifest.LocalPath, pack, hypothesis, challenge, caseCtx, cfg.AgentID, cfg.LLMTemp, scFindings, expertValidation)
 		if err != nil {
 			return fmt.Errorf("verifier llm for %s: %w", pack.CaseID, err)
 		}
 		memo.ExpertCitationValidation = expertValidation
+		memo.EvidenceDistinctions = computeEvidenceDistinctions(caseCtx, enabledTools != nil, scFindings)
+		memo.ArchitectureChecks = renderArchitectureChecks(caseCtx.archModel)
+		memo.InvariantChecks = renderInvariantChecks(caseCtx.invariants)
+		memo.InvariantUpdates = computeInvariantUpdates(caseCtx.invariants, memo.Status)
+		if err := appendInvariantUpdates(cfg.RunDir, pack.CaseID, memo.InvariantUpdates); err != nil {
+			fmt.Printf("Warning: failed to append invariant status updates for %s: %v\n", pack.CaseID, err)
+		}
 
 		target := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1))
 		if err := runfs.WriteJSON(target, memo); err != nil {
@@ -273,8 +306,16 @@ func RunWithBusAndEvents(cfg config.Config, bus *agentbus.Bus, rec events.Record
 	return nil
 }
 
-func buildMemoLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, agentID string, temperature float64, scFindings []staticcheck.CheckFinding, expertValidation []citations.CitationValidation) (artifacts.VerificationMemo, error) {
-	systemPrompt := `You are the Verifier Agent in TEECheck. Analyze static check results and code evidence to arbitrate between the Expert's hypothesis and the Challenger's objections.
+func buildMemoLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, caseCtx caseContext, agentID string, temperature float64, scFindings []staticcheck.CheckFinding, expertValidation []citations.CitationValidation) (artifacts.VerificationMemo, error) {
+	systemPrompt := `You are the Verifier Agent in TEECheck. Analyze static check results and code evidence to arbitrate between the Expert's hypothesis and the Challenger's independent (phase-1) view and phase-2 differences.
+
+Turn the dispute between the Expert and Challenger into concrete tool
+questions: a fact-layer call, a reverse trace, a grep, or a citation
+check. You may also challenge an architecture statement or invariant
+assumption the dispute depends on if its evidence state is inferred,
+documented, or unknown rather than observed. Distinguish "we searched
+and found nothing" from "a tool proved this is absent" — do not
+conflate the two.
 
 Return a JSON object with fields:
 - status: "corroborated" | "contested" | "inconclusive"
@@ -324,10 +365,24 @@ EXPERT CITATION STATUS (validated against the live repo at the moment you began 
 %s
 
 Challenger view:
+- Independent (phase-1, formed without the Expert hypothesis) issue_present: %v
+- Key differences between the independent view and the Expert hypothesis: %s
 - Exploitability: %s
 - Narrative: %s
 - Counter arguments: %s
 - Remaining questions: %s
+
+TWE prior knowledge:
+%s
+
+Architecture slice (project-specific; from the Architecture Agent):
+%s
+
+Project Invariants relevant to this case:
+%s
+
+ToolFacts referenced by this case (immutable — cite by fact_id, do not restate as your own finding):
+%s
 
 Source code snippets from the case pack (you MUST re-ground your judgment against this actual code, not just the summaries above):
 %s
@@ -343,9 +398,12 @@ Static check findings (%d total):
 		formatUntypedFacts(hypothesis.UntypedFacts),
 		hypothesis.Confidence,
 		formatExpertCitationStatus(expertValidation),
+		challenge.IndependentIssuePresent, strings.Join(challenge.KeyDifferences, " | "),
 		challenge.Exploitability, challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
+		firstNonEmptyStr(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants),
+		renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatSnippets(pack.Snippets),
 		len(scFindings), formatCheckFindings(scFindings))
 
