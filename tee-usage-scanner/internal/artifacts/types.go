@@ -109,6 +109,15 @@ type FindingItem struct {
 	Locations  []FindingLocation `json:"locations,omitempty"`
 	Summary    string            `json:"summary"`
 	Evidence   []string          `json:"evidence,omitempty"`
+
+	// Sections is the additive (PR-07, §25/§7.9) machine-readable
+	// counterpart to the arbiter review packet Markdown: anchored
+	// ToolFacts, architecture evidence status, invariant verification
+	// status, Expert hypothesis, independent Challenger result,
+	// Verifier resolution, remaining coverage gaps, and human-review
+	// questions, kept as clearly separated fields rather than prose a
+	// consumer would have to re-parse.
+	Sections *ArbiterSections `json:"sections,omitempty"`
 }
 
 // FindingLocation is the structured (file, line) position of a finding, so a
@@ -245,6 +254,21 @@ type Hypothesis struct {
 	// migration. Stats prefers CitedFacts when present; the Cited
 	// field is the fallback for legacy hypotheses.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
+
+	// Classification mirrors TWEInvestigation.Classification /
+	// ProjectInvariant.Classification (§7.6: "判断是标准 TWE、变体、组合
+	// 还是 catalog gap"): standard | variant | composition |
+	// catalog_gap. Empty means the expert did not classify (legacy
+	// hypotheses, or a heuristic run that skips this judgment).
+	Classification string `json:"classification,omitempty"`
+
+	// AttackPremises lists the concrete preconditions the constructed
+	// attack hypothesis depends on (§7.6: "列出攻击前提") — distinct
+	// from MissingObligations, which names what the code fails to
+	// enforce. A premise is something that must ALSO be true for the
+	// attack to work (e.g. "attacker controls the sealed blob
+	// storage", "no outer TLS termination strips this header").
+	AttackPremises []string `json:"attack_premises,omitempty"`
 }
 
 type Challenge struct {
@@ -257,6 +281,27 @@ type Challenge struct {
 	SuggestedChecks    []string `json:"suggested_checks,omitempty"`
 	Exploitability     string   `json:"exploitability"`
 	ReviewerStance     string   `json:"reviewer_stance"`
+
+	// The fields below are additive (PR-07, §25): the two-phase
+	// Challenger persists its phase-1 independent judgment (see
+	// ChallengerIndependentView) separately, then carries a summary of
+	// it here alongside the actual differences found once phase 2
+	// read the Expert hypothesis — the point of the two-phase design.
+
+	// IndependentViewPath points at the persisted phase-1 artifact
+	// (independent-NNN.json) so a reader can open the full,
+	// hypothesis-blind judgment without re-deriving it.
+	IndependentViewPath string `json:"independent_view_path,omitempty"`
+	// IndependentIssuePresent mirrors ChallengerIndependentView.IssuePresent
+	// at the moment phase 2 ran, so a consumer of Challenge alone
+	// (without opening the phase-1 file) still sees the independent
+	// verdict.
+	IndependentIssuePresent bool `json:"independent_issue_present"`
+	// KeyDifferences names where the independent (phase-1) view and
+	// the Expert hypothesis actually disagree (§25 acceptance:
+	// vulnerable/fixed variants must produce a recognizable
+	// difference here).
+	KeyDifferences []string `json:"key_differences,omitempty"`
 }
 
 type VerificationMemo struct {
@@ -310,6 +355,30 @@ type VerificationMemo struct {
 	// across ConfirmedCitedFacts and ContradictedCitedFacts.
 	// Legacy memos that read Cited directly stay functional.
 	Cited []citations.CitedBytes `json:"cited,omitempty"`
+
+	// The fields below are additive (PR-07, §25/§7.8).
+
+	// InvariantUpdates records the Verifier's proposed changes to
+	// ProjectInvariant verification status for this case. Per §3.5
+	// these are append-only: the Verifier package never rewrites
+	// project_invariants.v1.json, it only appends to a log (see
+	// runfs paths under VerifierDir) and mirrors the same entries
+	// here so a reader of the memo sees them without opening the log.
+	InvariantUpdates []InvariantStatusUpdate `json:"invariant_updates,omitempty"`
+
+	// EvidenceDistinctions records, per disputed claim, whether the
+	// Verifier merely found no corroborating evidence or actually
+	// proved the property's absence (§7.8).
+	EvidenceDistinctions []EvidenceDistinctionNote `json:"evidence_distinctions,omitempty"`
+
+	// ArchitectureChecks and InvariantChecks are short text notes on
+	// the architecture statements / invariants the Verifier consulted
+	// while resolving this case's dispute — e.g. "boundary:tee-ta-001
+	// is inferred, not observed; treated as unconfirmed" — so a
+	// reader can see which project-understanding facts the Verifier's
+	// judgment actually depended on.
+	ArchitectureChecks []string `json:"architecture_checks,omitempty"`
+	InvariantChecks    []string `json:"invariant_checks,omitempty"`
 }
 
 // ReviewRecord is the human ground-truth label attached to one
