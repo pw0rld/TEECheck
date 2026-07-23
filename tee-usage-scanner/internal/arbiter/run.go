@@ -48,7 +48,15 @@ func Run(cfg config.Config) error {
 			return fmt.Errorf("read verification memo: %w", err)
 		}
 
-		item, packet := arbitrate(pack, hypothesis, challenge, memo)
+		// PR-07 (§7.9, §25): the Arbiter aggregates the Architecture/
+		// Invariant/ToolFact evidence and the Challenger's phase-1
+		// independent view into clearly separated packet sections. It
+		// never rewrites any of them (§3.5) — loadCaseContext /
+		// loadIndependentView are read-only.
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+		independentView := loadIndependentView(challenge.IndependentViewPath)
+
+		item, packet := arbitrate(pack, hypothesis, challenge, memo, caseCtx, independentView)
 		if cfg.MaxFindings == 0 || len(findings.Findings) < cfg.MaxFindings {
 			findings.Findings = append(findings.Findings, item)
 		}
@@ -65,7 +73,7 @@ func Run(cfg config.Config) error {
 	return nil
 }
 
-func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo) (artifacts.FindingItem, string) {
+func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, caseCtx caseContext, independent artifacts.ChallengerIndependentView) (artifacts.FindingItem, string) {
 	status := "needs_review"
 	confidence := "medium"
 	severity := severityForCategory(pack.Category)
@@ -85,7 +93,13 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 		confidence = "low"
 	}
 
-	summary := fmt.Sprintf("%s | verifier=%s | exploitability=%s", hypothesis.SuspectedIssue, memo.Status, challenge.Exploitability)
+	// §25 mechanical gate: "confirmed_candidate" (or any other
+	// "confirmed*" status/wording) is only allowed when the attack
+	// chain is actually complete. See chain.go.
+	complete := attackChainComplete(pack, hypothesis, memo)
+
+	summary := fmt.Sprintf("%s | verifier=%s | exploitability=%s | %s", hypothesis.SuspectedIssue, memo.Status, challenge.Exploitability, chainCompletenessNote(pack, hypothesis, memo, complete))
+	sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
 	item := artifacts.FindingItem{
 		FindingID:  pack.CaseID,
 		SliceID:    pack.CaseID,
@@ -95,9 +109,19 @@ func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challen
 		Files:      pack.TargetFiles,
 		Summary:    summary,
 		Evidence:   buildFindingEvidence(hypothesis, memo),
+		Sections:   &sections,
 	}
+	item = sanitizeFindingItem(item, complete)
 
-	packet := buildPacket(pack, hypothesis, challenge, memo, item)
+	// The packet quotes upstream prose (the Expert's SuspectedIssue,
+	// free-text notes, etc.) verbatim in several sections below — the
+	// §25 gate applies to the whole human-facing output, not just the
+	// fields this function itself composed, so scrub the assembled
+	// packet the same way sanitizeFindingItem scrubbed the item.
+	packet := buildPacket(pack, hypothesis, challenge, memo, item, sections)
+	if !complete {
+		packet = scrubConfirmedWording(packet)
+	}
 	return item, packet
 }
 
@@ -146,13 +170,36 @@ func buildFindingEvidence(hypothesis artifacts.Hypothesis, memo artifacts.Verifi
 	return out
 }
 
-func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, item artifacts.FindingItem) string {
+func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, item artifacts.FindingItem, sections artifacts.ArbiterSections) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("# Review Packet: %s\n\n", pack.CaseID))
 	b.WriteString(fmt.Sprintf("- Category: `%s`\n", pack.Category))
 	b.WriteString(fmt.Sprintf("- Priority: `%s`\n", pack.Priority))
 	b.WriteString(fmt.Sprintf("- Arbiter Status: `%s`\n", item.Status))
 	b.WriteString(fmt.Sprintf("- Confidence: `%s`\n\n", item.Confidence))
+
+	// §7.9/§25: the eight clearly-separated sections, rendered first
+	// so a reviewer sees the aggregated evidence before the prose
+	// hypothesis/challenge/verification narrative below (kept for
+	// backward-compat with existing packet consumers).
+	b.WriteString("## Anchored ToolFacts\n\n")
+	writeBulletsOrNone(&b, sections.AnchoredToolFacts)
+	b.WriteString("\n## Architecture Evidence Status\n\n")
+	writeBulletsOrNone(&b, sections.ArchitectureEvidenceStatus)
+	b.WriteString("\n## Invariant Verification Status\n\n")
+	writeBulletsOrNone(&b, sections.InvariantVerificationStatus)
+	b.WriteString("\n## Expert Hypothesis (aggregated)\n\n")
+	b.WriteString(sections.ExpertHypothesis)
+	b.WriteString("\n\n## Independent Challenger Result\n\n")
+	b.WriteString(sections.IndependentChallengerResult)
+	b.WriteString("\n\n## Verifier Resolution (aggregated)\n\n")
+	b.WriteString(sections.VerifierResolution)
+	b.WriteString("\n\n## Remaining Coverage Gaps\n\n")
+	writeBulletsOrNone(&b, sections.RemainingCoverageGaps)
+	b.WriteString("\n## Human Review Questions\n\n")
+	writeBulletsOrNone(&b, sections.HumanReviewQuestions)
+	b.WriteString("\n")
+
 	b.WriteString("## Hypothesis\n\n")
 	b.WriteString(fmt.Sprintf("- Title: %s\n", hypothesis.Title))
 	b.WriteString(fmt.Sprintf("- Summary: %s\n", hypothesis.Summary))
@@ -209,11 +256,22 @@ func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, chall
 	for _, hint := range pack.KnowledgeHints {
 		b.WriteString(fmt.Sprintf("- %s: %s\n", hint.Title, hint.Reason))
 	}
-	b.WriteString("\n## Human Review Prompt\n\n")
-	b.WriteString("- Does the visible code really represent the trust decision point?\n")
-	b.WriteString("- Is wrapper or helper context likely to change this verdict?\n")
-	b.WriteString("- If the issue is real, what concrete security property fails?\n")
 	return b.String()
+}
+
+// writeBulletsOrNone renders a "- item" line per entry, or a single
+// "- (none)" line when the list is empty — an explicit "nothing here"
+// marker rather than a silently blank section, matching the
+// convention taggedJoin/formatKnowledgeHints already use elsewhere in
+// this package.
+func writeBulletsOrNone(b *strings.Builder, items []string) {
+	if len(items) == 0 {
+		b.WriteString("- (none)\n")
+		return
+	}
+	for _, item := range items {
+		fmt.Fprintf(b, "- %s\n", item)
+	}
 }
 
 func severityForCategory(category string) string {
@@ -262,8 +320,11 @@ func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
 			return fmt.Errorf("read verification memo: %w", err)
 		}
 
+		caseCtx := loadCaseContext(cfg.RunDir, pack)
+		independentView := loadIndependentView(challenge.IndependentViewPath)
+
 		bus.ResetDialog(pack.CaseID)
-		item, packet, err := arbitrateLLM(context.Background(), client, bus, pack, hypothesis, challenge, memo, cfg.AgentID, cfg.LLMTemp)
+		item, packet, err := arbitrateLLM(context.Background(), client, bus, pack, hypothesis, challenge, memo, caseCtx, independentView, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			return fmt.Errorf("arbiter llm for %s: %w", pack.CaseID, err)
 		}
@@ -291,8 +352,10 @@ func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
 	return nil
 }
 
-func arbitrateLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, agentID string, temperature float64) (artifacts.FindingItem, string, error) {
-	systemPrompt := `You are the Arbiter Agent in TEECheck. Synthesize all evidence and produce a final judgment and human-readable review packet.
+func arbitrateLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, caseCtx caseContext, independent artifacts.ChallengerIndependentView, agentID string, temperature float64) (artifacts.FindingItem, string, error) {
+	complete := attackChainComplete(pack, hypothesis, memo)
+
+	systemPrompt := `You are the Arbiter Agent in TEECheck. Aggregate — do not re-analyze the whole repo — the Expert hypothesis, the Challenger's independent phase-1 result and phase-2 differences, the Verifier's resolution, and the anchored ToolFacts/Architecture/Invariant evidence into a final judgment and human-readable review packet.
 
 Return a JSON object with fields:
 - status: "no_issue_observed" | "needs_review" | "likely_issue" | "confirmed_candidate"
@@ -301,30 +364,51 @@ Return a JSON object with fields:
 - summary: string
 - evidence: array of strings
 - review_packet_markdown: string (full review packet in markdown)
-- queries: array of objects (optional, each with: to_agent, kind, question)`
+- queries: array of objects (optional, each with: to_agent, kind, question)
+
+CRITICAL RULE (§25): the attack chain for this case is currently
+reported as "attack_chain_complete: %v" below. If it is false, you
+MUST NOT use the status "confirmed_candidate" or the phrase
+"confirmed vulnerability" anywhere in summary/evidence/review_packet_markdown
+— use "likely_issue" or "needs_review" and describe the specific gap
+instead. This is checked mechanically after your response is parsed;
+violating it will have your output rewritten, so follow it directly.`
 
 	userMsg := fmt.Sprintf(`Case: %s (category: %s, priority: %s)
 Files: %s
+attack_chain_complete: %v (%s)
 
 Expert hypothesis:
 - Title: %s
 - Suspected issue: %s
+- Classification: %s
 - Confidence: %s
 - Supporting facts (validated, citation-anchored): %s
 - Unanchored expert context (tool hits or legacy text — NOT
   citation-backed; do not treat as evidence on its own): %s
 
-Challenger view:
+Independent Challenger result (phase 1, formed WITHOUT the Expert hypothesis):
+- issue_present: %v
+- reasoning: %s
+- key_differences vs. Expert hypothesis: %s
 - Exploitability: %s
 - Stance: %s
 - Counter arguments: %s
 
-Verification:
+Verifier resolution:
 - Status: %s
 - Confirmed facts (validated, citation-anchored): %s
 - Contradictions (validated, citation-anchored): %s
 - Unanchored verifier confirmations (legacy text without citations): %s
 - Unanchored verifier contradictions (legacy text without citations): %s
+- Evidence distinctions (not-found vs proven-absent): %s
+- Invariant status updates proposed (NOT yet applied to the stored artifact): %s
+
+Anchored ToolFacts:
+%s
+
+Architecture evidence status:
+%s
 
 Knowledge hints:
 %s
@@ -335,9 +419,11 @@ citation-validated. Validated items are the basis for any
 "likely_issue" or "confirmed_candidate" verdict.`,
 		pack.CaseID, pack.Category, pack.Priority,
 		strings.Join(pack.TargetFiles, ", "),
-		hypothesis.Title, hypothesis.SuspectedIssue, hypothesis.Confidence,
+		complete, chainCompletenessNote(pack, hypothesis, memo, complete),
+		hypothesis.Title, hypothesis.SuspectedIssue, firstNonEmptyStr(hypothesis.Classification, "(unclassified)"), hypothesis.Confidence,
 		strings.Join(hypothesis.SupportingFacts, " | "),
 		taggedJoin(hypothesis.UntypedFacts, "[unanchored]"),
+		independent.IssuePresent, independent.Reasoning, strings.Join(orNone(challenge.KeyDifferences), " | "),
 		challenge.Exploitability, challenge.ReviewerStance,
 		strings.Join(challenge.CounterArguments, " | "),
 		memo.Status,
@@ -345,7 +431,12 @@ citation-validated. Validated items are the basis for any
 		strings.Join(memo.Contradictions, " | "),
 		taggedJoin(memo.UntypedConfirmedFacts, "[unanchored]"),
 		taggedJoin(memo.UntypedContradictions, "[unanchored]"),
+		formatEvidenceDistinctionsForLLM(memo.EvidenceDistinctions),
+		formatInvariantUpdatesForLLM(memo.InvariantUpdates),
+		taggedJoin(renderAnchoredToolFacts(caseCtx), "-"),
+		taggedJoin(renderArchitectureEvidenceStatus(caseCtx.archModel), "-"),
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))
+	systemPrompt = fmt.Sprintf(systemPrompt, complete)
 
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
@@ -395,6 +486,7 @@ citation-validated. Validated items are the basis for any
 			for _, u := range memo.UntypedContradictions {
 				evidence = append(evidence, "[unanchored verifier contradict] "+u)
 			}
+			sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
 			item := artifacts.FindingItem{
 				FindingID:  pack.CaseID,
 				SliceID:    pack.CaseID,
@@ -404,10 +496,23 @@ citation-validated. Validated items are the basis for any
 				Files:      pack.TargetFiles,
 				Summary:    parsed.Summary,
 				Evidence:   evidence,
+				Sections:   &sections,
 			}
+			// §25 mechanical gate applies to the LLM path too: a
+			// model that ignores the prompt's CRITICAL RULE and
+			// writes "confirmed_candidate"/"confirmed vulnerability"
+			// anyway still gets rewritten here.
+			item = sanitizeFindingItem(item, complete)
+
 			packet := parsed.ReviewPacketMarkdown
 			if packet == "" {
-				packet = buildPacket(pack, hypothesis, challenge, memo, item)
+				packet = buildPacket(pack, hypothesis, challenge, memo, item, sections)
+			} else if !complete {
+				// Same mechanical scrub as the structured fields —
+				// applied to the LLM's own free-text packet so a
+				// model that ignored the CRITICAL RULE cannot smuggle
+				// the forbidden phrase through the markdown field.
+				packet = scrubConfirmedWording(packet)
 			}
 			return item, packet, nil
 		}
@@ -433,6 +538,7 @@ citation-validated. Validated items are the basis for any
 		messages = append(messages, llm.Message{Role: "user", Content: followUp})
 	}
 
+	sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
 	item := artifacts.FindingItem{
 		FindingID:  pack.CaseID,
 		SliceID:    pack.CaseID,
@@ -441,8 +547,31 @@ citation-validated. Validated items are the basis for any
 		Confidence: "low",
 		Files:      pack.TargetFiles,
 		Summary:    "Reached maximum dialog rounds without final arbiter judgment",
+		Sections:   &sections,
 	}
-	return item, buildPacket(pack, hypothesis, challenge, memo, item), nil
+	return item, buildPacket(pack, hypothesis, challenge, memo, item, sections), nil
+}
+
+func formatEvidenceDistinctionsForLLM(notes []artifacts.EvidenceDistinctionNote) string {
+	if len(notes) == 0 {
+		return "  (none)"
+	}
+	var lines []string
+	for _, n := range notes {
+		lines = append(lines, fmt.Sprintf("  - [%s] %s (%s)", n.Outcome, n.Claim, n.Note))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatInvariantUpdatesForLLM(updates []artifacts.InvariantStatusUpdate) string {
+	if len(updates) == 0 {
+		return "  (none)"
+	}
+	var lines []string
+	for _, u := range updates {
+		lines = append(lines, fmt.Sprintf("  - %s: %s -> %s (%s)", u.InvariantID, u.PreviousStatus, u.NewStatus, u.Reason))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatKnowledgeHintsForLLM(hints []artifacts.KnowledgeHint) string {

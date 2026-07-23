@@ -10,13 +10,16 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/arbiter"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/architecture"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/invariants"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
@@ -99,6 +102,18 @@ func Run(cfg config.Config) (runDir string, err error) {
 
 	if err := preprocessor.Run(stageCfg); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
+	}
+
+	// Project Understanding Layer (§3.4): the Architecture model and Project
+	// Invariants, derived once here and reused by the planner and agents
+	// downstream. Both handle heuristic/llm mode internally. Hard-wired for
+	// now to surface any failure loudly; container cases (empty knowledge
+	// root, a non-TEE repo) are exercised by TestPipelineHeuristic.
+	if err := architecture.Run(stageCfg); err != nil {
+		return runDir, fmt.Errorf("architecture: %w", err)
+	}
+	if err := invariants.Run(stageCfg); err != nil {
+		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
 	if strings.EqualFold(cfg.Mode, "llm") {
@@ -291,7 +306,32 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	}
 
 	client := llm.NewClient(cfg)
-	registry := actions.NewDefaultRegistryWithSinks(catalogPath)
+
+	// Wire the fact-layer action into the planner. codeql.New() resolves
+	// codeql on PATH; when it is absent (the common --facts-off / no-DB
+	// case) the handler fails closed per-call with unresolved, never a
+	// false "no vulnerability". QueryPackDir points at the checked-in cpp
+	// pack, located relative to the knowledge root's sibling — the fixed
+	// TEECheck layout puts knowledge/ and codeql/ side by side. This path
+	// is only consumed once a database is actually built (PR-09); until
+	// then no query runs, so a wrong guess degrades to unresolved, not a
+	// crash.
+	eng := codeql.New()
+	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
+	registry := actions.NewDefaultRegistryWithFacts(catalogPath, eng, queryPackDir)
+
+	// Project Understanding artifacts produced earlier in the pipeline.
+	// Read tolerantly: a run whose architecture/invariant stage produced
+	// nothing still plans, just without that prior knowledge (nil model,
+	// empty invariants) — the planner degrades rather than failing.
+	var archPtr *artifacts.ArchitectureModel
+	var archModel artifacts.ArchitectureModel
+	if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &archModel); err == nil {
+		archPtr = &archModel
+	}
+	var invs []artifacts.ProjectInvariant
+	_ = runfs.ReadJSON(runfs.ProjectInvariantsPath(runDir), &invs)
+	tweText, _ := os.ReadFile(runfs.TWEAgentContextPath(runDir))
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 	fmt.Printf("Catalog: %s\n", catalogPath)
@@ -331,6 +371,12 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 			Blobs:         blobs,
 			Model:         cfg.LLMModel,
 			Executor:      exec,
+			// Project Understanding prior knowledge (§7.5): the planner
+			// investigates against these, and reaches the fact layer via
+			// the fact_layer_query action registered above.
+			TWEContext:   string(tweText),
+			Architecture: archPtr,
+			Invariants:   invs,
 		})
 
 		if result.Bundle != nil {
