@@ -69,7 +69,8 @@ func TestBuildPacket_SurfacesUntypedSections(t *testing.T) {
 		UntypedContradictions:  []string{"legacy-contradict-text"},
 	}
 	item := artifacts.FindingItem{Status: "needs_review", Confidence: "low"}
-	body := buildPacket(pack, h, c, m, item)
+	sections := buildSections(pack, h, c, m, caseContext{}, artifacts.ChallengerIndependentView{})
+	body := buildPacket(pack, h, c, m, item, sections)
 
 	for _, want := range []string{
 		"Unanchored context",
