@@ -109,7 +109,7 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 	fact.Status = StatusSuccess
 	fact.Locations = toolLocations(results)
 	fact.ArtifactRef = filepath.ToSlash(relDB)
-	fact.CoverageGaps = coverageGaps(reused)
+	fact.CoverageGaps = coverageGaps(reused, isLLMFactTable(req.Repository))
 	return fact, nil
 }
 
@@ -203,9 +203,13 @@ func toolLocations(results []codeql.Result) []artifacts.ToolLocation {
 // coverageGaps records this slice's known, disclosed limitations (§6.5: the
 // fact layer proves what it modeled, and must say what it did not) rather
 // than letting a consumer assume the modeled scope is complete.
-func coverageGaps(dbReused bool) []string {
+func coverageGaps(dbReused, llmSourced bool) []string {
+	factTableGap := "fact table is a deterministic hand-authored fixture (§23.2 first slice); no LLM annotation was registered for this repository"
+	if llmSourced {
+		factTableGap = "fact table was produced by the LLM annotation -> resolver pipeline (annotate.go/resolver.go); unresolved annotations were dropped before this run, see the AnnotationReport from that call for what was rejected"
+	}
 	gaps := []string{
-		"fact table is a deterministic hand-authored fixture (§23.2); the LLM annotation -> resolver pipeline is not built yet",
+		factTableGap,
 		"only the STATE/rollback family (TWE-STATE-001) is implemented; the other six TWE families are unsupported",
 		"database built with --build-mode=none: macro/#ifdef branches resolve to source defaults, not a real build (§23.5)",
 		"finding locations do not include a resolved symbol name (SARIF related-location parsing not implemented)",

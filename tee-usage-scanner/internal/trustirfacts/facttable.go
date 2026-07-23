@@ -159,12 +159,29 @@ var knownFactTables = map[string]FactTable{
 	},
 }
 
-// factTableFor looks up the deterministic fixture for a repository. ok is
-// false when this slice has no fact table for the repository — Run maps
-// that to StatusUnsupported.
+// factTableFor looks up the fact table for a repository: an LLM-annotated
+// table registered via SetFactTable (factsource.go) takes priority, falling
+// through to the deterministic knownFactTables fixture when none is
+// registered. ok is false when neither source has a table for the
+// repository — Run maps that to StatusUnsupported. See factsource.go's doc
+// comment for why the LLM and deterministic paths are wired this way
+// instead of as a parameter on Run.
 func factTableFor(repository string) (FactTable, bool) {
-	t, ok := knownFactTables[normalizeRepo(repository)]
+	key := normalizeRepo(repository)
+	if t, ok := lookupLLMFactTable(key); ok {
+		return t, true
+	}
+	t, ok := knownFactTables[key]
 	return t, ok
+}
+
+// isLLMFactTable reports whether repository's table (if any) came from the
+// LLM annotation pipeline rather than the deterministic fixture. Run uses
+// this only to disclose provenance in ToolFact.CoverageGaps — it plays no
+// part in factTableFor's own lookup order above.
+func isLLMFactTable(repository string) bool {
+	_, ok := lookupLLMFactTable(normalizeRepo(repository))
+	return ok
 }
 
 // normalizeRepo collapses scheme, trailing slash, and ".git" suffix
