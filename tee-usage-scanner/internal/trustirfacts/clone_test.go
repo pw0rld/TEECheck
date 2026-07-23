@@ -82,3 +82,29 @@ func trimNewline(s string) string {
 	}
 	return s
 }
+
+// TestCloneAtRevision_RejectsArgvSmuggling proves the argv-flag-smuggling and
+// ext::-transport guards fire before git is ever invoked, and that they don't
+// touch the filesystem (no clone attempted).
+func TestCloneAtRevision_RejectsArgvSmuggling(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "checkout")
+	cases := []struct {
+		name, repo, rev string
+	}{
+		{"repo flag", "--upload-pack=touch /tmp/pwned", "HEAD"},
+		{"revision flag", "/tmp/origin", "--orphan"},
+		{"ext transport", "ext::sh -c touch% /tmp/pwned", "HEAD"},
+		{"ext transport uppercase", "EXT::sh -c :", "HEAD"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := cloneAtRevision(context.Background(), c.repo, c.rev, dest)
+			if err == nil {
+				t.Fatalf("expected rejection of repo=%q rev=%q", c.repo, c.rev)
+			}
+			if _, statErr := os.Stat(dest); statErr == nil {
+				t.Fatalf("dest was created despite rejection — git ran")
+			}
+		})
+	}
+}
