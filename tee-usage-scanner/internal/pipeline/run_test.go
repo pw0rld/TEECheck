@@ -42,6 +42,12 @@ func TestPipelineHeuristic(t *testing.T) {
 
 	for _, path := range []string{
 		runfs.ProjectProfilePath(runDir),
+		// The Project Understanding Layer is now wired into the main
+		// pipeline (not just callable in isolation): a run must produce
+		// the architecture model and project invariants between
+		// preprocess and the scanner/planner stages.
+		runfs.ArchitectureModelPath(runDir),
+		runfs.ProjectInvariantsPath(runDir),
 		runfs.GraphPath(runDir),
 		runfs.ArbiterFindingsPath(runDir),
 	} {
