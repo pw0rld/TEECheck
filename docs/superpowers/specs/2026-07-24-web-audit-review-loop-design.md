@@ -94,6 +94,16 @@
 - **文件（source of truth，不变）**：ProjectProfile、ArchitectureModel、ProjectInvariants、ToolFact、CasePack、Finding v3 —— 不可变、可 replay 的证据链（events + content-addressed blob）。**不进 DB。**
 - **SQLite（工作流 + 索引面，新增，可选）**：任务状态、finding 复核状态、review 线程、finding 索引。存的是**指针 + 可变工作流状态**。
 
+**格式澄清**：Finding v3 是 **typed JSON**（schema 校验，延续现有 `teecheck.findings.v2` 的 `Findings{ []FindingItem }` 结构），**不是 markdown**。markdown 只在展示层出现（`review/` 四块渲染、web 页面）；SoT 永远是 JSON。
+
+**拟态映射**（把"issue/PR/commit"落到真实数据）：
+
+| 语义 | 真实载体 | 位置 |
+|---|---|---|
+| issue / PR | Finding v3（JSON）+ `findings_index` 一行状态 | `runs/<id>/` 文件 + DB |
+| commit | `review_thread` 一行（只 INSERT） | DB |
+| PR 对话线程 | 该 finding 的 `review_thread` 行按 `round` 排序 | DB |
+
 ### 5.2 三张表
 
 **`jobs`** — 后台任务
@@ -126,13 +136,18 @@
 | `finding_id` | text fk | |
 | `round` | int | 第几回合 |
 | `author` | text | `human` / `agent` |
-| `kind` | text | `revision` / `verdict` / `comment` |
-| `verdict` | text null | `accept` / `reject` / `needs_work`（仅 human verdict 条目） |
-| `body` | text | 评论 或 revision 摘要 |
+| `kind` | text | `revision`（agent 迭代）/ `verdict`（人评审）/ `comment`（纯评论不带裁决，可选） |
+| `verdict` | text null | `accept` / `reject` / `needs_work`（仅 `kind=verdict` 条目） |
+| `body` | text | 人的自由评论 或 agent 的 revision 摘要 |
 | `artifact_ref` | text null | 该 revision 落地文件 |
 | `created_at` | ts | |
 
-**三层纪律**：`review_thread` **只增不改**（无 UPDATE/DELETE）；ToolFact 不进 DB、不可改写；`agent_revision` = AgentAssessment，`human verdict/comment` = HumanVerdict（追加）。
+**行语义（一次提交 = 一行）**：
+- 一次**人评审提交** = 一行 `author=human, kind=verdict`，裁决在 `verdict`、自由评论在 `body`（**不是** verdict 一行 + comment 一行）。
+- 一次 **agent 迭代** = 一行 `author=agent, kind=revision`，摘要在 `body`、落地文件在 `artifact_ref`。
+- 一个 finding 的整条线程按 `round` 排开即"PR 对话"：`agent revision(0) → human verdict(1) → agent revision(2) → human accept(3)`。
+
+**三层纪律**：`review_thread` **只增不改**（无 UPDATE/DELETE）；ToolFact 不进 DB、不可改写；`agent revision` = AgentAssessment，`human verdict/comment` = HumanVerdict（追加）。
 
 ---
 
