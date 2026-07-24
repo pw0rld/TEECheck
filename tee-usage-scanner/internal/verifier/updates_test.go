@@ -235,7 +235,7 @@ func TestVerifierRun_NeverRewritesToolFact(t *testing.T) {
 func TestComputeEvidenceDistinctions_ExhaustiveToolFactIsProvenAbsent(t *testing.T) {
 	ctx := caseContext{
 		toolFacts: []artifacts.ToolFact{
-			{FactID: "fact-1", Tool: "trustir", Operation: "reverse_trace", Status: "ok", Truncated: false, CoverageGaps: nil, Locations: nil},
+			{FactID: "fact-1", Tool: "trustir", Operation: "reverse_trace", Status: "success", Truncated: false, CoverageGaps: nil, Locations: nil},
 		},
 	}
 	notes := computeEvidenceDistinctions(ctx, false, nil)
@@ -247,8 +247,8 @@ func TestComputeEvidenceDistinctions_ExhaustiveToolFactIsProvenAbsent(t *testing
 func TestComputeEvidenceDistinctions_TruncatedOrGappyIsNotFound(t *testing.T) {
 	ctx := caseContext{
 		toolFacts: []artifacts.ToolFact{
-			{FactID: "fact-truncated", Status: "ok", Truncated: true},
-			{FactID: "fact-gaps", Status: "ok", CoverageGaps: []string{"only scanned 3 of 8 call sites"}},
+			{FactID: "fact-truncated", Status: "success", Truncated: true},
+			{FactID: "fact-gaps", Status: "success", CoverageGaps: []string{"only scanned 3 of 8 call sites"}},
 			{FactID: "fact-error", Status: "error"},
 		},
 	}
@@ -273,7 +273,7 @@ func TestComputeEvidenceDistinctions_GrepOnlySearchIsNotFound(t *testing.T) {
 func TestComputeEvidenceDistinctions_ToolFactWithLocationsSkipped(t *testing.T) {
 	ctx := caseContext{
 		toolFacts: []artifacts.ToolFact{
-			{FactID: "fact-found", Status: "ok", Locations: []artifacts.ToolLocation{{Path: "x.c", StartLine: 1}}},
+			{FactID: "fact-found", Status: "success", Locations: []artifacts.ToolLocation{{Path: "x.c", StartLine: 1}}},
 		},
 	}
 	notes := computeEvidenceDistinctions(ctx, false, nil)

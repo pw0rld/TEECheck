@@ -111,18 +111,18 @@ func computeEvidenceDistinctions(caseCtx caseContext, ranStaticSearch bool, scFi
 			continue
 		}
 		claim := fmt.Sprintf("tool fact %s (%s/%s) reported no matching locations", f.FactID, f.Tool, f.Operation)
-		exhaustive := f.Status == "ok" && !f.Truncated && len(f.CoverageGaps) == 0
+		exhaustive := f.Status == "success" && !f.Truncated && len(f.CoverageGaps) == 0
 		if exhaustive {
 			notes = append(notes, artifacts.EvidenceDistinctionNote{
 				Claim: claim, Outcome: artifacts.EvidenceProvenAbsent,
-				Note: "tool query completed (status ok, not truncated, no coverage gaps) and found zero matches",
+				Note: "tool query completed (status success, not truncated, no coverage gaps) and found zero matches",
 			})
 			continue
 		}
 		reason := "tool query did not complete exhaustively"
 		switch {
-		case f.Status != "ok":
-			reason = fmt.Sprintf("tool status=%q, not a completed ok result", f.Status)
+		case f.Status != "success":
+			reason = fmt.Sprintf("tool status=%q, not a completed success result", f.Status)
 		case f.Truncated:
 			reason = "tool result was truncated"
 		case len(f.CoverageGaps) > 0:
