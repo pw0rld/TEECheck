@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -31,7 +30,7 @@ const schemaVersionProjectInvariantsCollection = "teecheck.project_invariants.v1
 // individually (project-invariant.v1.json describes a single invariant, not
 // the collection — see the doc comment on artifacts.ProjectInvariants), and
 // persists the collection.
-func Run(cfg config.Config) error {
+func Run(cfg config.Config, client llm.Client) error {
 	manifest, err := runfs.LoadManifest(cfg.RunDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -52,13 +51,8 @@ func Run(cfg config.Config) error {
 		tweContext = string(data)
 	}
 
-	var client llm.Client
-	if strings.EqualFold(cfg.Mode, "llm") {
-		client = llm.NewClient(cfg)
-	}
-
 	in := Input{RunID: manifest.RunID, Model: model, Profile: profile, TWEContext: tweContext}
-	built, err := Build(context.Background(), client, cfg.Mode, in, cfg.LLMTemp)
+	built, err := BuildLLM(context.Background(), client, in, cfg.LLMTemp)
 	if err != nil {
 		return fmt.Errorf("build invariants: %w", err)
 	}

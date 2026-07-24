@@ -116,7 +116,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 	if err := architecture.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
-	if err := invariants.Run(stageCfg); err != nil {
+	if err := invariants.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 

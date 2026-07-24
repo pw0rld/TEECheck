@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -19,15 +18,6 @@ type Input struct {
 	Model      artifacts.ArchitectureModel
 	Profile    artifacts.ProjectProfileV2
 	TWEContext string
-}
-
-// Build dispatches to the LLM or heuristic path, matching the
-// heuristic|llm convention the rest of the pipeline uses.
-func Build(ctx context.Context, client llm.Client, mode string, in Input, temperature float64) ([]artifacts.ProjectInvariant, error) {
-	if strings.EqualFold(mode, "llm") {
-		return BuildLLM(ctx, client, in, temperature)
-	}
-	return BuildHeuristic(in), nil
 }
 
 // wireInvariant is the LLM's response shape for one invariant. It omits
@@ -101,18 +91,6 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 		})
 	}
 	return out, nil
-}
-
-// BuildHeuristic is the non-LLM fallback. Instantiating a general TWE
-// scenario into a project-specific obligation (§7.4's actual job) requires
-// reading and reasoning about the architecture model's specific
-// parties/assets/boundaries — that is exactly the step an LLM-free pass
-// cannot do. Rather than fabricate a generic, unfounded invariant per TWE
-// (which would defeat the entire "project-specific" point of this agent),
-// the heuristic path is intentionally a no-op: it returns no invariants
-// when there is no LLM to do the instantiation.
-func BuildHeuristic(in Input) []artifacts.ProjectInvariant {
-	return nil
 }
 
 func truncateForError(value string, n int) string {
