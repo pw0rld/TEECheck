@@ -37,7 +37,11 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
-func Run(cfg config.Config) (runDir string, err error) {
+func Run(cfg config.Config) (string, error) {
+	return RunWithClient(cfg, llm.NewClient(cfg))
+}
+
+func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err error) {
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -110,9 +114,10 @@ func Run(cfg config.Config) (runDir string, err error) {
 	// container cases (empty knowledge root, a non-TEE repo) are exercised
 	// by TestPipelineHeuristic.
 	//
-	// client is constructed once here and reused by later agent stages
-	// (invariants/expert/... ) rather than each stage constructing its own.
-	client := llm.NewClient(cfg)
+	// client is the injected llm.Client, reused by every agent stage
+	// (architecture/invariants/expert/... ) rather than each stage
+	// constructing its own. Run() supplies the production client via
+	// RunWithClient; tests inject a fake.
 	if err := architecture.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
@@ -129,7 +134,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 		// events, so all subprocess tool_call_* events land in the
 		// same events.jsonl with the same correlation ids.
 		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
-		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
+		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
 		if err := cases.Run(stageCfg); err != nil {
@@ -272,7 +277,7 @@ func truncate(s string, n int) string {
 // Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
+func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	var profile artifacts.ProjectProfile
 	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
 		return fmt.Errorf("load profile: %w", err)
@@ -282,8 +287,6 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-
-	client := llm.NewClient(cfg)
 
 	// Wire the fact-layer action into the planner. codeql.New() resolves
 	// codeql on PATH; when it is absent (the common --facts-off / no-DB
