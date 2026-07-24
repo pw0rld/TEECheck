@@ -295,11 +295,6 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 		return fmt.Errorf("load profile: %w", err)
 	}
 
-	catalogPath := filepath.Join(cfg.KnowledgeRoot, "sinks", "rust.json")
-	if _, err := os.Stat(catalogPath); err != nil {
-		return fmt.Errorf("sink catalog not found at %s: %w", catalogPath, err)
-	}
-
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -318,7 +313,7 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	// crash.
 	eng := codeql.New()
 	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
-	registry := actions.NewDefaultRegistryWithFacts(catalogPath, eng, queryPackDir)
+	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir)
 
 	// Project Understanding artifacts produced earlier in the pipeline.
 	// Read tolerantly: a run whose architecture/invariant stage produced
@@ -333,7 +328,6 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	tweText, _ := os.ReadFile(runfs.TWEAgentContextPath(runDir))
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
-	fmt.Printf("Catalog: %s\n", catalogPath)
 
 	samples := cfg.Samples
 	if samples <= 0 {
