@@ -173,7 +173,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 	// carry the correct semantic label, which downstream consumers
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
-	if err := expert.RunWithEvents(stageCfg, rec, blobs); err != nil {
+	if err := expert.RunWithEvents(stageCfg, client, rec, blobs); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
 

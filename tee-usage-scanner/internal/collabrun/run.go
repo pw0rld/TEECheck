@@ -47,7 +47,8 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 	}
 
 	stageCfg.AgentID = "expert-001"
-	if err := expert.Run(stageCfg); err != nil {
+	client := llm.NewClient(stageCfg)
+	if err := expert.Run(stageCfg, client); err != nil {
 		return "", fmt.Errorf("expert: %w", err)
 	}
 

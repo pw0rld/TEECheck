@@ -71,7 +71,8 @@ func main() {
 	case "cases":
 		err = cases.Run(cfg)
 	case "expert":
-		err = expert.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = expert.Run(cfg, client)
 	case "challenge":
 		err = challenger.Run(cfg)
 	case "verifier":
