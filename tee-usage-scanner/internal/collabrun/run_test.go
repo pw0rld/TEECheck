@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/feedback"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
@@ -108,14 +110,20 @@ func TestReviewAndFeedbackFlow(t *testing.T) {
 		t.Fatalf("review-001.json not found: %v", err)
 	}
 
-	// Run feedback
+	// Run feedback (curator LLM synthesizes the archive content)
 	var fbOutput bytes.Buffer
 	fbCfg := config.Config{
 		Command:       "feedback",
 		RunDir:        runDir,
 		KnowledgeRoot: knowledgeRoot,
 	}
-	if err := feedback.Run(fbCfg, &fbOutput); err != nil {
+	curatorJSON := `{
+		"archive_content": "# case-001\n\n**Verdict**: confirmed\n**Notes**: Looks legit\n",
+		"wiki_updates": [],
+		"queries": []
+	}`
+	client := &llmtest.FakeClient{Responses: []string{curatorJSON}}
+	if err := feedback.RunWithBus(fbCfg, client, &fbOutput, agentbus.New(0)); err != nil {
 		t.Fatalf("feedback failed: %v", err)
 	}
 

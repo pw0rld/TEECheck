@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
@@ -86,18 +85,13 @@ func main() {
 		err = arbiter.RunWithBus(cfg, client, bus)
 	case "review":
 		err = review.Run(cfg)
-	case "feedback":
-		err = feedback.Run(cfg, os.Stdout)
-	case "curator":
-		if strings.EqualFold(cfg.CuratorMode, "llm") {
-			client := llm.NewClient(cfg)
-			bus := buildCuratorBus(cfg, client)
-			err = feedback.RunWithBus(cfg, os.Stdout, bus)
-		} else {
-			err = feedback.Run(cfg, os.Stdout)
-		}
+	case "feedback", "curator":
+		client := llm.NewClient(cfg)
+		bus := buildCuratorBus(cfg, client)
+		err = feedback.RunWithBus(cfg, client, os.Stdout, bus)
 	case "report":
-		err = report.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = report.Run(cfg, client)
 	case "run", "plan":
 		// Since M4 (T2.1), `plan` is a convenience alias for
 		// `run --mode llm`. config.parsePlan forces cfg.Mode = "llm"

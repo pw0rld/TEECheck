@@ -19,77 +19,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
-func Run(cfg config.Config, w io.Writer) error {
-	// Load findings to get summary information
-	var findings artifacts.Findings
-	if err := runfs.ReadJSON(runfs.ArbiterFindingsPath(cfg.RunDir), &findings); err != nil {
-		return fmt.Errorf("load findings: %w", err)
-	}
-
-	// Load review records
-	reviewRecords, err := loadReviewRecords(cfg.RunDir)
-	if err != nil {
-		return fmt.Errorf("load review records: %w", err)
-	}
-
-	if len(reviewRecords) == 0 {
-		fmt.Fprintf(w, "No review records found in %s\n", cfg.RunDir)
-		return nil
-	}
-
-	// Archive findings and collect wiki suggestions
-	var wikiSuggestions []string
-	for _, record := range reviewRecords {
-		// Find the corresponding finding
-		var finding *artifacts.FindingItem
-		for i := range findings.Findings {
-			if findings.Findings[i].FindingID == record.FindingID {
-				finding = &findings.Findings[i]
-				break
-			}
-		}
-		if finding == nil {
-			continue
-		}
-
-		// Determine category and archive. NormalizeVerdict maps
-		// the legacy strings ("confirmed", "dismissed", ...) to the
-		// Phase 1 vocabulary, so this works for both old and new
-		// review_records.jsonl files.
-		var category string
-		switch artifacts.NormalizeVerdict(record.Verdict) {
-		case artifacts.VerdictTruePositive:
-			category = "true-positive"
-		case artifacts.VerdictFalsePositive:
-			category = "false-positive"
-		default:
-			// needs_more_context, skip, or unknown — not archived
-			continue
-		}
-
-		// Archive the finding
-		if err := archiveFinding(cfg.KnowledgeRoot, category, record, finding); err != nil {
-			fmt.Fprintf(w, "Warning: failed to archive %s: %v\n", record.FindingID, err)
-			continue
-		}
-
-		// Generate wiki suggestion
-		suggestion := generateWikiSuggestion(category, record, finding)
-		wikiSuggestions = append(wikiSuggestions, suggestion)
-	}
-
-	// Write wiki suggestions
-	if len(wikiSuggestions) > 0 {
-		fmt.Fprintf(w, "\n=== Wiki Suggestions ===\n")
-		for i, sugg := range wikiSuggestions {
-			fmt.Fprintf(w, "\n[%d] %s\n", i+1, sugg)
-		}
-		fmt.Fprintf(w, "\nAppended %d wiki suggestions to knowledge base.\n", len(wikiSuggestions))
-	}
-
-	return nil
-}
-
 func loadReviewRecords(runDir string) ([]artifacts.ReviewRecord, error) {
 	jsonlPath := runfs.ReviewRecordsPath(runDir)
 	f, err := os.Open(jsonlPath)
@@ -147,31 +76,7 @@ func formatArchiveContent(record artifacts.ReviewRecord, finding *artifacts.Find
 	return content
 }
 
-func generateWikiSuggestion(category string, record artifacts.ReviewRecord, finding *artifacts.FindingItem) string {
-	var prefix string
-	if category == "true-positive" {
-		prefix = "TP"
-	} else {
-		prefix = "FP"
-	}
-
-	suggestion := fmt.Sprintf(
-		"[%s] %s: %s (severity: %s, tags: %v)",
-		prefix,
-		record.FindingID,
-		finding.Summary,
-		record.Severity,
-		record.Tags,
-	)
-
-	if record.Notes != "" {
-		suggestion += fmt.Sprintf(" - %s", record.Notes)
-	}
-
-	return suggestion
-}
-
-func RunWithBus(cfg config.Config, w io.Writer, bus *agentbus.Bus) error {
+func RunWithBus(cfg config.Config, client llm.Client, w io.Writer, bus *agentbus.Bus) error {
 	records, err := loadReviewRecords(cfg.RunDir)
 	if err != nil {
 		return fmt.Errorf("load review records: %w", err)
@@ -188,8 +93,6 @@ func RunWithBus(cfg config.Config, w io.Writer, bus *agentbus.Bus) error {
 			findingsMap[f.FindingID] = f
 		}
 	}
-
-	client := llm.NewClient(cfg)
 
 	pages, _ := knowledge.LoadPages(cfg.KnowledgeRoot)
 	pageSummary := formatPageSummaries(pages)
