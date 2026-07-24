@@ -180,68 +180,48 @@ func Run(cfg config.Config) (runDir string, err error) {
 	// === Agent 2: Reviewer ===
 	fmt.Println("\n=== Reviewer Agent ===")
 
-	needsBus := strings.EqualFold(cfg.Mode, "llm")
+	bus := buildPipelineBus(cfg, client)
 
-	if needsBus {
-		bus := buildPipelineBus(cfg, client)
+	// Bus tool registrations stay under TOOL identities; they
+	// represent capability endpoints (a static-check tool, a
+	// reviewer tool, an auditor tool), not agent roles. Other
+	// agents call into these tools via the bus by name.
+	scReg := scall.NewDefaultRegistry()
+	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
+		req := staticcheck.CheckRequest{
+			RepoRoot: fetch.LocalPath,
+			Keywords: strings.Fields(q.Question),
+		}
+		findings, runErr := scReg.RunAll(ctx, req)
+		if runErr != nil {
+			return agentbus.Response{}, runErr
+		}
+		var facts []string
+		for _, f := range findings {
+			facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
+		}
+		return agentbus.Response{
+			QueryID:   q.QueryID,
+			FromAgent: "scanner-001",
+			Answer:    fmt.Sprintf("Found %d results", len(findings)),
+			Facts:     facts,
+		}, nil
+	}))
 
-		// Bus tool registrations stay under TOOL identities; they
-		// represent capability endpoints (a static-check tool, a
-		// reviewer tool, an auditor tool), not agent roles. Other
-		// agents call into these tools via the bus by name.
-		scReg := scall.NewDefaultRegistry()
-		bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
-			req := staticcheck.CheckRequest{
-				RepoRoot: fetch.LocalPath,
-				Keywords: strings.Fields(q.Question),
-			}
-			findings, runErr := scReg.RunAll(ctx, req)
-			if runErr != nil {
-				return agentbus.Response{}, runErr
-			}
-			var facts []string
-			for _, f := range findings {
-				facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
-			}
-			return agentbus.Response{
-				QueryID:   q.QueryID,
-				FromAgent: "scanner-001",
-				Answer:    fmt.Sprintf("Found %d results", len(findings)),
-				Facts:     facts,
-			}, nil
-		}))
+	stageCfg.AgentID = "challenger-001"
+	if err := challenger.Run(stageCfg, client); err != nil {
+		return runDir, fmt.Errorf("challenger: %w", err)
+	}
+	stageCfg.AgentID = "verifier-001"
+	if err := verifier.RunWithBusAndEvents(stageCfg, client, bus, rec); err != nil {
+		return runDir, fmt.Errorf("verifier: %w", err)
+	}
 
-		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg, client); err != nil {
-			return runDir, fmt.Errorf("challenger: %w", err)
-		}
-		stageCfg.AgentID = "verifier-001"
-		if err := verifier.RunWithBusAndEvents(stageCfg, bus, rec); err != nil {
-			return runDir, fmt.Errorf("verifier: %w", err)
-		}
-
-		// === Agent 3: Auditor ===
-		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "arbiter-001"
-		if err := arbiter.RunWithBus(stageCfg, bus); err != nil {
-			return runDir, fmt.Errorf("arbiter: %w", err)
-		}
-	} else {
-		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg, client); err != nil {
-			return runDir, fmt.Errorf("challenger: %w", err)
-		}
-		stageCfg.AgentID = "verifier-001"
-		if err := verifier.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("verifier: %w", err)
-		}
-
-		// === Agent 3: Auditor ===
-		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "arbiter-001"
-		if err := arbiter.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("arbiter: %w", err)
-		}
+	// === Agent 3: Auditor ===
+	fmt.Println("\n=== Auditor Agent ===")
+	stageCfg.AgentID = "arbiter-001"
+	if err := arbiter.RunWithBus(stageCfg, client, bus); err != nil {
+		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
 
 	// Print summary

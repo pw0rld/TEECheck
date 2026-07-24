@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
@@ -134,19 +135,21 @@ func TestVerifierRun_NeverWritesProjectInvariantsFile(t *testing.T) {
 	if err := runfs.WriteJSON(filepath.Join(runfs.ExpertDir(runDir), "hypothesis-001.json"), hyp); err != nil {
 		t.Fatal(err)
 	}
-	// StaticTools "none" means buildMemo defaults to status
-	// "inconclusive" (no checks ran) — computeInvariantUpdates still
-	// maps that to "unresolved", a real change from the invariant's
-	// starting "proposed" status, so this run DOES produce an update,
-	// not a no-op.
+	// StaticTools "none" means no static checks run; the injected
+	// fake LLM returns an "inconclusive" verdict, which
+	// computeInvariantUpdates maps to "unresolved" — a real change
+	// from the invariant's starting "proposed" status, so this run
+	// DOES produce an update, not a no-op.
 	challenge := artifacts.Challenge{SchemaVersion: "teecheck.challenge.v1", CaseID: "case-001"}
 	if err := runfs.WriteJSON(filepath.Join(runfs.ChallengerDir(runDir), "challenge-001.json"), challenge); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := config.Config{RunDir: runDir, AgentID: "verifier-001", StaticTools: "none"}
-	if err := Run(cfg); err != nil {
-		t.Fatalf("Run: %v", err)
+	client := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}
+	bus := agentbus.New(0)
+	if err := RunWithBusAndEvents(cfg, client, bus, nil); err != nil {
+		t.Fatalf("RunWithBusAndEvents: %v", err)
 	}
 
 	if afterHash := hashBytes(t, invPath); afterHash != beforeHash {
@@ -216,8 +219,10 @@ func TestVerifierRun_NeverRewritesToolFact(t *testing.T) {
 	}
 
 	cfg := config.Config{RunDir: runDir, AgentID: "verifier-001", StaticTools: "none"}
-	if err := Run(cfg); err != nil {
-		t.Fatalf("Run: %v", err)
+	client := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}
+	bus := agentbus.New(0)
+	if err := RunWithBusAndEvents(cfg, client, bus, nil); err != nil {
+		t.Fatalf("RunWithBusAndEvents: %v", err)
 	}
 
 	if afterHash := hashBytes(t, factPath); afterHash != beforeHash {

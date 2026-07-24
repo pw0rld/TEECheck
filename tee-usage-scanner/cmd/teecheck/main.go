@@ -77,15 +77,13 @@ func main() {
 		client := llm.NewClient(cfg)
 		err = challenger.Run(cfg, client)
 	case "verifier":
-		if strings.EqualFold(cfg.VerifierMode, "llm") {
-			client := llm.NewClient(cfg)
-			bus := buildStandaloneBus(cfg, client)
-			err = verifier.RunWithBus(cfg, bus)
-		} else {
-			err = verifier.Run(cfg)
-		}
+		client := llm.NewClient(cfg)
+		bus := buildStandaloneBus(cfg, client)
+		err = verifier.RunWithBus(cfg, client, bus)
 	case "arbiter":
-		err = arbiter.Run(cfg)
+		client := llm.NewClient(cfg)
+		bus := buildStandaloneBus(cfg, client)
+		err = arbiter.RunWithBus(cfg, client, bus)
 	case "review":
 		err = review.Run(cfg)
 	case "feedback":

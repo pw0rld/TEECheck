@@ -57,54 +57,19 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 		return "", fmt.Errorf("challenger: %w", err)
 	}
 
-	needsBus := anyLLMMode(cfg.VerifierMode, cfg.ArbiterMode)
+	bus := buildBus(cfg, client)
 
-	if needsBus {
-		bus := buildBus(cfg, client)
+	stageCfg.AgentID = "verifier-001"
+	if err := verifier.RunWithBus(stageCfg, client, bus); err != nil {
+		return "", fmt.Errorf("verifier: %w", err)
+	}
 
-		stageCfg.AgentID = "verifier-001"
-		if strings.EqualFold(cfg.VerifierMode, "llm") {
-			if err := verifier.RunWithBus(stageCfg, bus); err != nil {
-				return "", fmt.Errorf("verifier: %w", err)
-			}
-		} else {
-			if err := verifier.Run(stageCfg); err != nil {
-				return "", fmt.Errorf("verifier: %w", err)
-			}
-		}
-
-		stageCfg.AgentID = "arbiter-001"
-		if strings.EqualFold(cfg.ArbiterMode, "llm") {
-			if err := arbiter.RunWithBus(stageCfg, bus); err != nil {
-				return "", fmt.Errorf("arbiter: %w", err)
-			}
-		} else {
-			if err := arbiter.Run(stageCfg); err != nil {
-				return "", fmt.Errorf("arbiter: %w", err)
-			}
-		}
-	} else {
-		stageCfg.AgentID = "verifier-001"
-		if err := verifier.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("verifier: %w", err)
-		}
-
-		stageCfg.AgentID = "arbiter-001"
-		if err := arbiter.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("arbiter: %w", err)
-		}
+	stageCfg.AgentID = "arbiter-001"
+	if err := arbiter.RunWithBus(stageCfg, client, bus); err != nil {
+		return "", fmt.Errorf("arbiter: %w", err)
 	}
 
 	return runDir, nil
-}
-
-func anyLLMMode(modes ...string) bool {
-	for _, m := range modes {
-		if strings.EqualFold(m, "llm") {
-			return true
-		}
-	}
-	return false
 }
 
 func buildBus(cfg config.Config, client llm.Client) *agentbus.Bus {
@@ -114,17 +79,15 @@ func buildBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	}
 	bus := agentbus.New(maxRounds)
 
-	if client != nil {
-		bus.Register("expert-001", agentbus.NewLLMHandler(client,
-			"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
-			cfg.LLMTemp))
-		bus.Register("challenger-001", agentbus.NewLLMHandler(client,
-			"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
-			cfg.LLMTemp))
-		bus.Register("verifier-001", agentbus.NewLLMHandler(client,
-			"You are the Verifier Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
-			cfg.LLMTemp))
-	}
+	bus.Register("expert-001", agentbus.NewLLMHandler(client,
+		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	bus.Register("challenger-001", agentbus.NewLLMHandler(client,
+		"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
+	bus.Register("verifier-001", agentbus.NewLLMHandler(client,
+		"You are the Verifier Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
+		cfg.LLMTemp))
 
 	reg := scall.NewDefaultRegistry()
 	bus.Register("mapper", agentbus.NewToolHandler("mapper", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
