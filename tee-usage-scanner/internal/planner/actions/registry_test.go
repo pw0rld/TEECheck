@@ -83,48 +83,24 @@ func TestRegistry_ListsRegisteredActions(t *testing.T) {
 	}
 }
 
-func TestNewDefaultRegistryWithSinks_RegistersM2Actions(t *testing.T) {
-	dir := t.TempDir()
-	catalog := filepath.Join(dir, "rust.json")
-	if err := os.WriteFile(catalog, []byte(testCatalogJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	reg := actions.NewDefaultRegistryWithSinks(catalog)
-	names := reg.Names()
-	want := map[string]bool{
-		"list_dir":            true,
-		"read_file":           true,
-		"ripgrep":             true,
-		"tree_sitter_outline": true,
-		"sink_catalog_lookup": true,
-		"done":                true,
-		"reverse_trace":       true,
-	}
+func TestNavRegistry_NoSinkAction(t *testing.T) {
+	r := actions.NewDefaultRegistryWithNav()
+	names := r.Names()
 	for _, n := range names {
-		delete(want, n)
+		if n == "sink_catalog_lookup" {
+			t.Fatalf("sink_catalog_lookup must not be registered")
+		}
 	}
-	if len(want) > 0 {
-		t.Fatalf("registry missing handlers: %v", want)
-	}
-}
-
-func TestNewDefaultRegistryWithSinks_LookupWorksEndToEnd(t *testing.T) {
-	dir := t.TempDir()
-	catalog := filepath.Join(dir, "rust.json")
-	if err := os.WriteFile(catalog, []byte(testCatalogJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	reg := actions.NewDefaultRegistryWithSinks(catalog)
-	result := reg.Run(context.Background(), actions.ActionRequest{
-		Name: "sink_catalog_lookup",
-		Args: json.RawMessage(`{"scope": "*"}`),
-	})
-	if !result.OK {
-		t.Fatalf("unexpected error: %s", result.Error)
-	}
-	if !strings.Contains(result.Output, "attestation") {
-		t.Fatalf("expected attestation in output, got: %s", result.Output)
+	want := []string{"done", "list_dir", "read_file", "reverse_trace", "ripgrep", "tree_sitter_outline"}
+	for _, w := range want {
+		found := false
+		for _, n := range names {
+			if n == w {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected action %q registered, got %v", w, names)
+		}
 	}
 }
