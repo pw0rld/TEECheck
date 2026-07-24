@@ -8,15 +8,38 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/schema"
 )
 
-// TestRun_HeuristicEndToEnd exercises the full Run(cfg) path against a
+// manifestComponentWireJSON is a minimal valid wireModel JSON response: one
+// component citing the manifest file path-only (no line range), which
+// checkEvidence accepts on existence alone for "manifest"-kind evidence (see
+// fileIsSufficientEvidence in validate.go). Both Run tests below reuse this
+// exact canned response — the difference between them is whether the cited
+// file actually exists in the test's repo checkout, which is exactly what
+// ValidateAndDowngrade is meant to catch regardless of build mode.
+const manifestComponentWireJSON = `{
+  "parties": [], "roles": [], "assets": [], "trust_zones": [], "entrypoints": [],
+  "boundaries": [], "data_flows": [], "state_lifecycles": [],
+  "trust_assumptions": [], "deployment_assumptions": [], "unknowns": [],
+  "components": [
+    {
+      "id": "component-enclave-manifest",
+      "kind": "manifest",
+      "name": "SGX enclave configuration",
+      "state": "observed",
+      "evidence": [{"kind": "manifest", "file": "enclave.config.xml"}]
+    }
+  ]
+}`
+
+// TestRun_LLMEndToEnd exercises the full Run(cfg, client) path against a
 // throwaway run dir + repo checkout: manifest -> ProjectProfileV2 read,
-// BuildHeuristic, NormalizeStates, ApplyCoverageGuards,
+// BuildLLM (via a fake client), NormalizeStates, ApplyCoverageGuards,
 // ValidateAndDowngrade, schema.Validate, and both output files written.
-func TestRun_HeuristicEndToEnd(t *testing.T) {
+func TestRun_LLMEndToEnd(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repoRoot, "enclave.config.xml"), []byte("<EnclaveConfiguration/>\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -43,8 +66,9 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, Mode: "heuristic"}
-	if err := Run(cfg); err != nil {
+	cfg := config.Config{RunDir: runDir}
+	fake := &llmtest.FakeClient{Responses: []string{manifestComponentWireJSON}}
+	if err := Run(cfg, fake); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -59,7 +83,7 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 		t.Errorf("run_id = %q", model.RunID)
 	}
 	if len(model.Components) != 1 || model.Components[0].State != artifacts.EvidenceObserved {
-		t.Fatalf("components = %+v, want the manifest promoted to an observed component (its file genuinely exists)", model.Components)
+		t.Fatalf("components = %+v, want the manifest component to stay observed (its cited file genuinely exists)", model.Components)
 	}
 
 	data, err := json.Marshal(model)
@@ -77,11 +101,14 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 	if len(dossier) == 0 {
 		t.Error("dossier is empty")
 	}
+	if len(fake.Calls) != 1 {
+		t.Errorf("expected exactly 1 LLM call, got %d", len(fake.Calls))
+	}
 }
 
-// A manifest citing a path that does NOT actually exist under the run's
+// A component citing a path that does NOT actually exist under the run's
 // repo root must be downgraded before persistence — Run must not skip the
-// citation validator for the heuristic path.
+// citation validator regardless of what the LLM returned.
 func TestRun_DowngradesFabricatedManifestCitation(t *testing.T) {
 	repoRoot := t.TempDir() // no enclave.config.xml written here
 
@@ -106,8 +133,9 @@ func TestRun_DowngradesFabricatedManifestCitation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, Mode: "heuristic"}
-	if err := Run(cfg); err != nil {
+	cfg := config.Config{RunDir: runDir}
+	fake := &llmtest.FakeClient{Responses: []string{manifestComponentWireJSON}}
+	if err := Run(cfg, fake); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

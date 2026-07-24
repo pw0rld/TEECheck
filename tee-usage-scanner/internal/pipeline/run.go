@@ -106,10 +106,14 @@ func Run(cfg config.Config) (runDir string, err error) {
 
 	// Project Understanding Layer (§3.4): the Architecture model and Project
 	// Invariants, derived once here and reused by the planner and agents
-	// downstream. Both handle heuristic/llm mode internally. Hard-wired for
-	// now to surface any failure loudly; container cases (empty knowledge
-	// root, a non-TEE repo) are exercised by TestPipelineHeuristic.
-	if err := architecture.Run(stageCfg); err != nil {
+	// downstream. Hard-wired for now to surface any failure loudly;
+	// container cases (empty knowledge root, a non-TEE repo) are exercised
+	// by TestPipelineHeuristic.
+	//
+	// client is constructed once here and reused by later agent stages
+	// (invariants/expert/... ) rather than each stage constructing its own.
+	client := llm.NewClient(cfg)
+	if err := architecture.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
 	if err := invariants.Run(stageCfg); err != nil {

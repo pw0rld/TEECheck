@@ -189,9 +189,10 @@ func downgradeTarget(hasDependencies bool) artifacts.EvidenceState {
 // for relations, which have no Name-shaped fallback.
 //
 // Evidence with StartLine < 1 is treated as a path-only claim ("this file
-// exists"), not a byte-range claim, and is checked for existence only — see
-// BuildHeuristic's doc comment for why the heuristic path relies on this
-// for manifest evidence. Evidence with an ArtifactRef and no File points at
+// exists"), not a byte-range claim, and is checked for existence only —
+// this is how manifest evidence ("this EDL/Gramine/TA manifest file exists
+// at this path") validates on its bare existence. Evidence with an
+// ArtifactRef and no File points at
 // a persisted tool result, not source bytes; that is PR-05's fact-layer
 // integrity to check, not this validator's, so it is accepted here without
 // a file check.
