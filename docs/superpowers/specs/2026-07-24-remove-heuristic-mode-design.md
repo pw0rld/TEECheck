@@ -75,13 +75,12 @@
 - 删除 `config.Config` 的 `ExpertMode` / `ChallengeMode` / `VerifierMode` / `ArbiterMode` / `CuratorMode` 字段及其默认赋值（`config.go:107-111, 301, 336, 371, 408, 445`）与 `Mode==llm` 翻转块（`config.go:616-621`）。
 - `Mode` 字段：report 的 `-mode llm|heuristic`（synthesized|concatenated）删除 heuristic 语义。运行/扫描的 `-mode`（`config.go:492, 562`）删除或恒为 llm。实现时确认 `Mode` 是否还有非-heuristic 用途（如 pipeline 的 llm-vs-legacy-scanner 分支 `run.go:119` 用 `Mode==llm`）——**注意**：pipeline 的 `Mode` 还用于选 L3 planner vs legacy scanner，这与 heuristic 无关，**保留**；只删 heuristic 这一取值语义。
 
-### 4.5 TestPipelineHeuristic 的去留（★需你确认）
-`pipeline/run_test.go` 的 `TestPipelineHeuristic` 是"不带 LLM 跑整条流水线"的 smoke 测试，靠 heuristic 模式实现。删 heuristic 后二选一：
+### 4.5 TestPipelineHeuristic → 注入假 client 的端到端 smoke（已定：甲）
+`pipeline/run_test.go` 的 `TestPipelineHeuristic` 是"不带 LLM 跑整条流水线"的 smoke 测试，靠 heuristic 模式实现。**结论：保留，改为注入假 client。**
 
-- **(甲，推荐)保留为注入-假-client 的端到端 smoke**：`pipeline.Run` 增加可注入 client 的接缝（或 `Run` 收一个 client），测试传一个对每个阶段返回"够用的"写死回答的 fakeClient。保住端到端"管道接通"覆盖。代价：假 client 要为多个阶段准备写死回答，fixture 较重、略脆。
-- **(乙)删除该测试**：产品端到端真跑靠真 LLM；各阶段逻辑已由 per-package 注入-fake 测试覆盖。丢掉无-LLM 端到端 smoke。
-
-**推荐甲**（保住端到端覆盖），但 fixture 成本更高——请你定。
+- `pipeline.Run` 增加可注入 client 的接缝：新增 `pipeline.RunWithClient(cfg, client llm.Client)`（或等价形态），`Run(cfg)` 内部 `RunWithClient(cfg, llm.NewClient(cfg))`——生产不变，测试走可注入入口。
+- 测试传一个对各阶段返回"够用的"写死回答的 `fakeClient`，改名 `TestPipelineEndToEnd_FakeClient`（不再叫 heuristic）。
+- 保住端到端"管道接通"覆盖。假 client 需为多个阶段准备写死回答（fixture 较重）——接受此成本。
 
 ---
 
@@ -105,6 +104,5 @@
 
 ## 7. 待实现阶段决定的细节
 - §3.3 各文件是否真有 heuristic 逻辑分支（vs 纯注释/字符串）。
-- §4.5 甲/乙结论。
 - 假 client 的放置：每包各自定义，还是抽一个共享的 `internal/llm/llmtest` 测试辅助包（若多包需要相似 fake，共享更 DRY）。
 - `Mode` 字段最终形态（report 的 synthesized-only；run/scan 的 `-mode` 是否保留为 llm-vs-legacy 语义）。
