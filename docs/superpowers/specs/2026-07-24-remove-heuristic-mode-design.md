@@ -80,7 +80,13 @@
 
 - `pipeline.Run` 增加可注入 client 的接缝：新增 `pipeline.RunWithClient(cfg, client llm.Client)`（或等价形态），`Run(cfg)` 内部 `RunWithClient(cfg, llm.NewClient(cfg))`——生产不变，测试走可注入入口。
 - 测试传一个对各阶段返回"够用的"写死回答的 `fakeClient`，改名 `TestPipelineEndToEnd_FakeClient`（不再叫 heuristic）。
+- **该测试用 `Mode="llm"`**——跑真实生产路径（L3 Planner + bus agents），只是 client 是假的。不测 legacy scanner 分支（PR-10 待退役）。
 - 保住端到端"管道接通"覆盖。假 client 需为多个阶段准备写死回答（fixture 较重）——接受此成本。
+
+### 4.6 heuristic 与 legacy-scanner 分支的解耦
+现状：`TestPipelineHeuristic` 靠 `Mode="heuristic"` 走 else 分支（legacy scanner）+ 各 agent 的 heuristic 子模式。删 heuristic 后：
+- agent 阶段（architecture/invariants/expert/challenger/verifier/arbiter）在**两个分支下都接收注入的 client**、恒走 llm——不管 pipeline 走 L3 还是 legacy scanner。
+- `Mode=="llm"` 这个门仅作 **L3-Planner vs legacy-scanner** 选择器**保留**（与 heuristic 无关）。legacy 分支保留、能编译（其 agent 也接注入 client），但不为它单独写测试。
 
 ---
 
