@@ -183,7 +183,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 	needsBus := strings.EqualFold(cfg.Mode, "llm")
 
 	if needsBus {
-		bus := buildPipelineBus(cfg)
+		bus := buildPipelineBus(cfg, client)
 
 		// Bus tool registrations stay under TOOL identities; they
 		// represent capability endpoints (a static-check tool, a
@@ -256,14 +256,13 @@ func Run(cfg config.Config) (runDir string, err error) {
 	return runDir, nil
 }
 
-func buildPipelineBus(cfg config.Config) *agentbus.Bus {
+func buildPipelineBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
 
-	client := llm.NewClient(cfg)
 	bus.Register("expert-001", agentbus.NewLLMHandler(client,
 		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))

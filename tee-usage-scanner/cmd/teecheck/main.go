@@ -78,7 +78,8 @@ func main() {
 		err = challenger.Run(cfg, client)
 	case "verifier":
 		if strings.EqualFold(cfg.VerifierMode, "llm") {
-			bus := buildStandaloneBus(cfg)
+			client := llm.NewClient(cfg)
+			bus := buildStandaloneBus(cfg, client)
 			err = verifier.RunWithBus(cfg, bus)
 		} else {
 			err = verifier.Run(cfg)
@@ -91,7 +92,8 @@ func main() {
 		err = feedback.Run(cfg, os.Stdout)
 	case "curator":
 		if strings.EqualFold(cfg.CuratorMode, "llm") {
-			bus := buildCuratorBus(cfg)
+			client := llm.NewClient(cfg)
+			bus := buildCuratorBus(cfg, client)
 			err = feedback.RunWithBus(cfg, os.Stdout, bus)
 		} else {
 			err = feedback.Run(cfg, os.Stdout)
@@ -121,8 +123,7 @@ func main() {
 // buildStandaloneBus builds a bus for the standalone verifier/arbiter
 // subcommands. Mirrors the one in internal/pipeline/run.go but lives
 // here so the subcommand dispatch in this file can stay self-contained.
-func buildStandaloneBus(cfg config.Config) *agentbus.Bus {
-	client := llm.NewClient(cfg)
+func buildStandaloneBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
@@ -140,8 +141,7 @@ func buildStandaloneBus(cfg config.Config) *agentbus.Bus {
 	return bus
 }
 
-func buildCuratorBus(cfg config.Config) *agentbus.Bus {
-	client := llm.NewClient(cfg)
+func buildCuratorBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3

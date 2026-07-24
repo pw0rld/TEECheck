@@ -60,7 +60,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 	needsBus := anyLLMMode(cfg.VerifierMode, cfg.ArbiterMode)
 
 	if needsBus {
-		bus := buildBus(cfg)
+		bus := buildBus(cfg, client)
 
 		stageCfg.AgentID = "verifier-001"
 		if strings.EqualFold(cfg.VerifierMode, "llm") {
@@ -107,17 +107,12 @@ func anyLLMMode(modes ...string) bool {
 	return false
 }
 
-func buildBus(cfg config.Config) *agentbus.Bus {
+func buildBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
-
-	var client llm.Client
-	if anyLLMMode(cfg.VerifierMode, cfg.ArbiterMode, cfg.CuratorMode) {
-		client = llm.NewClient(cfg)
-	}
 
 	if client != nil {
 		bus.Register("expert-001", agentbus.NewLLMHandler(client,
