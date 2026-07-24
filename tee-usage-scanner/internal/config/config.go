@@ -516,7 +516,7 @@ func parseRun(args []string) (Config, error) {
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:         1,
 	}
-	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Pipeline mode: legacy scanner (default) or llm (L3 planner)")
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Pipeline mode: llm / L3 planner (default) or legacy scanner")
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
