@@ -248,9 +248,10 @@ func bucketAdd(m map[string]ReviewBucketAgg, key, verdict string) {
 
 // findingHasAnchoredEvidence returns true iff the finding has at
 // least one Evidence entry that is NOT prefixed with [unanchored.
-// Mirrors arbiter.buildFindingEvidence's tagging convention. Used
-// only as a fallback for pre-V1.1.2 memos that carry no
-// ExpertCitationValidation array.
+// This mirrors the arbiter's own evidence-tagging convention, where
+// citations that fail validation are prefixed with "[unanchored"
+// rather than dropped. Used only as a fallback for pre-V1.1.2
+// memos that carry no ExpertCitationValidation array.
 func findingHasAnchoredEvidence(f artifacts.FindingItem) bool {
 	for _, e := range f.Evidence {
 		if !strings.HasPrefix(e, "[unanchored") {

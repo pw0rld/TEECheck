@@ -112,7 +112,7 @@ func TestBuildIndependentViewLLM_PromptExcludesExpertConclusion(t *testing.T) {
 }
 
 // TestChallengerRun_Phase1PromptNeverSeesHypothesis runs the full
-// two-phase Run() end to end (heuristic mode, offline) and confirms
+// two-phase Run() end to end (offline, via a fake LLM client) and confirms
 // the persisted independent-NNN.json was written and does not embed
 // any hypothesis text, i.e. phase 1 really ran before phase 2 read
 // the hypothesis file — not just that the function signature is

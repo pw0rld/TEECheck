@@ -14,9 +14,9 @@ const manifestCoverageGapID = "unknown-manifest-coverage-gap"
 // and must not conclude anything from it (e.g. 'no declared trust
 // boundary')."
 //
-// It runs unconditionally — in both heuristic and LLM mode, and regardless
-// of what the model said — so the coverage gap is recorded even if a live
-// model ignores its prompt instructions. It only ever appends an unknowns
+// It runs unconditionally — regardless of what the model said — so the
+// coverage gap is recorded even if a live model ignores its prompt
+// instructions. It only ever appends an unknowns
 // entry; it never removes or reinterprets anything the model produced. The
 // complementary half of the requirement ("must not conclude anything from
 // it") is enforced structurally by ValidateAndDowngrade: any Boundaries/

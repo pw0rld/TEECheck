@@ -105,7 +105,7 @@ func TestPipelineEndToEnd_FakeClient(t *testing.T) {
 
 	// Structural artifacts the llm-mode pipeline must produce. GraphPath is
 	// intentionally NOT asserted: graph.json is written only by the legacy
-	// scanner branch (heuristic mode), never in llm mode.
+	// scanner branch (legacy mode), never in llm mode.
 	for _, path := range []string{
 		runfs.ProjectProfilePath(runDir),
 		// The Project Understanding Layer is wired into the main pipeline: a

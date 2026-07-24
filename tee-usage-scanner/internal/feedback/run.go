@@ -104,7 +104,7 @@ func RunWithBus(cfg config.Config, client llm.Client, w io.Writer, bus *agentbus
 		bus.ResetDialog(rec.CaseID)
 		result, err := curateLLM(context.Background(), client, bus, rec, finding, pageSummary, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
-			fmt.Fprintf(w, "Warning: curator LLM failed for %s: %v, falling back to heuristic\n", rec.CaseID, err)
+			fmt.Fprintf(w, "Warning: curator LLM failed for %s: %v, falling back to deterministic archive\n", rec.CaseID, err)
 			category := verdictToCategory(rec.Verdict)
 			archiveFinding(cfg.KnowledgeRoot, category, rec, &finding)
 			archived++

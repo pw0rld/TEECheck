@@ -112,7 +112,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// Invariants, derived once here and reused by the planner and agents
 	// downstream. Hard-wired for now to surface any failure loudly;
 	// container cases (empty knowledge root, a non-TEE repo) are exercised
-	// by TestPipelineHeuristic.
+	// by TestPipelineEndToEnd_FakeClient.
 	//
 	// client is the injected llm.Client, reused by every agent stage
 	// (architecture/invariants/expert/... ) rather than each stage

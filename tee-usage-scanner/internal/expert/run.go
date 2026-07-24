@@ -227,7 +227,7 @@ Snippets:
 		// CitedFacts is the v1.1.1 canonical shape. SupportingFacts
 		// is accepted as a transitional fallback for prompt
 		// versions that don't ask for cited_facts (e.g. the
-		// heuristic path or a model that ignores instructions).
+		// legacy prompt versions or a model that ignores instructions).
 		CitedFacts      []citations.CitedFact `json:"cited_facts"`
 		SupportingFacts []string              `json:"supporting_facts"`
 		Confidence      string                `json:"confidence"`

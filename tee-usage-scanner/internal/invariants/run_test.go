@@ -85,7 +85,7 @@ func TestRun_LLMEndToEnd(t *testing.T) {
 // the schema.Validate call Run(cfg) makes on every invariant before
 // persisting — proven directly against schema.Validate here since Run(cfg)
 // itself cannot be driven through BuildLLM in a unit test (see
-// TestRun_HeuristicEndToEnd's doc comment).
+// TestRun_LLMEndToEnd's doc comment).
 func TestSchemaValidation_RejectsEmptyStatement(t *testing.T) {
 	inv := artifacts.ProjectInvariant{
 		SchemaVersion: artifacts.SchemaVersionProjectInvariantV1,
