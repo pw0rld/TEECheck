@@ -212,7 +212,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 		}))
 
 		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg); err != nil {
+		if err := challenger.Run(stageCfg, client); err != nil {
 			return runDir, fmt.Errorf("challenger: %w", err)
 		}
 		stageCfg.AgentID = "verifier-001"
@@ -228,7 +228,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 		}
 	} else {
 		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg); err != nil {
+		if err := challenger.Run(stageCfg, client); err != nil {
 			return runDir, fmt.Errorf("challenger: %w", err)
 		}
 		stageCfg.AgentID = "verifier-001"

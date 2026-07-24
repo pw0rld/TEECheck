@@ -53,7 +53,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 	}
 
 	stageCfg.AgentID = "challenger-001"
-	if err := challenger.Run(stageCfg); err != nil {
+	if err := challenger.Run(stageCfg, client); err != nil {
 		return "", fmt.Errorf("challenger: %w", err)
 	}
 

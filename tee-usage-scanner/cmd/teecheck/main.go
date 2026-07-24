@@ -74,7 +74,8 @@ func main() {
 		client := llm.NewClient(cfg)
 		err = expert.Run(cfg, client)
 	case "challenge":
-		err = challenger.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = challenger.Run(cfg, client)
 	case "verifier":
 		if strings.EqualFold(cfg.VerifierMode, "llm") {
 			bus := buildStandaloneBus(cfg)
