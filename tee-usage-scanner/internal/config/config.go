@@ -142,6 +142,9 @@ func parseCollabRun(args []string) (Config, error) {
 	if cfg.GraphJSONPath == "" {
 		return Config{}, fmt.Errorf("collab-run requires --graph-json")
 	}
+	if err := validateProviderConfig(cfg, "collab-run"); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -570,10 +573,8 @@ func parseRun(args []string) (Config, error) {
 	if cfg.Samples > 1 && cfg.MaxCases <= 12 {
 		cfg.MaxCases = cfg.Samples * cfg.MaxCases
 	}
-	if cfg.Mode == "llm" {
-		if err := validateProviderConfig(cfg, "run"); err != nil {
-			return Config{}, err
-		}
+	if err := validateProviderConfig(cfg, "run"); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
