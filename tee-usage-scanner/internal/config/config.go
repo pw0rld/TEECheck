@@ -24,9 +24,6 @@ type Config struct {
 	MaxCases        int
 	MaxFindings     int
 	AgentID         string
-	ExpertMode      string
-	ChallengeMode   string
-	VerifierMode    string
 	LLMProvider     string
 	LLMBaseURL      string
 	LLMAPIKey       string
@@ -34,8 +31,6 @@ type Config struct {
 	LLMTimeoutSec   int
 	LLMTemp         float64
 	StaticTools     string
-	ArbiterMode     string
-	CuratorMode     string
 	MaxDialogRounds int
 	Target          string
 	Mode            string
@@ -104,11 +99,6 @@ func parseCollabRun(args []string) (Config, error) {
 		KnowledgeRoot:   filepath.Clean("knowledge"),
 		MaxHotspots:     12,
 		MaxCases:        12,
-		ExpertMode:      "heuristic",
-		ChallengeMode:   "heuristic",
-		VerifierMode:    "heuristic",
-		ArbiterMode:     "heuristic",
-		CuratorMode:     "heuristic",
 		MaxDialogRounds: 3,
 		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
@@ -128,11 +118,6 @@ func parseCollabRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.GraphJSONPath, "graph-json", "", "Path to a GitNexus-style graph export JSON file")
 	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum number of hotspots to emit")
 	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum number of case packs to emit")
-	fs.StringVar(&cfg.ExpertMode, "expert-mode", cfg.ExpertMode, "Expert mode: heuristic or llm")
-	fs.StringVar(&cfg.ChallengeMode, "challenge-mode", cfg.ChallengeMode, "Challenger mode: heuristic or llm")
-	fs.StringVar(&cfg.VerifierMode, "verifier-mode", cfg.VerifierMode, "Verifier mode: heuristic or llm")
-	fs.StringVar(&cfg.ArbiterMode, "arbiter-mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
-	fs.StringVar(&cfg.CuratorMode, "curator-mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
@@ -156,9 +141,6 @@ func parseCollabRun(args []string) (Config, error) {
 	}
 	if cfg.GraphJSONPath == "" {
 		return Config{}, fmt.Errorf("collab-run requires --graph-json")
-	}
-	if err := validateLLMIfNeeded(cfg, "collab-run"); err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -298,7 +280,6 @@ func parseExpert(args []string) (Config, error) {
 	cfg := Config{
 		Command:       "expert",
 		AgentID:       "expert-001",
-		ExpertMode:    "heuristic",
 		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
@@ -308,7 +289,6 @@ func parseExpert(args []string) (Config, error) {
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable expert agent identifier")
-	fs.StringVar(&cfg.ExpertMode, "mode", cfg.ExpertMode, "Expert mode: heuristic or llm")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
 	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
@@ -322,9 +302,6 @@ func parseExpert(args []string) (Config, error) {
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("expert requires --run-dir")
 	}
-	if err := validateAgentLLM(cfg.ExpertMode, cfg, "expert"); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
@@ -333,7 +310,6 @@ func parseChallenge(args []string) (Config, error) {
 	cfg := Config{
 		Command:       "challenge",
 		AgentID:       "challenger-001",
-		ChallengeMode: "heuristic",
 		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
@@ -343,7 +319,6 @@ func parseChallenge(args []string) (Config, error) {
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable challenger agent identifier")
-	fs.StringVar(&cfg.ChallengeMode, "mode", cfg.ChallengeMode, "Challenger mode: heuristic or llm")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
 	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
@@ -357,9 +332,6 @@ func parseChallenge(args []string) (Config, error) {
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("challenge requires --run-dir")
 	}
-	if err := validateAgentLLM(cfg.ChallengeMode, cfg, "challenge"); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
@@ -368,7 +340,6 @@ func parseVerifier(args []string) (Config, error) {
 	cfg := Config{
 		Command:       "verifier",
 		AgentID:       "verifier-001",
-		VerifierMode:  "heuristic",
 		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
@@ -379,7 +350,6 @@ func parseVerifier(args []string) (Config, error) {
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable verifier agent identifier")
-	fs.StringVar(&cfg.VerifierMode, "mode", cfg.VerifierMode, "Verifier mode: heuristic or llm")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
 	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
@@ -394,9 +364,6 @@ func parseVerifier(args []string) (Config, error) {
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("verifier requires --run-dir")
 	}
-	if err := validateAgentLLM(cfg.VerifierMode, cfg, "verifier"); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
@@ -405,7 +372,6 @@ func parseArbiter(args []string) (Config, error) {
 	cfg := Config{
 		Command:       "arbiter",
 		AgentID:       "arbiter-001",
-		ArbiterMode:   "heuristic",
 		MaxFindings:   0,
 		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
@@ -416,7 +382,6 @@ func parseArbiter(args []string) (Config, error) {
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable arbiter agent identifier")
-	fs.StringVar(&cfg.ArbiterMode, "mode", cfg.ArbiterMode, "Arbiter mode: heuristic or llm")
 	fs.IntVar(&cfg.MaxFindings, "max-findings", cfg.MaxFindings, "Maximum number of findings to emit; 0 means all")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
@@ -431,9 +396,6 @@ func parseArbiter(args []string) (Config, error) {
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("arbiter requires --run-dir")
 	}
-	if err := validateAgentLLM(cfg.ArbiterMode, cfg, "arbiter"); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
@@ -442,7 +404,6 @@ func parseCurator(args []string) (Config, error) {
 	cfg := Config{
 		Command:         "curator",
 		AgentID:         "curator-001",
-		CuratorMode:     "heuristic",
 		KnowledgeRoot:   filepath.Clean("knowledge"),
 		MaxDialogRounds: 3,
 		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
@@ -455,7 +416,6 @@ func parseCurator(args []string) (Config, error) {
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable curator agent identifier")
-	fs.StringVar(&cfg.CuratorMode, "mode", cfg.CuratorMode, "Curator mode: heuristic or llm")
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
@@ -469,9 +429,6 @@ func parseCurator(args []string) (Config, error) {
 	cfg = cfg.WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("curator requires --run-dir")
-	}
-	if err := validateAgentLLM(cfg.CuratorMode, cfg, "curator"); err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -489,7 +446,7 @@ func parseReport(args []string) (Config, error) {
 		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
-	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode: llm (synthesized) or heuristic (concatenated)")
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode (synthesized via LLM)")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
@@ -559,7 +516,7 @@ func parseRun(args []string) (Config, error) {
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:         1,
 	}
-	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Agent mode: heuristic or llm")
+	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Pipeline mode: legacy scanner (default) or llm (L3 planner)")
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
@@ -614,11 +571,6 @@ func parseRun(args []string) (Config, error) {
 		cfg.MaxCases = cfg.Samples * cfg.MaxCases
 	}
 	if cfg.Mode == "llm" {
-		cfg.ExpertMode = "llm"
-		cfg.ChallengeMode = "llm"
-		cfg.VerifierMode = "llm"
-		cfg.ArbiterMode = "llm"
-		cfg.CuratorMode = "llm"
 		if err := validateProviderConfig(cfg, "run"); err != nil {
 			return Config{}, err
 		}
@@ -632,12 +584,11 @@ func parseRun(args []string) (Config, error) {
 // pipeline (cases/expert/challenger/verifier/arbiter).
 //
 // The only required argument is the target (URL or local path).
-// LLM mode is forced on for all downstream agents — the planner
-// whole point is to drive the LLM through an audit, heuristic mode
-// would defeat that.
+// LLM mode is forced on for the planner itself and validated below;
+// the downstream 4-agent pipeline is always LLM-backed.
 func parsePlan(args []string) (Config, error) {
 	// Force --mode=llm BEFORE parseRun sees the args so parseRun's
-	// internal "if Mode == llm { set submodes }" block fires.
+	// internal "if Mode == llm { validate provider config }" block fires.
 	args = append([]string{"--mode", "llm"}, args...)
 
 	cfg, err := parseRun(args)
@@ -645,13 +596,9 @@ func parsePlan(args []string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Command = "plan"
-	// Belt + suspenders: explicitly force all agent submodes to llm
-	// in case parseRun's logic changes.
+	// Belt + suspenders: explicitly force llm mode in case parseRun's
+	// logic changes.
 	cfg.Mode = "llm"
-	cfg.ExpertMode = "llm"
-	cfg.ChallengeMode = "llm"
-	cfg.VerifierMode = "llm"
-	cfg.ArbiterMode = "llm"
 	if err := validateProviderConfig(cfg, "plan"); err != nil {
 		return Config{}, err
 	}
@@ -659,25 +606,7 @@ func parsePlan(args []string) (Config, error) {
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--mode heuristic|llm] [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--expert-mode heuristic|llm] [--challenge-mode heuristic|llm] [--verifier-mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--mode heuristic|llm] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--mode heuristic|llm] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
-}
-
-func validateLLMIfNeeded(cfg Config, context string) error {
-	if normalizeMode(cfg.ExpertMode) != "llm" &&
-		normalizeMode(cfg.ChallengeMode) != "llm" &&
-		normalizeMode(cfg.VerifierMode) != "llm" &&
-		normalizeMode(cfg.ArbiterMode) != "llm" &&
-		normalizeMode(cfg.CuratorMode) != "llm" {
-		return nil
-	}
-	return validateProviderConfig(cfg, context)
-}
-
-func validateAgentLLM(mode string, cfg Config, context string) error {
-	if normalizeMode(mode) != "llm" {
-		return nil
-	}
-	return validateProviderConfig(cfg, context)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--mode heuristic|llm] [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck collab-run --repo-url URL --local-path PATH --commit SHA --graph-json FILE [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR] [--max-hotspots N] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateProviderConfig(cfg Config, context string) error {
@@ -692,13 +621,6 @@ func validateProviderConfig(cfg Config, context string) error {
 		return fmt.Errorf("%s requires --llm-model or TEECHECK_LLM_MODEL when using llm mode", context)
 	}
 	return nil
-}
-
-func normalizeMode(value string) string {
-	if value == "" {
-		return "heuristic"
-	}
-	return value
 }
 
 func firstNonEmptyEnv(keys ...string) string {
