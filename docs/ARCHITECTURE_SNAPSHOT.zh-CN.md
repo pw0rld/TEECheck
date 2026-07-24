@@ -122,41 +122,96 @@ TWE taxonomy / 经验 playbook                 目标 TEE 仓库
 
 ---
 
-## 3. 三层结论必须分离（核心纪律）
+## 3. 目录结构与流程对照
 
-工具事实、Agent 判断、人工结论互不覆盖。
+以 `tee-usage-scanner/` 为主控制面。下图把 `cmd/teecheck run` 的实际编排顺序（取自
+`internal/pipeline/run.go`）映射到承载它的 Go 包：
 
-| 层 | 载体 | 能决定 | 不能决定 |
-|---|---|---|---|
-| 工具事实 | `ToolFact`（不可变） | 实体、位置、路径、查询命中、检测到的 guard | 业务影响、最终漏洞 |
-| Agent 判断 | `AgentAssessment`（可挑战） | 安全语义、攻击假设、缺失证据 | 修改工具事实、取代人工 |
-| 人工结论 | `HumanVerdict`（追加） | 最终漏洞、严重度、披露/修复 | 覆盖原始记录（只追加） |
+```text
+cmd/teecheck run
+      │
+      ▼   internal/pipeline   ── 总编排；internal/events 记录事件 / blob / replay
+┌──────────────────────────────────────────────────────────────────────┐
+│ ① 预处理·画像   preprocessor · repofetch · repomap · repomix · mapper    │ → ProjectProfile
+│ ② 项目理解      architecture · invariants · citations                    │ → ArchitectureModel · ProjectInvariant
+│ ③ TWE 前置知识  twe · twecontext · twepipeline · twexpert                │ → 本次运行的 TWE 上下文
+│ ④ 调查·事实层   planner (+planner/actions) · trustirfacts · codeql        │ → TWEInvestigation · ToolFact
+│                 investigations · cases                                   │ → CasePack
+│ ⑤ 多 Agent 复核 expert → challenger → verifier → arbiter                  │ → Findings v2
+│                 agentbus · agentutil · collabrun（Agent 间通信/协作）      │
+│ ⑥ 输出·闭环     report · review · stats · feedback                        │ → 报告；HumanVerdict/SARIF 待 PR-08
+└──────────────────────────────────────────────────────────────────────┘
+贯穿全程   artifacts（契约类型）· schema（运行时校验）· runfs（路径/JSON）· llm（GLM）· config
+旧旁路     scanner · hotspots · solver · cmd/twescan  ── 与新 Planner 路径二选一，PR-10 退役
+```
 
-**两道红线**：工具失败不得解释为「没有漏洞」；工具无产出也不得合成漏洞。tee-audit 那条「无产出就从 invariant 造 finding」的行为**明令禁止移植**。
+> 注：`profile.Languages` 已传入 Planner，但 `planner` 目前仍硬编码 `knowledge/sinks/rust.json`
+> 且 `planner/actions` 的 `tree_sitter_outline`/`reverse_trace` 只接受 `.rs`——C/OP-TEE 源码探索
+> 尚未接通（见 §6）。
+
+### 3.1 目录树
+
+```text
+tee-usage-scanner/
+├── cmd/
+│   ├── teecheck/          主 CLI：run 一把梭，也可单跑各阶段子命令
+│   └── twescan/           旧扫描旁路（PR-10 待退役）
+│
+├── internal/             业务逻辑（~43 个包）
+│   │                     ——编排——
+│   ├── pipeline/         run 总编排，串起下列所有阶段
+│   ├── runinit/ runfs/   运行目录初始化、路径与 JSON 读写（ReadProjectInvariants 在此）
+│   ├── config/ events/   配置；事件 / content-addressed blob / replay
+│   │                     ——① 预处理·画像——
+│   ├── preprocessor/     拉仓库、产 ProjectProfile
+│   ├── repofetch/ repomap/ repomix/ mapper/   仓库获取与代码地图
+│   ├── scanner/ hotspots/ solver/             旧旁路：确定性扫描 + 热点
+│   │                     ——② 项目理解——
+│   ├── architecture/     ArchitectureModel + Dossier
+│   ├── invariants/       ProjectInvariant
+│   ├── citations/        引用/证据校验（SHA256 绑定源码）
+│   │                     ——③ TWE 前置知识——
+│   ├── twe/ twecontext/  16 个 TWE 定义、编译成 agent 上下文
+│   ├── twepipeline/ twexpert/                 TWE 相关流水线/专家
+│   │                     ——④ 调查·事实层——
+│   ├── planner/          L3 Planner（含 actions/ 动作）；硬编码 rust.json / .rs
+│   ├── trustirfacts/     TrustIR-C 事实层，产 ToolFact（最大包）
+│   ├── codeql/           CodeQL DB 交互
+│   ├── investigations/   TWEInvestigation 构建
+│   ├── cases/            CasePack 收敛
+│   ├── executor/ tools/ staticcheck/          工具执行支撑
+│   │                     ——⑤ 多 Agent 复核——
+│   ├── expert/ challenger/ verifier/ arbiter/ 假设 → 挑战(两阶段) → 校验 → 裁决
+│   ├── agentbus/ agentutil/ collabrun/        Agent 间通信 / 协作运行
+│   │                     ——⑥ 输出·闭环——
+│   ├── report/ review/ stats/ feedback/       报告、人工复核、统计、反馈学习
+│   │                     ——贯穿——
+│   ├── artifacts/        全部契约类型（ProjectInvariants / ToolFact / CasePack / Findings…）
+│   ├── schema/           运行时 JSON schema 校验
+│   ├── llm/              LLM 客户端（GLM）
+│   └── knowledge/        知识加载
+│
+├── knowledge/            知识库（数据，非代码）
+│   ├── twe/
+│   │   ├── definitions/  taxonomy / catalog / exclusion / enum_registry（16 个 TWE）
+│   │   └── playbooks/    rollback.yml（目前仅 1 个 playbook，其余 15 待补）
+│   ├── sinks/rust.json   旧 sink catalog（唯一一份，无 c.json）
+│   ├── wiki/             obligations / patterns / apis / projects（领域文档）
+│   ├── learned/          true-positive / false-positive / review-memory（反馈闭环）
+│   └── raw/              cve / papers / sdk / prior-reviews（原始素材）
+│
+├── codeql/               CodeQL 查询与库文件
+├── testdata/  examples/  docs/  README.md
+├── runs/                 运行产物输出
+└── go.mod  go.sum
+```
+
+**分工对应**：tee-audit 贡献前半段的领域知识与事实层（②③④ + `knowledge/`），TEECheck 贡献
+后半段的调查、复核与闭环（⑤⑥）；`artifacts/` 是两边共享的契约边界。
 
 ---
 
-## 4. 融合从何而来：T 型互补
-
-两边不是对等的两半。tee-audit 强在前半段（领域知识 + 事实），TEECheck 强在后半段（调查 + 复核 + 闭环）。
-
-**tee-audit 贡献前半段**（导入 17.7k 行 Python，资产三分处置）：
-- 16 个 TWE 漏洞族定义 + 事实词表
-- TEE 平台 / manifest 指纹信号库
-- Architecture / Invariant 生成方法
-- 事实表架构 + CodeQL 查询图纸
-
-**TEECheck 贡献后半段**（Go 控制面 / runtime）：
-- Planner + 多 Agent 协作
-- 事件 / content-addressed blob / replay
-- 带 SHA256 校验的源码引用
-- 人工 review + 统计 + benchmark
-
-**中间的 CodeQL 事实层**——`标注 → 事实表 → 薄壳查询`——用 tee-audit 架构在 C 上重建：语言逻辑压进事实表，新增一门语言的成本从 O(查询数) 降到 **O(1)**。
-
----
-
-## 5. 实现进度
+## 4. 实现进度
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -178,7 +233,7 @@ TWE taxonomy / 经验 playbook                 目标 TEE 仓库
 
 ---
 
-## 6. 关键设计决策
+## 5. 关键设计决策
 
 融合前定死、不在各阶段反复讨论的前提：
 
@@ -189,7 +244,7 @@ TWE taxonomy / 经验 playbook                 目标 TEE 仓库
 
 ---
 
-## 7. 当前边界：未做与未验（诚实呈现）
+## 6. 当前边界：未做与未验（诚实呈现）
 
 主线骨架接通了，但离「一条完整可评测闭环」还有明确差距：
 
@@ -201,6 +256,6 @@ TWE taxonomy / 经验 playbook                 目标 TEE 仓库
 
 ---
 
-## 8. 一句话总结
+## 7. 一句话总结
 
 **融合（把 tee-audit 搬进来）基本到位；主线骨架接通、能跑 heuristic。** 剩下三块：输出层（PR-08，不建库）、真端到端跑（PR-09，需建库）、覆盖面从 rollback 一个切片铺开到全部七族（PR-10）。
