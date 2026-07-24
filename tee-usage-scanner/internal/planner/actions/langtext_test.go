@@ -20,7 +20,7 @@ func TestFunctionSignatureLine(t *testing.T) {
 		"pub async unsafe fn go() {":        "go",
 		"int foo(int x) {":                  "foo",
 		"static void bar(void)":             "bar",
-		"TEE_Result handle_invoke(uint32_t":  "handle_invoke",
+		"TEE_Result handle_invoke(uint32_t": "handle_invoke",
 	}
 	for line, want := range hit {
 		got, ok := functionSignatureLine(line)
@@ -31,6 +31,8 @@ func TestFunctionSignatureLine(t *testing.T) {
 	miss := []string{
 		"    return foo();", "if (x > 0) {", "while (running) {",
 		"    bar();", "int x = baz(1);", "} ", "// fn comment(",
+		"fn helper(&self) -> bool;",
+		"    fn helper(&self) -> bool;",
 	}
 	for _, line := range miss {
 		if got, ok := functionSignatureLine(line); ok {
@@ -72,9 +74,13 @@ func TestTextOutline(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool { return len(s) >= len(sub) && (func() bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub { return true }
-	}
-	return false
-})() }
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()
+}

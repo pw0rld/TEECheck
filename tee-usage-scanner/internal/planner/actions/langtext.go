@@ -26,7 +26,7 @@ var (
 	rustFnRe = regexp.MustCompile(`^(?:pub\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_]\w*)`)
 	cFnRe    = regexp.MustCompile(`^[A-Za-z_][\w\*\s]*?[\s\*]([A-Za-z_]\w*)\s*\(`)
 	// structRe recognizes type-definition lines for the outline.
-	structRe = regexp.MustCompile(`^(?:pub\s+)?(?:struct|enum|union|trait|impl)\s+([A-Za-z_]\w*)`)
+	structRe  = regexp.MustCompile(`^(?:pub\s+)?(?:struct|enum|union|trait|impl)\s+([A-Za-z_]\w*)`)
 	cStructRe = regexp.MustCompile(`^(?:typedef\s+)?struct\s+([A-Za-z_]\w*)`)
 )
 
@@ -42,13 +42,14 @@ func functionSignatureLine(line string) (string, bool) {
 	if strings.HasPrefix(t, "//") || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "/*") {
 		return "", false
 	}
-	if m := rustFnRe.FindStringSubmatch(t); m != nil {
-		return m[1], true
-	}
-	// C: a definition line opens a body — it must contain "(" and must
-	// not end in ";" (that would be a prototype or a call statement).
+	// A definition line opens a body — it must contain "(" and must not
+	// end in ";" (that would be a prototype/declaration or a call statement).
+	// Applies to both Rust and C.
 	if !strings.Contains(t, "(") || strings.HasSuffix(t, ";") {
 		return "", false
+	}
+	if m := rustFnRe.FindStringSubmatch(t); m != nil {
+		return m[1], true
 	}
 	if m := cFnRe.FindStringSubmatch(t); m != nil {
 		name := m[1]
