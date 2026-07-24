@@ -41,7 +41,6 @@ func roundResponseWithDone(t *testing.T, doneArgs map[string]any) string {
 // attack chain is not demonstrated end to end.
 func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 	repoRoot, runDir := setupRollbackFixtureRepo(t)
-	catalogPath := writeEmptySinkCatalog(t)
 
 	roundResp := roundResponseWithDone(t, map[string]any{
 		"summary":    "subkey_version is parsed but never written into key->version",
@@ -75,7 +74,7 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 		RunDir:       runDir,
 		Profile:      planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf9"},
 		Client:       client,
-		Registry:     actions.NewDefaultRegistryWithSinks(catalogPath),
+		Registry:     actions.NewDefaultRegistryWithNav(),
 		Budget:       defaultTestBudget(),
 		Architecture: arch,
 		Invariants:   invariants,
@@ -149,7 +148,6 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 // Planner asserting "safe" — investigations carry no verdict field at all.
 func TestPlannerRun_RollbackInvestigation_Fixed(t *testing.T) {
 	repoRoot, runDir := setupRollbackFixtureRepo(t)
-	catalogPath := writeEmptySinkCatalog(t)
 
 	roundResp := roundResponseWithDone(t, map[string]any{
 		"summary":    "subkey_version is now propagated into key->version",
@@ -170,7 +168,7 @@ func TestPlannerRun_RollbackInvestigation_Fixed(t *testing.T) {
 		RunDir:   runDir,
 		Profile:  planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "43ed01d2"},
 		Client:   client,
-		Registry: actions.NewDefaultRegistryWithSinks(catalogPath),
+		Registry: actions.NewDefaultRegistryWithNav(),
 		Budget:   defaultTestBudget(),
 	})
 
@@ -198,15 +196,4 @@ func setupRollbackFixtureRepo(t *testing.T) (repoRoot, runDir string) {
 	writeRepoFile(t, repoRoot, "core/crypto/signed_hdr.c",
 		"TEE_Result shdr_load_pub_key(void) {\n// ...\nkey->version = subkey->subkey_version;\n}\n")
 	return repoRoot, runDir
-}
-
-func writeEmptySinkCatalog(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "cpp.json")
-	catalog := `{"schema_version":"teecheck.sink_catalog.v2","language":"cpp","groups":[]}`
-	if err := os.WriteFile(path, []byte(catalog), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }

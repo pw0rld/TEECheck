@@ -48,13 +48,13 @@ func eventTypes(es []events.Event) []string {
 }
 
 func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"ripgrep","actions":[{"name":"ripgrep","args":{"pattern":"verify_quote","globs":["*.rs"]}}]}`,
 		`{"thought":"done","actions":[{"name":"done","args":{"summary":"x","candidates":[{"id":"c1","kind":"attestation","priority":"high","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["no nonce"],"confidence":0.8}]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	eventsPath := filepath.Join(runDir, "events.jsonl")
 	rec, err := events.NewJSONLRecorder(eventsPath)
@@ -254,14 +254,14 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 // "tool said no" from a real failure — making sure that signal
 // reaches events.jsonl is the v1 smoke we care about.
 func TestPlannerRun_RipgrepNoMatchSurfacesExitCodeInEvent(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		// Search for a string that is NOT in the fixture → exit 1.
 		`{"thought":"ripgrep","actions":[{"name":"ripgrep","args":{"pattern":"definitely_not_in_fixture","globs":["*.rs"]}}]}`,
 		`{"thought":"done","actions":[{"name":"done","args":{"summary":"none","candidates":[{"id":"c1","kind":"attestation","priority":"low","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["nothing matched"],"confidence":0.1}]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	eventsPath := filepath.Join(runDir, "events.jsonl")
 	rec, err := events.NewJSONLRecorder(eventsPath)
@@ -317,13 +317,13 @@ func TestPlannerRun_RipgrepNoMatchSurfacesExitCodeInEvent(t *testing.T) {
 // executor-backed handler skips the nil-check) would only surface as
 // silent FP/FN at audit time.
 func TestPlannerRun_RipgrepFailsCleanlyWhenExecutorMissing(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"ripgrep","actions":[{"name":"ripgrep","args":{"pattern":"verify_quote","globs":["*.rs"]}}]}`,
 		`{"thought":"done","actions":[{"name":"done","args":{"summary":"ok","candidates":[{"id":"c1","kind":"attestation","priority":"high","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["forced done"],"confidence":0.5}]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	// Intentionally NO Executor — this is the regression scenario.
 	result := planner.Run(context.Background(), planner.RunConfig{
