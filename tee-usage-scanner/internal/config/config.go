@@ -523,6 +523,12 @@ func parseRun(args []string) (Config, error) {
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
+	// Upstream identity overrides. Needed when the scanned directory is not
+	// the project it represents — a benchmark fixture is a subtree of the
+	// TEECheck repository, so git would label it with TEECheck's own origin
+	// and HEAD instead of the CVE's upstream repository and revision.
+	fs.StringVar(&cfg.RepoURL, "repo-url", "", "Upstream repository URL this source represents (overrides git detection)")
+	fs.StringVar(&cfg.Commit, "commit", "", "Upstream revision this source represents (overrides git detection)")
 	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root")
 	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum case packs")

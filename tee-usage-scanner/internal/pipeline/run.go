@@ -37,6 +37,29 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
+// resolveRepoIdentity decides which (repository, commit) the run is about.
+// An explicitly supplied value always wins over what git reports for the
+// scanned directory: a benchmark fixture is a subtree of THIS repository, so
+// git would otherwise label every fixture with TEECheck's own origin and
+// HEAD — and everything keyed on that pair (the TrustIR known fact tables,
+// the deterministic fact IDs) would resolve against the wrong project.
+// Detected values fill in whatever was left blank; the local path is the
+// last-resort repository label so the field is never empty.
+func resolveRepoIdentity(cfg config.Config, fetch repofetch.FetchResult) (repoURL, commit string) {
+	repoURL = cfg.RepoURL
+	if repoURL == "" {
+		repoURL = fetch.RepoURL
+	}
+	if repoURL == "" {
+		repoURL = fetch.LocalPath
+	}
+	commit = cfg.Commit
+	if commit == "" {
+		commit = fetch.Commit
+	}
+	return repoURL, commit
+}
+
 func Run(cfg config.Config) (string, error) {
 	return RunWithClient(cfg, llm.NewClient(cfg))
 }
@@ -54,12 +77,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	}
 
 	cfg.LocalPath = fetch.LocalPath
-	cfg.Commit = fetch.Commit
-	if fetch.RepoURL != "" {
-		cfg.RepoURL = fetch.RepoURL
-	} else {
-		cfg.RepoURL = fetch.LocalPath
-	}
+	cfg.RepoURL, cfg.Commit = resolveRepoIdentity(cfg, fetch)
 
 	// === Init Run ===
 	if err := knowledge.EnsureLayout(cfg.KnowledgeRoot); err != nil {

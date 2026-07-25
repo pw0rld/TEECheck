@@ -173,9 +173,7 @@ func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout ti
 			if err := os.MkdirAll(runDir, 0o755); err != nil {
 				return err
 			}
-			command := expandCommand(commandTemplate, map[string]string{
-				"input": input, "run_dir": runDir, "case": c.Case.ID, "variant": variant,
-			})
+			command := expandCommand(commandTemplate, commandValues(c, variant, input, runDir))
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			cmd := exec.CommandContext(ctx, "sh", "-c", command)
 			cmd.Stdout = os.Stdout
@@ -200,6 +198,28 @@ func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout ti
 		}
 	}
 	return scoreAndWrite(cases, resultsDir)
+}
+
+// commandValues builds the placeholders one scan command is expanded with.
+// repository/revision let the scanner be told which upstream project and
+// revision the fixture represents: the fixture is a subtree of this
+// repository, so git would otherwise report the benchmark's own origin and
+// HEAD. Each variant carries its OWN revision — the fact layer keys its cache
+// on (repository, commit, operation), so sharing one would make the fixed run
+// reuse the vulnerable run's facts and collapse the differential.
+func commandValues(c loadedCase, variant, input, runDir string) map[string]string {
+	revision := c.Case.VulnerableRevision
+	if variant == "fixed" {
+		revision = c.Oracle.FixedRevision
+	}
+	return map[string]string{
+		"input":      input,
+		"run_dir":    runDir,
+		"case":       c.Case.ID,
+		"variant":    variant,
+		"repository": c.Case.Repository,
+		"revision":   revision,
+	}
 }
 
 func expandCommand(template string, values map[string]string) string {
