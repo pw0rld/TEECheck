@@ -323,12 +323,21 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// root without a playbook directory is tolerated (preprocess applies the
 	// same policy): the action then fails per call instead of the run failing.
 	var playbooks actions.PlaybookDetailSource
+	var tweCatalog *twecontext.Catalog
 	if cat, cerr := twecontext.Load(filepath.Join(cfg.KnowledgeRoot, "twe", "playbooks")); cerr == nil {
 		playbooks = cat
+		tweCatalog = cat
 	} else {
 		fmt.Printf("Warning: TWE playbook catalog not loaded (%v); twe_playbook_detail will report no catalog\n", cerr)
 	}
 	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir, playbooks)
+
+	// Case Packs render a TWE's common_defenses / common_false_positives
+	// from this map (§24) — the Challenger's phase-1 instructions rely on
+	// those fields being sourced. See buildTWEPlaybookSummaries' doc
+	// comment for why this conversion lives here rather than in
+	// internal/planner.
+	twePlaybooks := buildTWEPlaybookSummaries(tweCatalog)
 
 	// Project Understanding artifacts produced earlier in the pipeline.
 	// Read tolerantly: a run whose architecture/invariant stage produced
@@ -385,6 +394,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			TWEContext:   string(tweText),
 			Architecture: archPtr,
 			Invariants:   invs,
+			// §24 Case Pack: common_defenses / common_false_positives per
+			// TWE, consumed when a done.investigations entry builds a Case
+			// Pack for the Challenger (internal/challenger/phase1.go).
+			TWEPlaybooks: twePlaybooks,
 		})
 
 		if result.Bundle != nil {
