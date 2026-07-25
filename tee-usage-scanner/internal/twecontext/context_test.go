@@ -178,9 +178,11 @@ func TestShippedRollbackPlaybook(t *testing.T) {
 // to what is actually on disk.
 func TestCompileFailsWhenPlaybookExceedsTokenBudget(t *testing.T) {
 	dir := t.TempDir()
-	// maxPlaybookContextTokens is a chars/4 estimate, so a scenario padded
-	// well past 4*maxPlaybookContextTokens characters guarantees the block
+	// maxBriefContextTokens is a chars/4 estimate, so a scenario padded well
+	// past 4*maxBriefContextTokens characters guarantees the brief block
 	// exceeds the ceiling regardless of the fixed labels/newlines around it.
+	// (The scenario alone stays under maxDetailContextTokens, so Load/Validate
+	// still succeeds — only Compile's brief-tier ceiling fails closed here.)
 	oversized := strings.Replace(
 		validPlaybook,
 		"scenario: A replayed state changes a security decision.",
