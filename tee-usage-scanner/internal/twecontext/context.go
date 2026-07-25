@@ -1,10 +1,18 @@
 // Package twecontext loads experience-oriented TWE playbooks and compiles the
 // complete catalog into compact prior knowledge shared by security agents.
 // It intentionally does not perform retrieval or project-based selection.
-// Compile enforces a per-playbook token ceiling as a compile-time hard
-// failure (§11.1, §20.4) — the catalog cost is multiplied across every
-// injection point, so a playbook that has grown too large must block the
-// run, not silently shrink into a truncated context.
+//
+// Playbook context is two-tiered: a brief tier (scenario, look_for) is
+// compiled into every agent's prompt by Compile, and a detail tier (the full
+// investigation method) is served on demand, per TWE id, by Detail — see the
+// Planner's twe_playbook_detail action. Each tier enforces its own token
+// ceiling as a hard failure rather than a silent truncation: Compile rejects
+// an oversized brief block at compile time (maxBriefContextTokens), and
+// Load's Validate step rejects an oversized detail block at load time
+// (maxDetailContextTokens). Both ceilings exist for the same reason: the
+// cost of either tier is multiplied across every place it is injected, so a
+// playbook that has grown too large must block the run, not silently shrink
+// into a truncated context.
 package twecontext
 
 import (
@@ -272,7 +280,7 @@ func cloneStrings(s []string) []string {
 	return out
 }
 
-const contextHeader = "TWE PRIOR KNOWLEDGE (complete catalog, brief tier; apply every relevant playbook, do not treat it as a finding. The full investigation method for any TWE can be requested by its id.)\n"
+const contextHeader = "TWE PRIOR KNOWLEDGE (complete catalog, brief tier; apply every relevant playbook, do not treat it as a finding; the full investigation method for a TWE is available to the Planner on request.)\n"
 
 // Compile renders the full playbook catalog into one compact Agent context.
 // It fails, rather than truncating, if any single playbook's brief block
