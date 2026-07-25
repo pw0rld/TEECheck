@@ -272,11 +272,15 @@ func TestBuildRoundPrompt_OmitsInvestigationsHeaderWhenEmpty(t *testing.T) {
 
 func TestBuildSystemPrompt_DocumentsPlaybookDetailAction(t *testing.T) {
 	out := planner.BuildSystemPrompt([]string{"ripgrep", "twe_playbook_detail", "done"}, "", planner.PriorKnowledge{})
+	// Verify the action name appears
 	if !strings.Contains(out, "twe_playbook_detail") {
 		t.Error("system prompt must document the twe_playbook_detail action")
 	}
-	if !strings.Contains(out, "twe_id") {
-		t.Error("system prompt must document the twe_id argument")
+	// Verify the exact rendered format: "- twe_playbook_detail  args={...with twe_id inside...}"
+	// This ensures actionArgSchemas["twe_playbook_detail"] exists and documents twe_id,
+	// not just that twe_id appears elsewhere (done action has "twe_ids" by coincidence).
+	if !strings.Contains(out, "- twe_playbook_detail  args={\"twe_id\"") {
+		t.Error("system prompt must document twe_playbook_detail's args with twe_id schema (not fallback {...})")
 	}
 }
 
