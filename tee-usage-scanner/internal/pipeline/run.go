@@ -34,6 +34,7 @@ import (
 	scanall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner/all"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
 	scall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck/all"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twecontext"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
@@ -317,7 +318,17 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// crash.
 	eng := codeql.New()
 	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
-	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir)
+
+	// The playbook catalog backs the twe_playbook_detail action. A knowledge
+	// root without a playbook directory is tolerated (preprocess applies the
+	// same policy): the action then fails per call instead of the run failing.
+	var playbooks actions.PlaybookDetailSource
+	if cat, cerr := twecontext.Load(filepath.Join(cfg.KnowledgeRoot, "twe", "playbooks")); cerr == nil {
+		playbooks = cat
+	} else {
+		fmt.Printf("Warning: TWE playbook catalog not loaded (%v); twe_playbook_detail will report no catalog\n", cerr)
+	}
+	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir, playbooks)
 
 	// Project Understanding artifacts produced earlier in the pipeline.
 	// Read tolerantly: a run whose architecture/invariant stage produced

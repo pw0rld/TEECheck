@@ -66,6 +66,7 @@ var actionArgSchemas = map[string]string{
 	"legacy_keyword_scan": `{"run_dir": string (absolute), "max_hotspots": int (optional)}`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
 	"fact_layer_query":    `{"operation": string (e.g. "cpp.state.rollback_version_propagation")} — calls the structured CodeQL/TrustIR fact layer for one operation against the pinned repository+commit; returns a compact observation (tool_fact_ref, status, locations, coverage_gaps) — status "unresolved" or "unsupported" is a real answer, not a Go error, and must never be read as "no vulnerability" (§6.5)`,
+	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
 	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
 
@@ -126,10 +127,11 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 
 	b.WriteString("APPROACH:\n")
 	b.WriteString("  1. Start from the Project Invariants and TWE prior knowledge above: pick a security obligation this component must uphold.\n")
-	b.WriteString("  2. Use ripgrep (with globs matching the project's source languages — see the `languages:` line in the round prompt) to find concrete sites related to that obligation.\n")
-	b.WriteString("  3. Use tree_sitter_outline on a relevant source file to get its structure before reading specific ranges with read_file.\n")
-	b.WriteString("  4. Use reverse_trace to walk backward from a trust-decision point to its callers.\n")
-	b.WriteString("  5. When you have evidence, call done with candidates and, where a TWE/invariant applies, an investigations entry.\n\n")
+	b.WriteString("  2. When a TWE from the prior knowledge looks relevant to this code, call twe_playbook_detail with its id to get the full investigation method before you start searching.\n")
+	b.WriteString("  3. Use ripgrep (with globs matching the project's source languages — see the `languages:` line in the round prompt) to find concrete sites related to that obligation.\n")
+	b.WriteString("  4. Use tree_sitter_outline on a relevant source file to get its structure before reading specific ranges with read_file.\n")
+	b.WriteString("  5. Use reverse_trace to walk backward from a trust-decision point to its callers.\n")
+	b.WriteString("  6. When you have evidence, call done with candidates and, where a TWE/invariant applies, an investigations entry.\n\n")
 
 	b.WriteString("HINTS:\n")
 	b.WriteString("  - Match ripgrep globs to the target's source languages; skip lockfiles, build manifests, and docs.\n")

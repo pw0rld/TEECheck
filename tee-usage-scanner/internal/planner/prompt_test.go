@@ -270,6 +270,16 @@ func TestBuildRoundPrompt_OmitsInvestigationsHeaderWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_DocumentsPlaybookDetailAction(t *testing.T) {
+	out := planner.BuildSystemPrompt([]string{"ripgrep", "twe_playbook_detail", "done"}, "", planner.PriorKnowledge{})
+	if !strings.Contains(out, "twe_playbook_detail") {
+		t.Error("system prompt must document the twe_playbook_detail action")
+	}
+	if !strings.Contains(out, "twe_id") {
+		t.Error("system prompt must document the twe_id argument")
+	}
+}
+
 // TestBuildSystemPrompt_Deanchored is the de-anchoring acceptance test: the
 // system prompt must not steer the planner toward a deleted action
 // (sink_catalog_lookup) or a single language (*.rs, Cargo). It must instead
