@@ -28,22 +28,19 @@ const SchemaVersion = "teecheck.twe_playbook.v1"
 
 var tweIDPattern = regexp.MustCompile(`^TWE-[A-Z0-9-]+$`)
 
-// maxPlaybookContextTokens is the compile-time hard limit on a single
-// playbook's compact context block (§11.1, §20.4 of the merge design). 16
-// playbooks land in 6 agent injection points (Planner, Architecture,
-// Invariant, Expert, Challenger, Verifier), so a single playbook growing is a
-// 6x cost multiplier before a second playbook is even added — this bound
-// exists to catch that growth at compile time, as a hard failure, rather than
-// let Compile silently truncate the offending playbook or let the multiplied
-// cost show up later as a token bill.
-//
-// Measured: knowledge/twe/playbooks/rollback.yml — the only playbook shipped
-// so far, and the only one required to cover two distinct attack shapes
-// instead of one (§8.9, §20.2) — compiles to ~720 tokens (2877 chars at the
-// ~4-chars-per-token estimate below). 900 leaves ~25% headroom for a
-// legitimately more detailed playbook while still failing closed on anything
-// that has drifted into prose.
-const maxPlaybookContextTokens = 900
+// maxBriefContextTokens bounds the tier that is injected into EVERY agent
+// (Planner, Architecture, Invariant, Expert, Challenger, Verifier, Arbiter),
+// for every playbook, on every LLM call. That multiplier is why this tier
+// carries only what an agent needs to judge relevance — scenario and
+// look_for. Measured: rollback.yml's brief is ~213 tokens.
+const maxBriefContextTokens = 250
+
+// maxDetailContextTokens bounds the tier the Planner pulls on demand via the
+// twe_playbook_detail action. It is paid for only when an agent asks for a
+// specific TWE, so it can afford the real investigation method: concrete API
+// names, code patterns, and the reasoning behind each defense. Measured:
+// rollback.yml's detail is ~720 tokens, leaving room to grow ~4x.
+const maxDetailContextTokens = 3000
 
 // estimateTokens approximates an LLM token count from raw text without a
 // tokenizer dependency. ~4 characters per token is the standard
@@ -203,6 +200,12 @@ func (p Playbook) Validate() error {
 			return fmt.Errorf("%s: related_twes contains invalid id %q", p.ID, related)
 		}
 	}
+	if tokens := estimateTokens(compileDetailBlock(p)); tokens > maxDetailContextTokens {
+		return fmt.Errorf(
+			"%s: detail context is ~%d tokens, which exceeds the %d-token ceiling; shrink the playbook — this is checked at load so an oversized playbook fails during preprocess, not when an agent pulls it",
+			p.ID, tokens, maxDetailContextTokens,
+		)
+	}
 	return nil
 }
 
@@ -232,6 +235,19 @@ func (c *Catalog) All() []Playbook {
 	return out
 }
 
+// Detail returns the full rendering of one playbook. ok is false when no
+// playbook carries that TWE id — callers surface that as an explicit miss
+// rather than an empty result, so an agent never reads "no text" as "no
+// weakness".
+func (c *Catalog) Detail(tweID string) (string, bool) {
+	for _, p := range c.playbooks {
+		if p.ID == tweID {
+			return compileDetailBlock(p), true
+		}
+	}
+	return "", false
+}
+
 func clonePlaybook(p Playbook) Playbook {
 	p.AttackerCapabilities = cloneStrings(p.AttackerCapabilities)
 	p.LookFor = cloneStrings(p.LookFor)
@@ -256,21 +272,21 @@ func cloneStrings(s []string) []string {
 	return out
 }
 
-const contextHeader = "TWE PRIOR KNOWLEDGE (complete catalog; apply every relevant playbook, do not treat it as a finding)\n"
+const contextHeader = "TWE PRIOR KNOWLEDGE (complete catalog, brief tier; apply every relevant playbook, do not treat it as a finding. The full investigation method for any TWE can be requested by its id.)\n"
 
 // Compile renders the full playbook catalog into one compact Agent context.
-// It fails, rather than truncating, if any single playbook's compact block
-// exceeds maxPlaybookContextTokens — see that constant's comment for why a
+// It fails, rather than truncating, if any single playbook's brief block
+// exceeds maxBriefContextTokens — see that constant's comment for why a
 // per-playbook ceiling exists and how it was chosen.
 func (c *Catalog) Compile() (Compiled, error) {
 	var out strings.Builder
 	out.WriteString(contextHeader)
 	for _, p := range c.playbooks {
-		block := compilePlaybookBlock(p)
-		if tokens := estimateTokens(block); tokens > maxPlaybookContextTokens {
+		block := compileBriefBlock(p)
+		if tokens := estimateTokens(block); tokens > maxBriefContextTokens {
 			return Compiled{}, fmt.Errorf(
-				"%s: compact context is ~%d tokens (%d chars), which exceeds the %d-token compile-time ceiling (§11.1); shrink the playbook — TWEContextCompiler must fail closed here, not truncate",
-				p.ID, tokens, len(block), maxPlaybookContextTokens,
+				"%s: brief context is ~%d tokens (%d chars), which exceeds the %d-token compile-time ceiling; shrink the playbook's scenario or look_for — Compile must fail closed here, not truncate",
+				p.ID, tokens, len(block), maxBriefContextTokens,
 			)
 		}
 		out.WriteString(block)
@@ -295,11 +311,24 @@ func (c *Catalog) Compile() (Compiled, error) {
 	}, nil
 }
 
-// compilePlaybookBlock renders one playbook's compact context block. Compile
-// measures and appends these one at a time — rather than assembling the whole
-// document and measuring the total — so the ceiling attributes cleanly to the
-// one playbook that is too large instead of to "the catalog" in aggregate.
-func compilePlaybookBlock(p Playbook) string {
+// compileBriefBlock renders the always-injected tier: enough for an agent to
+// decide whether this weakness family is relevant to the code in front of it,
+// and nothing more. The full method lives in compileDetailBlock.
+func compileBriefBlock(p Playbook) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[%s] %s | family=%s\n", p.ID, p.Name, p.Family)
+	writeField(&b, "Scenario", []string{p.Scenario})
+	writeField(&b, "Look for", p.LookFor)
+	return b.String()
+}
+
+// compileDetailBlock renders one playbook's full context block, carrying
+// every field. Compile measures and appends brief blocks one at a time —
+// rather than assembling the whole document and measuring the total — so the
+// ceiling attributes cleanly to the one playbook that is too large instead of
+// to "the catalog" in aggregate; Detail and Validate reuse this renderer for
+// the on-demand detail tier.
+func compileDetailBlock(p Playbook) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n[%s] %s | family=%s\n", p.ID, p.Name, p.Family)
 	writeField(&b, "Scenario", []string{p.Scenario})
