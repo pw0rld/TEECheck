@@ -1,10 +1,13 @@
 package arbiter
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 )
 
 // ─── attackChainComplete ──────────────────────────────────────────────
@@ -105,15 +108,35 @@ func TestScrubConfirmedWording_CaseInsensitiveAllOccurrences(t *testing.T) {
 	}
 }
 
-// ─── End-to-end: arbitrate() never emits confirmed-vulnerability wording without a complete chain ───
+// ─── End-to-end: the §25 gate scrubs confirmed-vulnerability wording ───
+// out of the LLM arbiter's output when the chain is incomplete, even
+// when the model ignores the CRITICAL RULE and emits it anyway. ──────
 
-func TestArbitrate_NoConfirmedWordingWithoutCompleteChain(t *testing.T) {
+func TestArbitrateLLM_NoConfirmedWordingWithoutCompleteChain(t *testing.T) {
 	pack := artifacts.CasePack{CaseID: "case-001", Category: "rollback", MissingLinks: []string{"rollback DB role unresolved"}}
-	hyp := artifacts.Hypothesis{CaseID: "case-001", Confidence: "high", SuspectedIssue: "possible confirmed vulnerability in rollback check"}
+	hyp := artifacts.Hypothesis{CaseID: "case-001", Confidence: "high", SuspectedIssue: "possible issue in rollback check"}
 	challenge := artifacts.Challenge{CaseID: "case-001"}
-	memo := artifacts.VerificationMemo{CaseID: "case-001", Status: "corroborated"} // would otherwise map to confirmed_candidate
+	memo := artifacts.VerificationMemo{CaseID: "case-001", Status: "corroborated"}
 
-	item, packet := arbitrate(pack, hyp, challenge, memo, caseContext{}, artifacts.ChallengerIndependentView{})
+	// The model defies the prompt: it returns "confirmed_candidate" and
+	// the forbidden phrase in both structured and free-text fields. The
+	// mechanical §25 gate must still scrub all of it because the chain
+	// is incomplete (MissingLinks present).
+	client := &llmtest.FakeClient{Responses: []string{`{
+		"status": "confirmed_candidate",
+		"severity": "high",
+		"confidence": "high",
+		"summary": "This is a confirmed vulnerability in the rollback check",
+		"evidence": ["evidence of a confirmed vulnerability"],
+		"review_packet_markdown": "# Packet\n\nThis is a confirmed vulnerability.",
+		"queries": []
+	}`}}
+	bus := agentbus.New(0)
+
+	item, packet, err := arbitrateLLM(context.Background(), client, bus, pack, hyp, challenge, memo, caseContext{}, artifacts.ChallengerIndependentView{}, "arbiter-001", 0)
+	if err != nil {
+		t.Fatalf("arbitrateLLM: %v", err)
+	}
 
 	if isConfirmedStatus(item.Status) {
 		t.Errorf("Status=%q should not be a confirmed* status (MissingLinks present)", item.Status)
@@ -126,13 +149,27 @@ func TestArbitrate_NoConfirmedWordingWithoutCompleteChain(t *testing.T) {
 	}
 }
 
-func TestArbitrate_ConfirmedCandidateAllowedWithCompleteChain(t *testing.T) {
+func TestArbitrateLLM_ConfirmedCandidateAllowedWithCompleteChain(t *testing.T) {
 	pack := artifacts.CasePack{CaseID: "case-001", Category: "rollback"}
 	hyp := artifacts.Hypothesis{CaseID: "case-001", Confidence: "high", NeedsVerification: false}
 	challenge := artifacts.Challenge{CaseID: "case-001"}
 	memo := artifacts.VerificationMemo{CaseID: "case-001", Status: "corroborated"}
 
-	item, _ := arbitrate(pack, hyp, challenge, memo, caseContext{}, artifacts.ChallengerIndependentView{})
+	client := &llmtest.FakeClient{Responses: []string{`{
+		"status": "confirmed_candidate",
+		"severity": "high",
+		"confidence": "high",
+		"summary": "clear finding",
+		"evidence": [],
+		"review_packet_markdown": "# Packet",
+		"queries": []
+	}`}}
+	bus := agentbus.New(0)
+
+	item, _, err := arbitrateLLM(context.Background(), client, bus, pack, hyp, challenge, memo, caseContext{}, artifacts.ChallengerIndependentView{}, "arbiter-001", 0)
+	if err != nil {
+		t.Fatalf("arbitrateLLM: %v", err)
+	}
 	if item.Status != "confirmed_candidate" {
 		t.Errorf("Status=%q, want confirmed_candidate when the chain is actually complete", item.Status)
 	}

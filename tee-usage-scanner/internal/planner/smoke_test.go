@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,10 +30,7 @@ func TestSmokeActions(t *testing.T) {
 		t.Fatalf("repo not found: %v", err)
 	}
 
-	// Find the repo's rust.json catalog relative to the TEECheck project.
-	// The test runs from internal/planner/, so go up 3 to the scanner root.
-	catalogPath := filepath.Join("..", "..", "knowledge", "sinks", "rust.json")
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	ctx := context.Background()
 
@@ -53,17 +49,9 @@ func TestSmokeActions(t *testing.T) {
 		fmt.Printf("\n=== %s ===\n", title)
 	}
 
-	// 1) sink_catalog_lookup("*") — group headers
-	header("sink_catalog_lookup(\"*\")")
-	r := run("sink_catalog_lookup", `{"scope":"*"}`)
-	if !r.OK {
-		t.Fatalf("sink_catalog_lookup failed: %s", r.Error)
-	}
-	fmt.Println(r.Output)
-
-	// 2) list_dir top-level
+	// 1) list_dir top-level
 	header("list_dir(\".\", depth=1)")
-	r = run("list_dir", `{"path":".", "depth":1}`)
+	r := run("list_dir", `{"path":".", "depth":1}`)
 	if !r.OK {
 		t.Fatalf("list_dir failed: %s", r.Error)
 	}
@@ -77,7 +65,7 @@ func TestSmokeActions(t *testing.T) {
 		fmt.Println(line)
 	}
 
-	// 3) list_dir attest subtree
+	// 2) list_dir attest subtree
 	header("list_dir(\"attest\", depth=2)")
 	r = run("list_dir", `{"path":"attest", "depth":2}`)
 	if !r.OK {
@@ -94,7 +82,7 @@ func TestSmokeActions(t *testing.T) {
 		fmt.Println(line)
 	}
 
-	// 4) ripgrep for quote verification symbols
+	// 3) ripgrep for quote verification symbols
 	header("ripgrep(\"verify_quote|verify_report\", globs=[\"*.rs\"])")
 	r = run("ripgrep", `{"pattern":"verify_quote|verify_report", "globs":["*.rs"]}`)
 	if !r.OK {
@@ -110,7 +98,7 @@ func TestSmokeActions(t *testing.T) {
 		fmt.Println(line)
 	}
 
-	// 5) tree_sitter_outline on a known attestation file
+	// 4) tree_sitter_outline on a known attestation file
 	header("tree_sitter_outline(\"attest/verifier/src/lib.rs\")")
 	r = run("tree_sitter_outline", `{"path":"attest/verifier/src/lib.rs"}`)
 	if !r.OK {
@@ -128,23 +116,7 @@ func TestSmokeActions(t *testing.T) {
 		}
 	}
 
-	// 6) sink_catalog_lookup group scope
-	header("sink_catalog_lookup(\"attestation\")")
-	r = run("sink_catalog_lookup", `{"scope":"attestation"}`)
-	if !r.OK {
-		t.Fatalf("sink_catalog_lookup attestation failed: %s", r.Error)
-	}
-	// Just show the first 40 lines to keep output readable
-	groupLines := strings.Split(r.Output, "\n")
-	for i, line := range groupLines {
-		if i == 40 {
-			fmt.Println("... (truncated)")
-			break
-		}
-		fmt.Println(line)
-	}
-
-	// 7) ripgrep for key generation sinks
+	// 5) ripgrep for key generation sinks
 	header("ripgrep(\"KeyPair::generate|OsRng|thread_rng\", globs=[\"*.rs\"])")
 	r = run("ripgrep", `{"pattern":"KeyPair::generate|OsRng|thread_rng", "globs":["*.rs"]}`)
 	if !r.OK {

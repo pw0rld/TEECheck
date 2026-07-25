@@ -37,7 +37,7 @@ func (m *mockLLM) Generate(_ context.Context, req llm.GenerateRequest) (llm.Gene
 	return llm.GenerateResponse{Text: m.scripts[idx]}, nil
 }
 
-func setupFixtureRepo(t *testing.T) (repoRoot, runDir, catalogPath string) {
+func setupFixtureRepo(t *testing.T) (repoRoot, runDir string) {
 	t.Helper()
 	repoRoot = t.TempDir()
 	runDir = t.TempDir()
@@ -58,33 +58,7 @@ pub enum Error {
 `
 	writeRepoFile(t, repoRoot, "src/attest.rs", attestRs)
 
-	catalogDir := filepath.Join(t.TempDir(), "sinks")
-	if err := os.MkdirAll(catalogDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	catalogPath = filepath.Join(catalogDir, "rust.json")
-	catalogJSON := `{
-  "schema_version": "teecheck.sink_catalog.v2",
-  "language": "rust",
-  "groups": [
-    {
-      "id": "attestation",
-      "description": "remote attestation chain",
-      "categories": [
-        {
-          "id": "verify",
-          "description": "verify entry points",
-          "match": { "kind": "symbol", "symbols": ["*::verify_quote"] },
-          "severity_hint": "high"
-        }
-      ]
-    }
-  ]
-}`
-	if err := os.WriteFile(catalogPath, []byte(catalogJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return repoRoot, runDir, catalogPath
+	return repoRoot, runDir
 }
 
 func writeRepoFile(t *testing.T, repoRoot, rel, content string) {
@@ -110,15 +84,15 @@ func defaultTestBudget() planner.Budget {
 // ─── Happy path ──────────────────────────────────────────────────────
 
 func TestPlannerRun_HappyPath4Rounds(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
-		`{"thought":"look at the catalog","actions":[{"name":"sink_catalog_lookup","args":{"scope":"*"}}]}`,
+		`{"thought":"see what's in the repo","actions":[{"name":"list_dir","args":{"path":"."}}]}`,
 		`{"thought":"ripgrep for verify","actions":[{"name":"ripgrep","args":{"pattern":"verify_quote","globs":["*.rs"]}}]}`,
 		`{"thought":"read it","actions":[{"name":"read_file","args":{"path":"src/attest.rs","start":1,"end":20}}]}`,
 		`{"thought":"found a candidate","actions":[{"name":"done","args":{"summary":"verify_quote lacks freshness","candidates":[{"id":"c1","kind":"attestation","priority":"high","paths":["src/attest.rs"],"symbols":["verify_quote"],"why_selected":["No nonce check"],"confidence":0.8}]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:       "test-happy",
@@ -166,6 +140,23 @@ func TestPlannerRun_HappyPath4Rounds(t *testing.T) {
 		t.Errorf("rounds.jsonl line count = %d, want 4", len(lines))
 	}
 
+	// Round 1's list_dir action must have actually listed the fixture
+	// repo (proves the substituted action round is real, not a no-op).
+	var round1 artifacts.RoundRecord
+	if err := json.Unmarshal([]byte(lines[0]), &round1); err != nil {
+		t.Fatal(err)
+	}
+	if len(round1.Observations) != 1 {
+		t.Fatalf("round 1 observations = %d, want 1", len(round1.Observations))
+	}
+	obs := round1.Observations[0]
+	if !obs.OK {
+		t.Errorf("round 1 list_dir observation should be OK, got error: %q", obs.Error)
+	}
+	if !strings.Contains(obs.Output, "src") {
+		t.Errorf("round 1 list_dir output should mention src/, got: %q", obs.Output)
+	}
+
 	if _, err := os.Stat(filepath.Join(runDir, "04_planner", "evidence_bundle.json")); err != nil {
 		t.Errorf("evidence_bundle.json missing: %v", err)
 	}
@@ -174,19 +165,19 @@ func TestPlannerRun_HappyPath4Rounds(t *testing.T) {
 // ─── Budget exhaustion ───────────────────────────────────────────────
 
 func TestPlannerRun_BudgetExhaustedByRounds(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
-		`{"thought":"r1","actions":[{"name":"sink_catalog_lookup","args":{"scope":"*"}}]}`,
-		`{"thought":"r2","actions":[{"name":"sink_catalog_lookup","args":{"scope":"attestation"}}]}`,
-		`{"thought":"r3","actions":[{"name":"sink_catalog_lookup","args":{"scope":"attestation.verify"}}]}`,
+		`{"thought":"r1","actions":[{"name":"list_dir","args":{"path":"."}}]}`,
+		`{"thought":"r2","actions":[{"name":"list_dir","args":{"path":".","depth":1}}]}`,
+		`{"thought":"r3","actions":[{"name":"list_dir","args":{"path":"src"}}]}`,
 		`{"thought":"r4","actions":[{"name":"ripgrep","args":{"pattern":"verify","globs":["*.rs"]}}]}`,
 		`{"thought":"r5","actions":[{"name":"ripgrep","args":{"pattern":"quote","globs":["*.rs"]}}]}`,
 		`{"thought":"r6","actions":[{"name":"ripgrep","args":{"pattern":"attest","globs":["*.rs"]}}]}`,
 		`{"thought":"r7","actions":[{"name":"ripgrep","args":{"pattern":"key","globs":["*.rs"]}}]}`,
 		`{"thought":"r8","actions":[{"name":"ripgrep","args":{"pattern":"seal","globs":["*.rs"]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:    "test-exhaust",
@@ -211,7 +202,7 @@ func TestPlannerRun_BudgetExhaustedByRounds(t *testing.T) {
 // ─── Loop detection ──────────────────────────────────────────────────
 
 func TestPlannerRun_LoopDetectorRejectsThirdIdenticalCall(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	dup := `{"thought":"same again","actions":[{"name":"ripgrep","args":{"pattern":"verify","globs":["*.rs"]}}]}`
 	client := &mockLLM{scripts: []string{
@@ -220,7 +211,7 @@ func TestPlannerRun_LoopDetectorRejectsThirdIdenticalCall(t *testing.T) {
 		dup,
 		`{"thought":"stopping","actions":[{"name":"done","args":{"summary":"done","candidates":[]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:    "test-loop",
@@ -263,12 +254,12 @@ func TestPlannerRun_LoopDetectorRejectsThirdIdenticalCall(t *testing.T) {
 // ─── Malformed LLM response ──────────────────────────────────────────
 
 func TestPlannerRun_MalformedResponseTerminates(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`this is not JSON at all`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:    "test-malformed",
@@ -294,7 +285,7 @@ func TestPlannerRun_MalformedResponseTerminates(t *testing.T) {
 // ─── Path hallucination dropped ──────────────────────────────────────
 
 func TestPlannerRun_HallucinatedPathsDroppedAndRecorded(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"r1","actions":[{"name":"ripgrep","args":{"pattern":"verify_quote","globs":["*.rs"]}}]}`,
@@ -303,7 +294,7 @@ func TestPlannerRun_HallucinatedPathsDroppedAndRecorded(t *testing.T) {
 			`{"id":"fake","kind":"attestation","priority":"high","paths":["sgx/svc/src/key.rs"],"symbols":["ghost"],"why_selected":["hallucinated"]}` +
 			`]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	result := planner.Run(context.Background(), planner.RunConfig{
 		RunID:    "test-hallucination",
@@ -340,13 +331,13 @@ func TestPlannerRun_HallucinatedPathsDroppedAndRecorded(t *testing.T) {
 // ─── Observed paths in prompt ────────────────────────────────────────
 
 func TestPlannerRun_FinalRoundPromptIncludesObservedPaths(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"r1","actions":[{"name":"read_file","args":{"path":"src/attest.rs","start":1,"end":20}}]}`,
 		`{"thought":"final","actions":[{"name":"done","args":{"summary":"ok","candidates":[]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	budget := defaultTestBudget()
 	budget.MaxRounds = 2
@@ -378,14 +369,14 @@ func TestPlannerRun_FinalRoundPromptIncludesObservedPaths(t *testing.T) {
 // ─── Non-final round soft whitelist ──────────────────────────────────
 
 func TestPlannerRun_MiddleRoundPromptUsesSoftWhitelist(t *testing.T) {
-	repoRoot, runDir, catalogPath := setupFixtureRepo(t)
+	repoRoot, runDir := setupFixtureRepo(t)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"r1","actions":[{"name":"read_file","args":{"path":"src/attest.rs","start":1,"end":20}}]}`,
 		`{"thought":"r2","actions":[{"name":"ripgrep","args":{"pattern":"Error","globs":["*.rs"]}}]}`,
 		`{"thought":"done","actions":[{"name":"done","args":{"summary":"ok","candidates":[]}}]}`,
 	}}
-	reg := actions.NewDefaultRegistryWithSinks(catalogPath)
+	reg := actions.NewDefaultRegistryWithNav()
 
 	_ = planner.Run(context.Background(), planner.RunConfig{
 		RunID:    "test-middle",

@@ -37,12 +37,18 @@ type caseSpec struct {
 }
 
 type oracleSpec struct {
-	Schema           int      `json:"schema"`
-	ID               string   `json:"id"`
-	Status           string   `json:"status"`
-	Expected         string   `json:"expected"`
-	Weakness         string   `json:"weakness"`
-	PrimaryFile      string   `json:"primary_file"`
+	Schema int    `json:"schema"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	// FixedRevision and Files live on the oracle rather than the case: they
+	// are ground truth derived from the fix commit (the revision it landed in
+	// and the exact pre/post file hashes), not case metadata. See the
+	// "tighten case/oracle fields" migration, which moved them here.
+	FixedRevision    string     `json:"fixed_revision"`
+	Files            []fileSpec `json:"files"`
+	Expected         string     `json:"expected"`
+	Weakness         string     `json:"weakness"`
+	PrimaryFile      string     `json:"primary_file"`
 	// PrimaryLine, when > 0, pins the exploitable line so the matcher can
 	// enforce line-level agreement (the Juliet refinement). Optional: oracles
 	// that omit it are scored on file + family alone.
@@ -167,6 +173,17 @@ func main() {
 	}
 }
 
+// scanPathsOf derives the paths a run scans from the oracle's fixture files.
+// They were once declared separately on the case, which allowed the two to
+// drift; deriving them keeps a single source of truth.
+func scanPathsOf(o oracleSpec) []string {
+	paths := make([]string, 0, len(o.Files))
+	for _, f := range o.Files {
+		paths = append(paths, f.Path)
+	}
+	return paths
+}
+
 func validateCase(dir string) error {
 	var c caseSpec
 	if err := readJSON(filepath.Join(dir, "case.yaml"), &c); err != nil {
@@ -182,22 +199,25 @@ func validateCase(dir string) error {
 	if c.ID == "" || c.ID != o.ID || c.ID != filepath.Base(dir) {
 		return errors.New("case, oracle, and directory identifiers differ")
 	}
-	if c.Status != "fixture_ready" {
-		return fmt.Errorf("unsupported or missing case status %q", c.Status)
-	}
 	// Every case is source-backed: it tracks a public CVE with a real upstream
 	// repository and revisions, so the vulnerable and fixed source can be
-	// traced to the upstream commit.
-	if c.Repository == "" || c.VulnerableRevision == "" || c.FixedRevision == "" {
+	// traced to the upstream commit. The fixed revision lives on the oracle
+	// (it is fix-commit ground truth), the vulnerable revision on the case.
+	if c.Repository == "" || c.VulnerableRevision == "" || o.FixedRevision == "" {
 		return errors.New("repository revisions are incomplete")
 	}
-	if len(c.Files) == 0 || len(c.ScanPaths) == 0 {
-		return errors.New("no fixture files or scan paths")
+	if len(o.Files) == 0 {
+		return errors.New("no fixture files")
 	}
-	if o.Expected != "vulnerable_only" || o.Weakness == "" || o.PrimaryFile == "" || o.PrimaryFunction == "" {
+	if o.Weakness == "" || o.PrimaryFile == "" {
 		return errors.New("oracle ground truth is incomplete")
 	}
-	if !validTWEFamilies[o.TWEFamily] {
+	// twe_family is optional: the source-backed corpus carries only fields
+	// backed by the CVE record or the fix commit, and a TWE classification is
+	// an unsourced judgment. When absent the case still scores on the
+	// vulnerable/fixed differential; only the per-family metric breakdown
+	// degrades. When present it must name a real family.
+	if o.TWEFamily != "" && !validTWEFamilies[o.TWEFamily] {
 		return fmt.Errorf("unknown twe_family %q", o.TWEFamily)
 	}
 	if o.InTWEScope != (o.TWEFamily != "") {
@@ -206,16 +226,16 @@ func validateCase(dir string) error {
 	if o.CaseKind != "vulnerability" && o.CaseKind != "hardening" {
 		return fmt.Errorf("case_kind must be vulnerability or hardening, got %q", o.CaseKind)
 	}
-	if o.ScopeReason == "" {
-		return errors.New("scope_reason is required")
-	}
 	if !validLocationProvenance[o.OracleReview.LocationProvenance] {
 		return fmt.Errorf("unknown oracle_review.location_provenance %q", o.OracleReview.LocationProvenance)
 	}
-	if !containsPath(c.ScanPaths, o.PrimaryFile) {
-		return fmt.Errorf("oracle primary file %q is not included in scan_paths", o.PrimaryFile)
+	// The scanned paths are derived from the oracle's fixture files rather
+	// than declared separately, so the two can never disagree.
+	scanPaths := scanPathsOf(o)
+	if !containsPath(scanPaths, o.PrimaryFile) {
+		return fmt.Errorf("oracle primary file %q is not among the fixture files", o.PrimaryFile)
 	}
-	if len(o.MatchTerms) == 0 || len(o.RequiredEvidence) == 0 || len(o.FixedEvidence) == 0 {
+	if len(o.RequiredEvidence) == 0 || len(o.FixedEvidence) == 0 {
 		return errors.New("oracle evidence is incomplete")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "patches", "fix.patch")); err != nil {
@@ -229,7 +249,7 @@ func validateCase(dir string) error {
 		return errors.New("fix patch is empty")
 	}
 
-	for _, scanPath := range c.ScanPaths {
+	for _, scanPath := range scanPaths {
 		if scanPath == "" || filepath.IsAbs(scanPath) || strings.Contains(scanPath, "..") {
 			return fmt.Errorf("unsafe scan path %q", scanPath)
 		}
@@ -243,7 +263,7 @@ func validateCase(dir string) error {
 
 	seen := map[string]bool{}
 	changed := 0
-	for _, f := range c.Files {
+	for _, f := range o.Files {
 		if f.Path == "" || filepath.IsAbs(f.Path) || strings.Contains(f.Path, "..") {
 			return fmt.Errorf("unsafe fixture path %q", f.Path)
 		}

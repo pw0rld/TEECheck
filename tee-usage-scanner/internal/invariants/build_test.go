@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
 
@@ -18,15 +17,6 @@ type stubClient struct {
 func (s *stubClient) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
 	s.gotRequest = &req
 	return llm.GenerateResponse{Text: s.responseJSON}, nil
-}
-
-func TestBuildHeuristic_IsANoOp(t *testing.T) {
-	got := BuildHeuristic(Input{Model: artifacts.ArchitectureModel{
-		Assets: []artifacts.ArchitectureElement{{ID: "asset-1", Name: "WalletState"}},
-	}})
-	if got != nil {
-		t.Fatalf("BuildHeuristic = %+v, want nil (instantiating a TWE against this architecture needs an LLM)", got)
-	}
 }
 
 func TestBuildLLM_ParsesInvariantsAndIgnoresModelDeclaredStatus(t *testing.T) {
@@ -72,15 +62,5 @@ func TestBuildLLM_ParsesInvariantsAndIgnoresModelDeclaredStatus(t *testing.T) {
 func TestBuildLLM_NilClientErrors(t *testing.T) {
 	if _, err := BuildLLM(context.Background(), nil, Input{}, 0); err == nil {
 		t.Fatal("expected an error for a nil client")
-	}
-}
-
-func TestBuild_DispatchesByMode(t *testing.T) {
-	got, err := Build(context.Background(), nil, "heuristic", Input{}, 0)
-	if err != nil {
-		t.Fatalf("heuristic dispatch: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("heuristic dispatch should be a no-op, got %+v", got)
 	}
 }

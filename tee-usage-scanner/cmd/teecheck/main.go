@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
@@ -71,31 +70,28 @@ func main() {
 	case "cases":
 		err = cases.Run(cfg)
 	case "expert":
-		err = expert.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = expert.Run(cfg, client)
 	case "challenge":
-		err = challenger.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = challenger.Run(cfg, client)
 	case "verifier":
-		if strings.EqualFold(cfg.VerifierMode, "llm") {
-			bus := buildStandaloneBus(cfg)
-			err = verifier.RunWithBus(cfg, bus)
-		} else {
-			err = verifier.Run(cfg)
-		}
+		client := llm.NewClient(cfg)
+		bus := buildStandaloneBus(cfg, client)
+		err = verifier.RunWithBus(cfg, client, bus)
 	case "arbiter":
-		err = arbiter.Run(cfg)
+		client := llm.NewClient(cfg)
+		bus := buildStandaloneBus(cfg, client)
+		err = arbiter.RunWithBus(cfg, client, bus)
 	case "review":
 		err = review.Run(cfg)
-	case "feedback":
-		err = feedback.Run(cfg, os.Stdout)
-	case "curator":
-		if strings.EqualFold(cfg.CuratorMode, "llm") {
-			bus := buildCuratorBus(cfg)
-			err = feedback.RunWithBus(cfg, os.Stdout, bus)
-		} else {
-			err = feedback.Run(cfg, os.Stdout)
-		}
+	case "feedback", "curator":
+		client := llm.NewClient(cfg)
+		bus := buildCuratorBus(cfg, client)
+		err = feedback.RunWithBus(cfg, client, os.Stdout, bus)
 	case "report":
-		err = report.Run(cfg)
+		client := llm.NewClient(cfg)
+		err = report.Run(cfg, client)
 	case "run", "plan":
 		// Since M4 (T2.1), `plan` is a convenience alias for
 		// `run --mode llm`. config.parsePlan forces cfg.Mode = "llm"
@@ -119,8 +115,7 @@ func main() {
 // buildStandaloneBus builds a bus for the standalone verifier/arbiter
 // subcommands. Mirrors the one in internal/pipeline/run.go but lives
 // here so the subcommand dispatch in this file can stay self-contained.
-func buildStandaloneBus(cfg config.Config) *agentbus.Bus {
-	client := llm.NewClient(cfg)
+func buildStandaloneBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
@@ -138,8 +133,7 @@ func buildStandaloneBus(cfg config.Config) *agentbus.Bus {
 	return bus
 }
 
-func buildCuratorBus(cfg config.Config) *agentbus.Bus {
-	client := llm.NewClient(cfg)
+func buildCuratorBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3

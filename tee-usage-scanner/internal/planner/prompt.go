@@ -60,10 +60,9 @@ type PriorKnowledge struct {
 var actionArgSchemas = map[string]string{
 	"list_dir":            `{"path": string (repo-relative), "depth": int (0-3)}`,
 	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
-	"ripgrep":             `{"pattern": string (regex), "globs": [string] (e.g. ["*.rs"])}`,
-	"tree_sitter_outline": `{"path": string (must end in .rs)}`,
-	"reverse_trace":       `{"file": string (where the symbol is defined, must end in .rs), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through .rs files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
-	"sink_catalog_lookup": `{"scope": string ("*" | "<group>" | "<group>.<category>")}`,
+	"ripgrep":             `{"pattern": string (regex), "globs": [string] (e.g. ["*.c","*.h"])}`,
+	"tree_sitter_outline": `{"path": string (a source file: .c/.h/.rs/...)}`,
+	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"legacy_keyword_scan": `{"run_dir": string (absolute), "max_hotspots": int (optional)}`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
 	"fact_layer_query":    `{"operation": string (e.g. "cpp.state.rollback_version_propagation")} — calls the structured CodeQL/TrustIR fact layer for one operation against the pinned repository+commit; returns a compact observation (tool_fact_ref, status, locations, coverage_gaps) — status "unresolved" or "unsupported" is a real answer, not a Go error, and must never be read as "no vulnerability" (§6.5)`,
@@ -126,16 +125,15 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	b.WriteString("\n")
 
 	b.WriteString("APPROACH:\n")
-	b.WriteString("  1. Start by querying sink_catalog_lookup with scope=\"*\" to see what groups exist, then drill in.\n")
-	b.WriteString("  2. Use ripgrep with globs=[\"*.rs\"] to find concrete sites for sink symbols — SKIP Cargo.lock/toml/md files.\n")
-	b.WriteString("  3. When you find a relevant .rs file, use tree_sitter_outline to get its structure before reading.\n")
-	b.WriteString("  4. Use read_file on the specific function/impl ranges the outline reveals.\n")
-	b.WriteString("  5. DO NOT WASTE ROUNDS. Aim for 1-2 good candidates by round 5-6, then call done.\n")
-	b.WriteString("  6. When you have evidence, call done with candidates containing {id, kind, priority, paths, symbols, why_selected}. kind should be one of: attestation, key_management, authorization, state_machine, ffi_boundary, runtime_entry.\n\n")
+	b.WriteString("  1. Start from the Project Invariants and TWE prior knowledge above: pick a security obligation this component must uphold.\n")
+	b.WriteString("  2. Use ripgrep (with globs matching the project's source languages — see the `languages:` line in the round prompt) to find concrete sites related to that obligation.\n")
+	b.WriteString("  3. Use tree_sitter_outline on a relevant source file to get its structure before reading specific ranges with read_file.\n")
+	b.WriteString("  4. Use reverse_trace to walk backward from a trust-decision point to its callers.\n")
+	b.WriteString("  5. When you have evidence, call done with candidates and, where a TWE/invariant applies, an investigations entry.\n\n")
 
 	b.WriteString("HINTS:\n")
-	b.WriteString("  - Ignore Cargo.lock, Cargo.toml, CHANGELOG.md. Always pass globs=[\"*.rs\"] to ripgrep.\n")
-	b.WriteString("  - Directories to prioritize for TEE work: attest/, enclave-boundary/, sgx/, fog/*/enclave/, consensus/enclave/.\n")
+	b.WriteString("  - Match ripgrep globs to the target's source languages; skip lockfiles, build manifests, and docs.\n")
+	b.WriteString("  - Prioritize directories that cross the trust boundary (TA entry points, secure-world core, attestation, key handling).\n")
 	b.WriteString("  - You MUST call done by round 7 at the latest. Budget is 8 rounds total.\n\n")
 
 	b.WriteString("RESPONSE FORMAT (strict JSON, no extra text, no markdown code fences):\n")

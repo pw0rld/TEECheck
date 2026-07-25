@@ -11,6 +11,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -179,8 +180,11 @@ func TestRunWithEvents_NeverRewritesToolFact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, ExpertMode: "heuristic", AgentID: "expert-001"}
-	if err := RunWithEvents(cfg, nil, nil); err != nil {
+	cfg := config.Config{RunDir: runDir, AgentID: "expert-001"}
+	fake := &llmtest.FakeClient{Responses: []string{
+		`{"title":"x","summary":"x","suspected_issue":"x","confidence":"low","needs_verification":false}`,
+	}}
+	if err := RunWithEvents(cfg, fake, nil, nil); err != nil {
 		t.Fatalf("RunWithEvents: %v", err)
 	}
 

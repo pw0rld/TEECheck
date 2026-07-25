@@ -41,7 +41,7 @@ func Print(w io.Writer, rs *RunStats) {
 			fmt.Fprintf(w, "  ⚠ hallucinated_symbols: %v\n", p.HallucinatedSymbols)
 		}
 	} else {
-		fmt.Fprintf(w, "Planner: (not present — heuristic mode or missing bundle)\n")
+		fmt.Fprintf(w, "Planner: (not present — missing bundle)\n")
 	}
 
 	// Cases

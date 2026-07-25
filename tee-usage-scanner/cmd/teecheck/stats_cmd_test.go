@@ -7,10 +7,10 @@ import (
 
 func TestParseStatsArgs(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     []string
-		want     statsArgs
-		wantErr  string
+		name    string
+		args    []string
+		want    statsArgs
+		wantErr string
 	}{
 		{
 			name: "flag before positional",

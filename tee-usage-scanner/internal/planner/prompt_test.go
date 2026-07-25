@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildSystemPrompt_MentionsActions(t *testing.T) {
-	available := []string{"list_dir", "read_file", "ripgrep", "tree_sitter_outline", "sink_catalog_lookup", "reverse_trace", "done"}
+	available := []string{"list_dir", "read_file", "ripgrep", "tree_sitter_outline", "reverse_trace", "done"}
 	prompt := planner.BuildSystemPrompt(available, "", planner.PriorKnowledge{})
 
 	for _, name := range available {
@@ -267,5 +267,23 @@ func TestBuildRoundPrompt_OmitsInvestigationsHeaderWhenEmpty(t *testing.T) {
 	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
 	if strings.Contains(prompt, "ACTIVE TWE INVESTIGATIONS") {
 		t.Error("investigations header should not appear when there are none")
+	}
+}
+
+// TestBuildSystemPrompt_Deanchored is the de-anchoring acceptance test: the
+// system prompt must not steer the planner toward a deleted action
+// (sink_catalog_lookup) or a single language (*.rs, Cargo). It must instead
+// point the planner at TWE/invariant-driven investigation.
+func TestBuildSystemPrompt_Deanchored(t *testing.T) {
+	out := planner.BuildSystemPrompt([]string{"ripgrep", "tree_sitter_outline", "done"}, "", planner.PriorKnowledge{})
+	for _, banned := range []string{"sink_catalog_lookup", `globs=["*.rs"]`, "Cargo", "*.rs"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("system prompt still contains anchoring text %q", banned)
+		}
+	}
+	for _, want := range []string{"invariant", "TWE"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("system prompt missing guidance token %q", want)
+		}
 	}
 }

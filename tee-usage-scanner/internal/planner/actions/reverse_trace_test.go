@@ -249,3 +249,18 @@ func TestReverseTrace_LineNumbersIncluded(t *testing.T) {
 		t.Errorf("expected line annotations, got: %s", result.Output)
 	}
 }
+
+func TestReverseTrace_C(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "core.c"),
+		[]byte("void verify(void) {}\n\nvoid caller(void)\n{\n    verify();\n}\n"), 0o644)
+	res := actions.ReverseTraceHandler{}.Run(context.Background(), actions.ActionRequest{
+		RepoRoot: dir, Args: reverseTraceArgs(t, "core.c", "verify", 1),
+	})
+	if !res.OK {
+		t.Fatalf("expected OK, got: %s", res.Error)
+	}
+	if !strings.Contains(res.Output, "caller") {
+		t.Errorf("expected caller in trace:\n%s", res.Output)
+	}
+}

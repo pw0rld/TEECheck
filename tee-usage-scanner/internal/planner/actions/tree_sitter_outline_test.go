@@ -67,14 +67,11 @@ func TestTreeSitterOutline_HappyPath(t *testing.T) {
 	}
 
 	wants := []string{
-		"use_declaration",
-		"foreign_mod_item",
-		"function_item",
 		"verify_quote",
 		"safe_helper",
-		"struct_item",
 		"AttestationVerifier",
-		"impl_item",
+		"new",
+		"verify",
 	}
 	for _, w := range wants {
 		if !strings.Contains(result.Output, w) {
@@ -133,10 +130,10 @@ func TestTreeSitterOutline_RejectsNonRust(t *testing.T) {
 		RepoRoot: dir,
 	})
 	if result.OK {
-		t.Fatal("expected failure for non-Rust file")
+		t.Fatal("expected failure for non-source file")
 	}
-	if !strings.Contains(result.Error, "rust") && !strings.Contains(result.Error, ".rs") {
-		t.Fatalf("expected rust extension error, got: %s", result.Error)
+	if !strings.Contains(result.Error, "unsupported") {
+		t.Fatalf("expected unsupported file type error, got: %s", result.Error)
 	}
 }
 
@@ -165,5 +162,30 @@ func TestTreeSitterOutline_EscapeRejected(t *testing.T) {
 	})
 	if result.OK {
 		t.Fatal("expected failure for escape path")
+	}
+}
+
+func TestTreeSitterOutline_C(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ta.c")
+	if err := os.WriteFile(path, []byte("TEE_Result handle_invoke(uint32_t cmd)\n{\n    return 0;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := actions.TreeSitterOutlineHandler{}.Run(context.Background(), actions.ActionRequest{RepoRoot: dir, Args: outlineArgs(t, "ta.c")})
+	if !res.OK {
+		t.Fatalf("expected OK, got error: %s", res.Error)
+	}
+	if !strings.Contains(res.Output, "handle_invoke") {
+		t.Errorf("C outline missing handle_invoke:\n%s", res.Output)
+	}
+}
+
+func TestTreeSitterOutline_RejectsNonSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Cargo.toml")
+	_ = os.WriteFile(path, []byte("[package]\n"), 0o644)
+	res := actions.TreeSitterOutlineHandler{}.Run(context.Background(), actions.ActionRequest{RepoRoot: dir, Args: outlineArgs(t, "Cargo.toml")})
+	if res.OK {
+		t.Errorf("expected non-source file to be rejected")
 	}
 }

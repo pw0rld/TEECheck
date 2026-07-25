@@ -20,8 +20,8 @@ import (
 // when invoked manually against an existing run dir. It delegates to
 // RunWithEvents with no event sink, so manual reruns do not pollute
 // (or revive) an events.jsonl that the original pipeline owned.
-func Run(cfg config.Config) error {
-	return RunWithEvents(cfg, nil, nil)
+func Run(cfg config.Config, client llm.Client) error {
+	return RunWithEvents(cfg, client, nil, nil)
 }
 
 // RunWithEvents is the pipeline-facing entry point. The recorder and
@@ -29,7 +29,7 @@ func Run(cfg config.Config) error {
 // claim_emitted events line up on the same seq stream as upstream
 // stages. Either argument may be nil — emission is skipped silently
 // in that case (Nop pattern, matching planner.RunConfig).
-func RunWithEvents(cfg config.Config, rec events.Recorder, blobs *events.BlobStore) error {
+func RunWithEvents(cfg config.Config, client llm.Client, rec events.Recorder, blobs *events.BlobStore) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -40,10 +40,6 @@ func RunWithEvents(cfg config.Config, rec events.Recorder, blobs *events.BlobSto
 		return fmt.Errorf("load manifest: %w", err)
 	}
 
-	var client llm.Client
-	if strings.EqualFold(cfg.ExpertMode, "llm") {
-		client = llm.NewClient(cfg)
-	}
 	toolAdapter := tools.NewLocalAdapter()
 
 	count := 0
@@ -61,14 +57,9 @@ func RunWithEvents(cfg config.Config, rec events.Recorder, blobs *events.BlobSto
 		// ToolFacts — nothing here rewrites them (§3.5).
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
 
-		var hypothesis artifacts.Hypothesis
-		if strings.EqualFold(cfg.ExpertMode, "llm") {
-			hypothesis, err = buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
-			if err != nil {
-				return fmt.Errorf("expert llm for %s: %w", pack.CaseID, err)
-			}
-		} else {
-			hypothesis = buildHypothesisHeuristic(pack, caseCtx, cfg.AgentID)
+		hypothesis, err := buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		if err != nil {
+			return fmt.Errorf("expert llm for %s: %w", pack.CaseID, err)
 		}
 
 		target := filepath.Join(runfs.ExpertDir(cfg.RunDir), fmt.Sprintf("hypothesis-%03d.json", idx+1))
@@ -236,7 +227,7 @@ Snippets:
 		// CitedFacts is the v1.1.1 canonical shape. SupportingFacts
 		// is accepted as a transitional fallback for prompt
 		// versions that don't ask for cited_facts (e.g. the
-		// heuristic path or a model that ignores instructions).
+		// legacy prompt versions or a model that ignores instructions).
 		CitedFacts      []citations.CitedFact `json:"cited_facts"`
 		SupportingFacts []string              `json:"supporting_facts"`
 		Confidence      string                `json:"confidence"`
@@ -286,75 +277,6 @@ Snippets:
 		Confidence:         normalizeConfidence(parsed.Confidence),
 		NeedsVerification:  parsed.NeedsVerification,
 	}, nil
-}
-
-func buildHypothesisHeuristic(pack artifacts.CasePack, caseCtx caseContext, agentID string) artifacts.Hypothesis {
-	title := fmt.Sprintf("Potential %s weakness in %s", pack.Category, primaryLabel(pack))
-	summary := fmt.Sprintf("The case suggests that %s may be incomplete around %s.", strings.Join(pack.ExpectedObligations, ", "), primaryLabel(pack))
-	suspectedIssue := fmt.Sprintf("%s obligations may be incompletely enforced before the sensitive path proceeds.", pack.Category)
-	confidence := "medium"
-	needsVerification := true
-	var facts []string
-	var missing []string
-	for _, snippet := range pack.Snippets {
-		lower := strings.ToLower(snippet.Content)
-		if strings.Contains(lower, "todo") || strings.Contains(lower, "missing") || strings.Contains(lower, "fixme") {
-			facts = append(facts, fmt.Sprintf("snippet %s contains an explicit unfinished marker", snippet.Path))
-			confidence = "high"
-		}
-		if strings.Contains(lower, "unsafe fallback") || strings.Contains(lower, "degrade") {
-			facts = append(facts, fmt.Sprintf("snippet %s hints at degraded or fallback behavior", snippet.Path))
-		}
-	}
-	if len(pack.ExpectedObligations) > 0 {
-		missing = append(missing, pack.ExpectedObligations[0])
-	}
-	if len(facts) == 0 {
-		facts = append(facts, pack.GraphFacts...)
-	}
-
-	// PR-07 (§7.6): attack premises name what else must hold for the
-	// hypothesis to matter, sourced from the case's own coverage gaps
-	// / missing links / unresolved invariant assumptions rather than
-	// invented — the heuristic path never fabricates evidence it does
-	// not have.
-	var premises []string
-	premises = append(premises, pack.MissingLinks...)
-	for _, inv := range caseCtx.invariants {
-		premises = append(premises, inv.UnresolvedAssumptions...)
-	}
-
-	// Classification defaults to "standard" when the case names at
-	// least one related TWE (the common case); a case with no related
-	// TWE but with an invariant classified catalog_gap propagates
-	// that; otherwise leave unclassified (heuristic mode does not
-	// guess between variant/composition without an LLM).
-	classification := ""
-	if len(pack.RelatedTWEs) > 0 {
-		classification = "standard"
-	}
-	for _, inv := range caseCtx.invariants {
-		if inv.Classification == "catalog_gap" {
-			classification = "catalog_gap"
-			break
-		}
-	}
-
-	return artifacts.Hypothesis{
-		SchemaVersion:      "teecheck.hypothesis.v1",
-		CaseID:             pack.CaseID,
-		AgentID:            agentID,
-		Title:              title,
-		Summary:            summary,
-		SuspectedIssue:     suspectedIssue,
-		MissingObligations: uniq(missing),
-		AttackPremises:     uniq(premises),
-		Classification:     classification,
-		SupportingFacts:    uniq(facts),
-		KnowledgeHints:     pack.KnowledgeHints,
-		Confidence:         confidence,
-		NeedsVerification:  needsVerification,
-	}
 }
 
 // normalizeClassification clamps an LLM-supplied classification to

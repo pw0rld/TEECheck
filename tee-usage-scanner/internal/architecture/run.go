@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -17,11 +16,10 @@ import (
 // Run is the standalone entry point for the Architecture Agent stage: it
 // reads the ProjectProfileV2 and compiled TWE prior-knowledge context a
 // prior preprocessor.Run already wrote to runDir, builds an
-// ArchitectureModel, runs it through the citation validator and coverage
-// guard, schema-validates the result, and persists both the JSON model and
-// its derived Markdown dossier. cfg.Mode selects heuristic vs. llm, the same
-// convention scanner.Scan and the top-level pipeline already use.
-func Run(cfg config.Config) error {
+// ArchitectureModel via the injected client, runs it through the citation
+// validator and coverage guard, schema-validates the result, and persists
+// both the JSON model and its derived Markdown dossier.
+func Run(cfg config.Config, client llm.Client) error {
 	manifest, err := runfs.LoadManifest(cfg.RunDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -44,11 +42,6 @@ func Run(cfg config.Config) error {
 		tweContext = string(data)
 	}
 
-	var client llm.Client
-	if strings.EqualFold(cfg.Mode, "llm") {
-		client = llm.NewClient(cfg)
-	}
-
 	in := Input{
 		RunID:      manifest.RunID,
 		Repo:       artifacts.RepoRef{URL: manifest.RepoURL, Commit: manifest.Commit, Focus: manifest.Focus},
@@ -57,7 +50,7 @@ func Run(cfg config.Config) error {
 		TWEContext: tweContext,
 	}
 
-	model, err := Build(context.Background(), client, cfg.Mode, in, cfg.LLMTemp)
+	model, err := BuildLLM(context.Background(), client, in, cfg.LLMTemp)
 	if err != nil {
 		return fmt.Errorf("build architecture model: %w", err)
 	}

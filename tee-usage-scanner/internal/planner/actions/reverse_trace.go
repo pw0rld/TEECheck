@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/rust"
 )
 
 // reverseTraceMaxDepth is the hard ceiling on BFS depth. depth > 3
@@ -32,8 +29,8 @@ type reverseTraceArgs struct {
 }
 
 // ReverseTraceHandler implements the reverse_trace action. Given a
-// target file + symbol, it walks every .rs file in the repository,
-// finds call sites of the symbol, uses tree-sitter to identify the
+// target file + symbol, it walks every source file in the repository,
+// finds call sites of the symbol, uses text-based parsing to identify the
 // enclosing function at each site, and recursively traces the
 // enclosing functions as new targets — up to the requested depth.
 //
@@ -59,8 +56,8 @@ func (ReverseTraceHandler) Run(ctx context.Context, req ActionRequest) ActionRes
 	if strings.TrimSpace(args.Symbol) == "" {
 		return fail("reverse_trace", "symbol is required")
 	}
-	if !strings.HasSuffix(strings.ToLower(args.File), ".rs") {
-		return fail("reverse_trace", fmt.Sprintf("only .rs files supported (got %s)", args.File))
+	if !isSourceFile(args.File) {
+		return fail("reverse_trace", fmt.Sprintf("unsupported file type (got %s)", args.File))
 	}
 	full, err := ResolvePath(req.RepoRoot, args.File)
 	if err != nil {
@@ -147,15 +144,15 @@ type callSite struct {
 	Caller string // enclosing function name, or "<top-level>" if none
 }
 
-// findCallSites walks every .rs file in repoRoot and returns every
+// findCallSites walks every source file in repoRoot and returns every
 // line that textually calls `target(`. For each hit it uses
-// tree-sitter to identify the enclosing function_item.
+// text-based parsing to identify the enclosing function.
 //
 // This is deliberately text-first: we grep for the symbol as a
 // substring (with a "(" suffix to avoid matching `target_other`), then
-// confirm via tree-sitter that the containing scope is a function.
+// confirm via text parsing that the containing scope is a function.
 // A fully semantic resolver would require full name resolution across
-// crates — future work.
+// modules — future work.
 func findCallSites(ctx context.Context, repoRoot, target string) []callSite {
 	var sites []callSite
 	needle := target + "("
@@ -176,7 +173,7 @@ func findCallSites(ctx context.Context, repoRoot, target string) []callSite {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".rs") {
+		if !isSourceFile(path) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -198,19 +195,12 @@ func findCallSites(ctx context.Context, repoRoot, target string) []callSite {
 			if !strings.Contains(line, needle) {
 				continue
 			}
-			// Avoid matching the function's own definition
-			// ("fn target(...)"). If the line looks like a
-			// declaration rather than a call, skip it.
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "fn "+target) ||
-				strings.HasPrefix(trimmed, "pub fn "+target) ||
-				strings.HasPrefix(trimmed, "async fn "+target) ||
-				strings.HasPrefix(trimmed, "pub async fn "+target) ||
-				strings.HasPrefix(trimmed, "unsafe fn "+target) ||
-				strings.HasPrefix(trimmed, "pub unsafe fn "+target) {
+			// Avoid matching the function's own definition.
+			// If the line is a function signature for the target, skip it.
+			if name, ok := functionSignatureLine(line); ok && name == target {
 				continue
 			}
-			caller := findEnclosingFunction(data, uint32(i+1))
+			caller := enclosingFunctionText(data, i+1)
 			sites = append(sites, callSite{
 				File:   rel,
 				Line:   i + 1,
@@ -220,64 +210,4 @@ func findCallSites(ctx context.Context, repoRoot, target string) []callSite {
 		return nil
 	})
 	return sites
-}
-
-// findEnclosingFunction parses the source with tree-sitter and
-// returns the name of the innermost function_item / impl method
-// whose line range contains targetLine (1-indexed). Returns
-// "<top-level>" if no enclosing function is found (e.g. the call
-// is in a static initializer or module body).
-func findEnclosingFunction(source []byte, targetLine uint32) string {
-	parser := sitter.NewParser()
-	parser.SetLanguage(rust.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, source)
-	if err != nil || tree == nil {
-		return "<top-level>"
-	}
-	defer tree.Close()
-
-	root := tree.RootNode()
-	if root == nil {
-		return "<top-level>"
-	}
-	// Walk DFS, tracking the deepest function_item node that
-	// contains targetLine.
-	best := ""
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		if n == nil {
-			return
-		}
-		startLine := n.StartPoint().Row + 1
-		endLine := n.EndPoint().Row + 1
-		if targetLine < startLine || targetLine > endLine {
-			return
-		}
-		if n.Type() == "function_item" {
-			name := functionItemName(n, source)
-			if name != "" {
-				best = name
-			}
-		}
-		for i := 0; i < int(n.ChildCount()); i++ {
-			walk(n.Child(i))
-		}
-	}
-	walk(root)
-	if best == "" {
-		return "<top-level>"
-	}
-	return best
-}
-
-// functionItemName returns the name identifier of a function_item
-// tree-sitter node, or "" if none found.
-func functionItemName(fn *sitter.Node, source []byte) string {
-	for i := 0; i < int(fn.ChildCount()); i++ {
-		child := fn.Child(i)
-		if child.Type() == "identifier" {
-			return string(source[child.StartByte():child.EndByte()])
-		}
-	}
-	return ""
 }

@@ -12,9 +12,21 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/tools"
 )
+
+// independentViewJSON / challengeJSON are minimal valid wire JSON for the
+// two LLM calls Run(cfg, client) makes per case (phase 1: independent view,
+// phase 2: challenge). An empty key_differences array in challengeJSON is
+// deliberate: it forces buildChallengeLLM to fall back to the deterministic
+// computeKeyDifferences(hypothesis, independentView) comparison, so tests
+// can drive KeyDifferences purely by varying the phase-1 issue_present
+// value below.
+const independentViewJSON = `{"issue_present": true, "reasoning": "issue signal found", "confidence": "medium"}`
+const independentViewNoIssueJSON = `{"issue_present": false, "reasoning": "no supporting signal", "confidence": "low"}`
+const challengeJSON = `{"exploit_narrative": "n", "counter_arguments": [], "remaining_questions": [], "suggested_checks": [], "exploitability": "theoretical", "reviewer_stance": "challenge_required", "key_differences": []}`
 
 // ─── Stubs (mirrors internal/expert/run_test.go, internal/verifier/run_test.go) ───
 
@@ -100,7 +112,7 @@ func TestBuildIndependentViewLLM_PromptExcludesExpertConclusion(t *testing.T) {
 }
 
 // TestChallengerRun_Phase1PromptNeverSeesHypothesis runs the full
-// two-phase Run() end to end (heuristic mode, offline) and confirms
+// two-phase Run() end to end (offline, via a fake LLM client) and confirms
 // the persisted independent-NNN.json was written and does not embed
 // any hypothesis text, i.e. phase 1 really ran before phase 2 read
 // the hypothesis file — not just that the function signature is
@@ -127,8 +139,9 @@ func TestChallengerRun_Phase1ArtifactPersistedBeforePhase2Reads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, ChallengeMode: "heuristic", AgentID: "challenger-001"}
-	if err := Run(cfg); err != nil {
+	cfg := config.Config{RunDir: runDir, AgentID: "challenger-001"}
+	fake := &llmtest.FakeClient{Responses: []string{independentViewJSON, challengeJSON}}
+	if err := Run(cfg, fake); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -190,8 +203,9 @@ func TestChallengerRun_NeverRewritesToolFact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, ChallengeMode: "heuristic", AgentID: "challenger-001"}
-	if err := Run(cfg); err != nil {
+	cfg := config.Config{RunDir: runDir, AgentID: "challenger-001"}
+	fake := &llmtest.FakeClient{Responses: []string{independentViewJSON, challengeJSON}}
+	if err := Run(cfg, fake); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -202,19 +216,19 @@ func TestChallengerRun_NeverRewritesToolFact(t *testing.T) {
 
 // ─── §25 acceptance: vulnerable vs fixed variant differential ───────
 
-// TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference builds
-// two otherwise-identical CasePacks that differ only in their
-// snippet content — one containing an explicit "TODO: missing"
-// marker (vulnerable), the other containing the exact text of the
-// case's own expected_obligation (fixed, i.e. the obligation is
-// visibly referenced/handled). Both run the same Expert hypothesis.
-// The heuristic (LLM-free) two-phase Challenger must still produce a
-// different verdict AND a KeyDifferences entry that names the
-// disagreement for the fixed case, proving the phase-1 view — not
-// just the Expert hypothesis, which is identical in both runs — is
-// what drives the difference.
+// TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference drives
+// the same two-phase Run(cfg, client) against two otherwise-identical
+// CasePacks/Hypotheses, varying only the phase-1 LLM response's
+// issue_present value (true = "vulnerable", false = "fixed"). Both
+// phase-2 responses omit key_differences, forcing buildChallengeLLM's
+// deterministic computeKeyDifferences fallback, so the divergence in
+// the final Challenge.KeyDifferences is driven entirely by the
+// phase-1 independent view — not the Expert hypothesis, which is
+// identical across both runs — proving the two-phase wiring, not any
+// snippet-text heuristic (since Run is now always-LLM, there is no
+// heuristic left to exercise here).
 func TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference(t *testing.T) {
-	runOnce := func(t *testing.T, snippet string) artifacts.Challenge {
+	runOnce := func(t *testing.T, independentViewResp string) artifacts.Challenge {
 		t.Helper()
 		runDir := t.TempDir()
 		repoRoot := t.TempDir()
@@ -228,13 +242,13 @@ func TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference(t *testing.T) {
 			CaseID:              "case-001",
 			Category:            "rollback",
 			ExpectedObligations: []string{"subkey_version_propagation"},
-			Snippets:            []artifacts.PromptSnippet{{Path: "src/loader.c", StartLine: 1, EndLine: 1, Content: snippet}},
+			Snippets:            []artifacts.PromptSnippet{{Path: "src/loader.c", StartLine: 1, EndLine: 1, Content: "load_key();\n"}},
 		}
 		if err := runfs.WriteJSON(filepath.Join(runfs.CasePacksDir(runDir), "case-001.json"), pack); err != nil {
 			t.Fatal(err)
 		}
-		// Identical Expert hypothesis in both runs — the Expert's
-		// heuristic always proposes a concern for a selected case.
+		// Identical Expert hypothesis in both runs — only the phase-1
+		// independent view (below) differs between the two calls.
 		hyp := artifacts.Hypothesis{
 			SchemaVersion: "teecheck.hypothesis.v1", CaseID: "case-001", AgentID: "expert-001",
 			Title: "possible rollback gap", SuspectedIssue: "version may not propagate", Confidence: "high",
@@ -243,8 +257,9 @@ func TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cfg := config.Config{RunDir: runDir, ChallengeMode: "heuristic", AgentID: "challenger-001"}
-		if err := Run(cfg); err != nil {
+		cfg := config.Config{RunDir: runDir, AgentID: "challenger-001"}
+		fake := &llmtest.FakeClient{Responses: []string{independentViewResp, challengeJSON}}
+		if err := Run(cfg, fake); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
 		var challenge artifacts.Challenge
@@ -254,14 +269,14 @@ func TestChallengerRun_VulnerableVsFixed_IdentifiesKeyDifference(t *testing.T) {
 		return challenge
 	}
 
-	vulnerable := runOnce(t, "// TODO: missing subkey_version_propagation check\nload_key();\n")
-	fixed := runOnce(t, "// calls subkey_version_propagation before trusting the key\nsubkey_version_propagation(ctx);\n")
+	vulnerable := runOnce(t, independentViewJSON)
+	fixed := runOnce(t, independentViewNoIssueJSON)
 
 	if !vulnerable.IndependentIssuePresent {
 		t.Errorf("vulnerable variant: independent view should flag an issue, got IndependentIssuePresent=false; KeyDifferences=%v", vulnerable.KeyDifferences)
 	}
 	if fixed.IndependentIssuePresent {
-		t.Errorf("fixed variant: independent view should NOT flag an issue (obligation text present in snippet), got IndependentIssuePresent=true")
+		t.Errorf("fixed variant: independent view should NOT flag an issue (phase-1 LLM response said issue_present=false), got IndependentIssuePresent=true")
 	}
 
 	// The fixed variant's KeyDifferences must actually name the

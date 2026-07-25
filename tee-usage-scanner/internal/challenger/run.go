@@ -29,7 +29,7 @@ import (
 //	Phase 2 (comparative): reads the Hypothesis, computes
 //	KeyDifferences against the phase-1 view, and produces the final
 //	Challenge.
-func Run(cfg config.Config) error {
+func Run(cfg config.Config, client llm.Client) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -39,10 +39,6 @@ func Run(cfg config.Config) error {
 		return fmt.Errorf("load manifest: %w", err)
 	}
 
-	var client llm.Client
-	if strings.EqualFold(cfg.ChallengeMode, "llm") {
-		client = llm.NewClient(cfg)
-	}
 	toolAdapter := tools.NewLocalAdapter()
 
 	count := 0
@@ -54,15 +50,9 @@ func Run(cfg config.Config) error {
 
 		// ── Phase 1: independent judgment, no Hypothesis in scope. ──
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
-		var independentView artifacts.ChallengerIndependentView
-		if strings.EqualFold(cfg.ChallengeMode, "llm") {
-			independentView, err = buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
-			if err != nil {
-				fmt.Printf("challenger: phase-1 llm failed for %s (%v); falling back to heuristic independent view\n", pack.CaseID, err)
-				independentView = buildIndependentViewHeuristic(pack, cfg.AgentID)
-			}
-		} else {
-			independentView = buildIndependentViewHeuristic(pack, cfg.AgentID)
+		independentView, err := buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		if err != nil {
+			return fmt.Errorf("challenger phase-1 llm for %s: %w", pack.CaseID, err)
 		}
 		independentPath := filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("independent-%03d.json", idx+1))
 		if err := runfs.WriteJSON(independentPath, independentView); err != nil {
@@ -76,19 +66,9 @@ func Run(cfg config.Config) error {
 			return fmt.Errorf("read hypothesis %s: %w", hypothesisPath, err)
 		}
 
-		var challenge artifacts.Challenge
-		if strings.EqualFold(cfg.ChallengeMode, "llm") {
-			challenge, err = buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
-			if err != nil {
-				// A single malformed LLM response (truncated or fenced JSON)
-				// must not abort the whole run. Degrade to the deterministic
-				// heuristic challenge so the pipeline still produces a
-				// challenge artifact for this case.
-				fmt.Printf("challenger: phase-2 llm failed for %s (%v); falling back to heuristic challenge\n", pack.CaseID, err)
-				challenge = buildChallengeHeuristic(pack, hypothesis, independentView, cfg.AgentID)
-			}
-		} else {
-			challenge = buildChallengeHeuristic(pack, hypothesis, independentView, cfg.AgentID)
+		challenge, err := buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
+		if err != nil {
+			return fmt.Errorf("challenger phase-2 llm for %s: %w", pack.CaseID, err)
 		}
 		challenge.IndependentViewPath = independentPath
 
@@ -207,48 +187,6 @@ Snippets:
 		IndependentIssuePresent: independent.IssuePresent,
 		KeyDifferences:          keyDiffs,
 	}, nil
-}
-
-func buildChallengeHeuristic(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, independent artifacts.ChallengerIndependentView, agentID string) artifacts.Challenge {
-	counterArgs := []string{
-		"The current case may omit helper or wrapper context that completes validation.",
-	}
-	if len(pack.KnowledgeHints) == 0 {
-		counterArgs = append(counterArgs, "No matching knowledge pages were found, which lowers confidence in pattern matching.")
-	}
-	if !independent.IssuePresent {
-		counterArgs = append(counterArgs, "Independent phase-1 review (formed without the Expert hypothesis) found no supporting issue signal: "+independent.Reasoning)
-	}
-	remaining := append([]string{}, pack.OpenQuestions...)
-	if len(remaining) == 0 {
-		remaining = append(remaining, "Is the visible snippet the true trust decision site?")
-	}
-	checks := []string{
-		"Search surrounding wrappers for caller binding or validation helpers.",
-		"Confirm whether failure paths actually stop execution.",
-	}
-	checks = append(checks, independent.CounterExamples...)
-	exploitability := "theoretical"
-	reviewerStance := "challenge_required"
-	if hypothesis.Confidence == "high" && independent.IssuePresent {
-		exploitability = "likely"
-		reviewerStance = "pressure_test"
-	} else if !independent.IssuePresent {
-		exploitability = "unlikely"
-	}
-	return artifacts.Challenge{
-		SchemaVersion:           "teecheck.challenge.v1",
-		CaseID:                  pack.CaseID,
-		AgentID:                 agentID,
-		ExploitNarrative:        fmt.Sprintf("If the suspected %s gap is real, an attacker may cross the boundary through %s without the expected safeguards.", pack.Category, primaryLabel(pack)),
-		CounterArguments:        uniq(counterArgs),
-		RemainingQuestions:      uniq(remaining),
-		SuggestedChecks:         uniq(checks),
-		Exploitability:          exploitability,
-		ReviewerStance:          reviewerStance,
-		IndependentIssuePresent: independent.IssuePresent,
-		KeyDifferences:          computeKeyDifferences(hypothesis, independent),
-	}
 }
 
 func primaryLabel(pack artifacts.CasePack) string {

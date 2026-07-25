@@ -10,8 +10,8 @@ import (
 // attackChainComplete is the §25 acceptance mechanical gate: "无完整
 // 攻击链时不能使用 confirmed vulnerability 表述" (with no complete attack
 // chain, output must not use "confirmed vulnerability" wording). This
-// function is the single source of truth both arbitrate() (heuristic)
-// and arbitrateLLM() consult before EVER assigning a status
+// function is the single source of truth arbitrateLLM() consults
+// before EVER assigning a status
 // containing "confirmed" or before letting free text through
 // unsanitized — the rule lives in code, not only in a prompt
 // instruction an LLM could ignore.
@@ -57,8 +57,8 @@ func isConfirmedStatus(status string) bool {
 // status is downgraded to "likely_issue", and any occurrence of the
 // phrase "confirmed vulnerability" (case-insensitive) in Summary or
 // Evidence is rewritten to make the incompleteness explicit rather
-// than silently dropped. Applied unconditionally at the end of both
-// arbitrate() and arbitrateLLM() — an LLM that ignores every prompt
+// than silently dropped. Applied unconditionally at the end of
+// arbitrateLLM() — an LLM that ignores every prompt
 // instruction and writes "confirmed vulnerability" anyway still gets
 // caught here.
 func sanitizeFindingItem(item artifacts.FindingItem, complete bool) artifacts.FindingItem {

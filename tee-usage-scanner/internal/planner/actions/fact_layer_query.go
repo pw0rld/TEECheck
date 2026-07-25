@@ -45,10 +45,10 @@ type factLayerQueryOutput struct {
 // artifact-referenced observation; the calling LLM decides what to do with
 // a "success", "unresolved", or "unsupported" status.
 //
-// Engine and QueryPackDir must be set before Run is called — mirrors
-// SinkCatalogLookupHandler.CatalogPath's wiring convention (the caller
+// Engine and QueryPackDir must be set before Run is called — the caller
 // constructs a *codeql.Engine, or in tests a fake satisfying
-// trustirfacts.Engine, and registers a pointer to one instance).
+// trustirfacts.Engine, and registers a pointer to one instance holding
+// its own QueryPackDir.
 type FactLayerQueryHandler struct {
 	Engine       trustirfacts.Engine
 	QueryPackDir string

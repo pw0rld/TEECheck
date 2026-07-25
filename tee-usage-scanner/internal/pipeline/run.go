@@ -37,7 +37,34 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
-func Run(cfg config.Config) (runDir string, err error) {
+// resolveRepoIdentity decides which (repository, commit) the run is about.
+// An explicitly supplied value always wins over what git reports for the
+// scanned directory: a benchmark fixture is a subtree of THIS repository, so
+// git would otherwise label every fixture with TEECheck's own origin and
+// HEAD — and everything keyed on that pair (the TrustIR known fact tables,
+// the deterministic fact IDs) would resolve against the wrong project.
+// Detected values fill in whatever was left blank; the local path is the
+// last-resort repository label so the field is never empty.
+func resolveRepoIdentity(cfg config.Config, fetch repofetch.FetchResult) (repoURL, commit string) {
+	repoURL = cfg.RepoURL
+	if repoURL == "" {
+		repoURL = fetch.RepoURL
+	}
+	if repoURL == "" {
+		repoURL = fetch.LocalPath
+	}
+	commit = cfg.Commit
+	if commit == "" {
+		commit = fetch.Commit
+	}
+	return repoURL, commit
+}
+
+func Run(cfg config.Config) (string, error) {
+	return RunWithClient(cfg, llm.NewClient(cfg))
+}
+
+func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err error) {
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -50,12 +77,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 	}
 
 	cfg.LocalPath = fetch.LocalPath
-	cfg.Commit = fetch.Commit
-	if fetch.RepoURL != "" {
-		cfg.RepoURL = fetch.RepoURL
-	} else {
-		cfg.RepoURL = fetch.LocalPath
-	}
+	cfg.RepoURL, cfg.Commit = resolveRepoIdentity(cfg, fetch)
 
 	// === Init Run ===
 	if err := knowledge.EnsureLayout(cfg.KnowledgeRoot); err != nil {
@@ -106,13 +128,18 @@ func Run(cfg config.Config) (runDir string, err error) {
 
 	// Project Understanding Layer (§3.4): the Architecture model and Project
 	// Invariants, derived once here and reused by the planner and agents
-	// downstream. Both handle heuristic/llm mode internally. Hard-wired for
-	// now to surface any failure loudly; container cases (empty knowledge
-	// root, a non-TEE repo) are exercised by TestPipelineHeuristic.
-	if err := architecture.Run(stageCfg); err != nil {
+	// downstream. Hard-wired for now to surface any failure loudly;
+	// container cases (empty knowledge root, a non-TEE repo) are exercised
+	// by TestPipelineEndToEnd_FakeClient.
+	//
+	// client is the injected llm.Client, reused by every agent stage
+	// (architecture/invariants/expert/... ) rather than each stage
+	// constructing its own. Run() supplies the production client via
+	// RunWithClient; tests inject a fake.
+	if err := architecture.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
-	if err := invariants.Run(stageCfg); err != nil {
+	if err := invariants.Run(stageCfg, client); err != nil {
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
@@ -125,7 +152,7 @@ func Run(cfg config.Config) (runDir string, err error) {
 		// events, so all subprocess tool_call_* events land in the
 		// same events.jsonl with the same correlation ids.
 		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
-		if err := runL3Planner(stageCfg, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
+		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
 		if err := cases.Run(stageCfg); err != nil {
@@ -169,75 +196,55 @@ func Run(cfg config.Config) (runDir string, err error) {
 	// carry the correct semantic label, which downstream consumers
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
-	if err := expert.RunWithEvents(stageCfg, rec, blobs); err != nil {
+	if err := expert.RunWithEvents(stageCfg, client, rec, blobs); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
 
 	// === Agent 2: Reviewer ===
 	fmt.Println("\n=== Reviewer Agent ===")
 
-	needsBus := strings.EqualFold(cfg.Mode, "llm")
+	bus := buildPipelineBus(cfg, client)
 
-	if needsBus {
-		bus := buildPipelineBus(cfg)
+	// Bus tool registrations stay under TOOL identities; they
+	// represent capability endpoints (a static-check tool, a
+	// reviewer tool, an auditor tool), not agent roles. Other
+	// agents call into these tools via the bus by name.
+	scReg := scall.NewDefaultRegistry()
+	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
+		req := staticcheck.CheckRequest{
+			RepoRoot: fetch.LocalPath,
+			Keywords: strings.Fields(q.Question),
+		}
+		findings, runErr := scReg.RunAll(ctx, req)
+		if runErr != nil {
+			return agentbus.Response{}, runErr
+		}
+		var facts []string
+		for _, f := range findings {
+			facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
+		}
+		return agentbus.Response{
+			QueryID:   q.QueryID,
+			FromAgent: "scanner-001",
+			Answer:    fmt.Sprintf("Found %d results", len(findings)),
+			Facts:     facts,
+		}, nil
+	}))
 
-		// Bus tool registrations stay under TOOL identities; they
-		// represent capability endpoints (a static-check tool, a
-		// reviewer tool, an auditor tool), not agent roles. Other
-		// agents call into these tools via the bus by name.
-		scReg := scall.NewDefaultRegistry()
-		bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
-			req := staticcheck.CheckRequest{
-				RepoRoot: fetch.LocalPath,
-				Keywords: strings.Fields(q.Question),
-			}
-			findings, runErr := scReg.RunAll(ctx, req)
-			if runErr != nil {
-				return agentbus.Response{}, runErr
-			}
-			var facts []string
-			for _, f := range findings {
-				facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
-			}
-			return agentbus.Response{
-				QueryID:   q.QueryID,
-				FromAgent: "scanner-001",
-				Answer:    fmt.Sprintf("Found %d results", len(findings)),
-				Facts:     facts,
-			}, nil
-		}))
+	stageCfg.AgentID = "challenger-001"
+	if err := challenger.Run(stageCfg, client); err != nil {
+		return runDir, fmt.Errorf("challenger: %w", err)
+	}
+	stageCfg.AgentID = "verifier-001"
+	if err := verifier.RunWithBusAndEvents(stageCfg, client, bus, rec); err != nil {
+		return runDir, fmt.Errorf("verifier: %w", err)
+	}
 
-		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("challenger: %w", err)
-		}
-		stageCfg.AgentID = "verifier-001"
-		if err := verifier.RunWithBusAndEvents(stageCfg, bus, rec); err != nil {
-			return runDir, fmt.Errorf("verifier: %w", err)
-		}
-
-		// === Agent 3: Auditor ===
-		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "arbiter-001"
-		if err := arbiter.RunWithBus(stageCfg, bus); err != nil {
-			return runDir, fmt.Errorf("arbiter: %w", err)
-		}
-	} else {
-		stageCfg.AgentID = "challenger-001"
-		if err := challenger.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("challenger: %w", err)
-		}
-		stageCfg.AgentID = "verifier-001"
-		if err := verifier.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("verifier: %w", err)
-		}
-
-		// === Agent 3: Auditor ===
-		fmt.Println("\n=== Auditor Agent ===")
-		stageCfg.AgentID = "arbiter-001"
-		if err := arbiter.Run(stageCfg); err != nil {
-			return runDir, fmt.Errorf("arbiter: %w", err)
-		}
+	// === Agent 3: Auditor ===
+	fmt.Println("\n=== Auditor Agent ===")
+	stageCfg.AgentID = "arbiter-001"
+	if err := arbiter.RunWithBus(stageCfg, client, bus); err != nil {
+		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
 
 	// Print summary
@@ -252,14 +259,13 @@ func Run(cfg config.Config) (runDir string, err error) {
 	return runDir, nil
 }
 
-func buildPipelineBus(cfg config.Config) *agentbus.Bus {
+func buildPipelineBus(cfg config.Config, client llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
 
-	client := llm.NewClient(cfg)
 	bus.Register("expert-001", agentbus.NewLLMHandler(client,
 		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
@@ -289,23 +295,16 @@ func truncate(s string, n int) string {
 // Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
+func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	var profile artifacts.ProjectProfile
 	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
 		return fmt.Errorf("load profile: %w", err)
-	}
-
-	catalogPath := filepath.Join(cfg.KnowledgeRoot, "sinks", "rust.json")
-	if _, err := os.Stat(catalogPath); err != nil {
-		return fmt.Errorf("sink catalog not found at %s: %w", catalogPath, err)
 	}
 
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-
-	client := llm.NewClient(cfg)
 
 	// Wire the fact-layer action into the planner. codeql.New() resolves
 	// codeql on PATH; when it is absent (the common --facts-off / no-DB
@@ -318,7 +317,7 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	// crash.
 	eng := codeql.New()
 	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
-	registry := actions.NewDefaultRegistryWithFacts(catalogPath, eng, queryPackDir)
+	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir)
 
 	// Project Understanding artifacts produced earlier in the pipeline.
 	// Read tolerantly: a run whose architecture/invariant stage produced
@@ -333,7 +332,6 @@ func runL3Planner(cfg config.Config, repoRoot, runDir string, rec events.Recorde
 	tweText, _ := os.ReadFile(runfs.TWEAgentContextPath(runDir))
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
-	fmt.Printf("Catalog: %s\n", catalogPath)
 
 	samples := cfg.Samples
 	if samples <= 0 {

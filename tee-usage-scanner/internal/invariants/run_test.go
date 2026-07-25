@@ -6,19 +6,34 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/schema"
 )
 
-// TestRun_HeuristicEndToEnd exercises Run(cfg)'s wiring — manifest,
-// architecture model, and profile loading, and persistence — in heuristic
-// mode. BuildHeuristic is a deliberate no-op (see its doc comment), so this
-// proves the plumbing writes a valid, empty collection rather than proving
-// invariant *content*, which is llm-mode-only and covered directly via
-// BuildLLM/Validate in build_test.go and rollback_test.go (Run(cfg) itself
-// cannot be unit-tested in llm mode without a live model — same limitation
-// expert.Run has, see internal/expert/run_test.go).
-func TestRun_HeuristicEndToEnd(t *testing.T) {
+// invariantWireJSON is a minimal valid wireResponse JSON: one invariant with
+// a non-empty related_twes and verification_plan (both required by
+// project-invariant.v1.json — see its "required" list). BuildLLM parses this
+// into a ProjectInvariant that Validate/schema.Validate then accept.
+const invariantWireJSON = `{
+  "invariants": [
+    {
+      "invariant_id": "INV-STATE-001",
+      "statement": "Restored WalletState must be checked against a freshness anchor before SignTransaction",
+      "related_twes": ["TWE-STATE-001"],
+      "entrypoints": ["restore_wallet"],
+      "authority_points": ["sign_transaction"],
+      "verification_plan": ["trace freshness anchor propagation"]
+    }
+  ]
+}`
+
+// TestRun_LLMEndToEnd exercises Run(cfg, client)'s wiring — manifest,
+// architecture model, and profile loading, BuildLLM (via a fake client),
+// Validate, schema-validation, and persistence — end to end, asserting the
+// invariant the fake client produced actually reaches the persisted
+// ProjectInvariants collection.
+func TestRun_LLMEndToEnd(t *testing.T) {
 	runDir := t.TempDir()
 	manifest := artifacts.Manifest{
 		SchemaVersion: "teecheck.manifest.v1", RunID: "run-inv-test",
@@ -39,8 +54,9 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{RunDir: runDir, Mode: "heuristic"}
-	if err := Run(cfg); err != nil {
+	cfg := config.Config{RunDir: runDir}
+	fake := &llmtest.FakeClient{Responses: []string{invariantWireJSON}}
+	if err := Run(cfg, fake); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -51,8 +67,17 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 	if out.RunID != "run-inv-test" {
 		t.Errorf("run_id = %q", out.RunID)
 	}
-	if len(out.Invariants) != 0 {
-		t.Errorf("invariants = %+v, want none (heuristic mode is a no-op)", out.Invariants)
+	if len(out.Invariants) != 1 {
+		t.Fatalf("invariants = %+v, want the 1 invariant the fake client produced", out.Invariants)
+	}
+	if out.Invariants[0].InvariantID != "INV-STATE-001" {
+		t.Errorf("invariant_id = %q", out.Invariants[0].InvariantID)
+	}
+	if out.Invariants[0].Status != "proposed" {
+		t.Errorf("status = %q, want proposed (EnforceProposedStatus)", out.Invariants[0].Status)
+	}
+	if len(fake.Calls) != 1 {
+		t.Errorf("expected exactly 1 LLM call, got %d", len(fake.Calls))
 	}
 }
 
@@ -60,7 +85,7 @@ func TestRun_HeuristicEndToEnd(t *testing.T) {
 // the schema.Validate call Run(cfg) makes on every invariant before
 // persisting — proven directly against schema.Validate here since Run(cfg)
 // itself cannot be driven through BuildLLM in a unit test (see
-// TestRun_HeuristicEndToEnd's doc comment).
+// TestRun_LLMEndToEnd's doc comment).
 func TestSchemaValidation_RejectsEmptyStatement(t *testing.T) {
 	inv := artifacts.ProjectInvariant{
 		SchemaVersion: artifacts.SchemaVersionProjectInvariantV1,

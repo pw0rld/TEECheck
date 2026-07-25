@@ -10,71 +10,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
 
-// ─── BuildHeuristic: conservative by construction ───────────────────────
-
-func TestBuildHeuristic_ManifestsBecomeObservedComponents(t *testing.T) {
-	in := Input{
-		Profile: artifacts.ProjectProfileV2{
-			Manifests: []artifacts.ProfileSignal{{
-				ID: "manifest:enclave.config.xml", Kind: "manifest", Name: "SGX enclave configuration",
-				Scope:    "enclave.config.xml",
-				Evidence: []artifacts.EvidenceReference{{Kind: "manifest", File: "enclave.config.xml"}},
-			}},
-		},
-	}
-	model := BuildHeuristic(in)
-	if len(model.Components) != 1 {
-		t.Fatalf("Components = %d, want 1", len(model.Components))
-	}
-	if model.Components[0].State != artifacts.EvidenceObserved {
-		t.Errorf("state = %q, want observed (manifest existence is a legitimate observed fact)", model.Components[0].State)
-	}
-}
-
-// §3.4: "发现 validator 关键词只能产生 candidate_role,不能断言该组件就是安全
-// 架构中的 validator" — the heuristic path must not promote candidate role/
-// artifact/boundary/state signals to any observed bucket.
-func TestBuildHeuristic_CandidateSignalsBecomeUnknownsNotObservedFacts(t *testing.T) {
-	in := Input{
-		Profile: artifacts.ProjectProfileV2{
-			CandidateRoles: []artifacts.ProfileSignal{{
-				ID: "role:validator-consensus", Kind: "candidate_role", Name: "Validator or consensus",
-				Evidence: []artifacts.EvidenceReference{{Kind: "code_or_config", File: "src/lib.rs", StartLine: 10, EndLine: 10}},
-			}},
-			TrustArtifacts: []artifacts.ProfileSignal{{ID: "artifact:attestation", Kind: "trust_artifact", Name: "Attestation artifacts"}},
-		},
-	}
-	model := BuildHeuristic(in)
-	if len(model.Roles) != 0 {
-		t.Fatalf("Roles = %+v, want none — candidate_role must not become an asserted role", model.Roles)
-	}
-	if len(model.Assets) != 0 {
-		t.Fatalf("Assets = %+v, want none", model.Assets)
-	}
-	if len(model.Unknowns) != 2 {
-		t.Fatalf("Unknowns = %d, want 2 (one per candidate signal)", len(model.Unknowns))
-	}
-	for _, u := range model.Unknowns {
-		if u.State != artifacts.EvidenceUnknown {
-			t.Errorf("unknown entry %s has state %q", u.ID, u.State)
-		}
-	}
-}
-
-func TestBuildHeuristic_CoverageWarningsSurfaced(t *testing.T) {
-	in := Input{Profile: artifacts.ProjectProfileV2{CoverageWarnings: []string{"content scan skipped 3 files larger than 2097152 bytes"}}}
-	model := BuildHeuristic(in)
-	found := false
-	for _, u := range model.Unknowns {
-		if strings.Contains(u.Description, "skipped 3 files") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("coverage warnings not surfaced into Unknowns: %+v", model.Unknowns)
-	}
-}
-
 // ─── BuildLLM: stub client, no live model (per PR-04's testing constraint) ─
 
 type stubClient struct {
@@ -130,16 +65,5 @@ func TestBuildLLM_ParsesWireModelDirectly(t *testing.T) {
 func TestBuildLLM_NilClientErrors(t *testing.T) {
 	if _, err := BuildLLM(context.Background(), nil, Input{}, 0); err == nil {
 		t.Fatal("expected an error for a nil client")
-	}
-}
-
-func TestBuild_DispatchesByMode(t *testing.T) {
-	in := Input{Profile: artifacts.ProjectProfileV2{Manifests: []artifacts.ProfileSignal{{ID: "manifest:x", Kind: "manifest", Name: "X"}}}}
-	model, err := Build(context.Background(), nil, "heuristic", in, 0)
-	if err != nil {
-		t.Fatalf("heuristic dispatch: %v", err)
-	}
-	if len(model.Components) != 1 {
-		t.Fatalf("heuristic dispatch did not run BuildHeuristic: %+v", model)
 	}
 }

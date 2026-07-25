@@ -259,7 +259,7 @@ type Hypothesis struct {
 	// ProjectInvariant.Classification (§7.6: "判断是标准 TWE、变体、组合
 	// 还是 catalog gap"): standard | variant | composition |
 	// catalog_gap. Empty means the expert did not classify (legacy
-	// hypotheses, or a heuristic run that skips this judgment).
+	// hypotheses, or a run that skips this judgment).
 	Classification string `json:"classification,omitempty"`
 
 	// AttackPremises lists the concrete preconditions the constructed

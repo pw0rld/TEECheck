@@ -15,12 +15,11 @@ import (
 )
 
 // Run generates a unified audit report from a completed TEECheck run.
-// In LLM mode, an LLM synthesizes a cross-finding executive summary,
-// coverage analysis, and per-finding sections from the raw review
-// packets. In heuristic mode, packets are concatenated with headers.
+// An LLM synthesizes a cross-finding executive summary, coverage
+// analysis, and per-finding sections from the raw review packets.
 //
 // Output: <runDir>/08_report/REPORT.md
-func Run(cfg config.Config) error {
+func Run(cfg config.Config, client llm.Client) error {
 	runDir := cfg.RunDir
 	if runDir == "" {
 		return fmt.Errorf("--run-dir is required")
@@ -55,15 +54,9 @@ func Run(cfg config.Config) error {
 		hasPlannerMeta = true
 	}
 
-	var reportContent string
-	if strings.EqualFold(cfg.Mode, "llm") || strings.EqualFold(cfg.VerifierMode, "llm") {
-		reportContent, err = generateLLMReport(cfg, manifest, findings, packets, bundle, hasPlannerMeta)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: LLM report generation failed (%v), falling back to heuristic\n", err)
-			reportContent = generateHeuristicReport(manifest, findings, packets, bundle, hasPlannerMeta)
-		}
-	} else {
-		reportContent = generateHeuristicReport(manifest, findings, packets, bundle, hasPlannerMeta)
+	reportContent, err := generateLLMReport(client, manifest, findings, packets, bundle, hasPlannerMeta)
+	if err != nil {
+		return fmt.Errorf("generate llm report: %w", err)
 	}
 
 	reportDir := filepath.Join(runDir, "08_report")
@@ -78,9 +71,7 @@ func Run(cfg config.Config) error {
 	return nil
 }
 
-func generateLLMReport(cfg config.Config, manifest artifacts.Manifest, findings artifacts.Findings, packets []string, bundle artifacts.EvidenceBundle, hasPlannerMeta bool) (string, error) {
-	client := llm.NewClient(cfg)
-
+func generateLLMReport(client llm.Client, manifest artifacts.Manifest, findings artifacts.Findings, packets []string, bundle artifacts.EvidenceBundle, hasPlannerMeta bool) (string, error) {
 	systemPrompt := `You are a senior TEE security auditor writing the final unified report for a TEECheck audit run. You receive:
 1. A findings summary (JSON) with status, severity, confidence for each finding
 2. The full review packets (markdown) for every finding — each contains Expert hypothesis, Challenger objections, Verifier evidence, and Arbiter judgment
@@ -155,37 +146,4 @@ Rules:
 	}
 
 	return resp.Text, nil
-}
-
-func generateHeuristicReport(manifest artifacts.Manifest, findings artifacts.Findings, packets []string, bundle artifacts.EvidenceBundle, hasPlannerMeta bool) string {
-	var b strings.Builder
-
-	b.WriteString(fmt.Sprintf("# TEECheck Audit Report — %s\n\n", manifest.RunID))
-	b.WriteString(fmt.Sprintf("**Repo:** %s\n", manifest.RepoURL))
-	b.WriteString(fmt.Sprintf("**Commit:** %s\n", manifest.Commit))
-	b.WriteString(fmt.Sprintf("**Findings:** %d\n\n", len(findings.Findings)))
-
-	if hasPlannerMeta {
-		m := bundle.PlannerMeta
-		b.WriteString(fmt.Sprintf("**Planner:** %d candidates, %d rounds, %d tokens, termination=%s\n\n",
-			len(bundle.Candidates), m.RoundsUsed, m.TokensUsed, m.TerminationReason))
-	}
-
-	b.WriteString("## Findings Summary\n\n")
-	b.WriteString("| # | Status | Severity | Confidence | Files |\n")
-	b.WriteString("|---|---|---|---|---|\n")
-	for i, f := range findings.Findings {
-		files := strings.Join(f.Files, ", ")
-		b.WriteString(fmt.Sprintf("| %d | %s | %s | %s | %s |\n", i+1, f.Status, f.Severity, f.Confidence, files))
-	}
-	b.WriteString("\n---\n\n")
-
-	// Append all review packets verbatim
-	for i, pkt := range packets {
-		b.WriteString(fmt.Sprintf("## Finding %d/%d\n\n", i+1, len(packets)))
-		b.WriteString(pkt)
-		b.WriteString("\n\n---\n\n")
-	}
-
-	return b.String()
 }

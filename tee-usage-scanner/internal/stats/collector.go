@@ -314,7 +314,7 @@ func collectExpert(runDir, repoRoot string) ExpertStats {
 
 		// Prefer the structured CitedFacts when present (v1.1.1+).
 		// Fall back to the flat Cited pool for legacy hypotheses
-		// or for heuristic-mode runs that did not populate the
+		// or for older runs that did not populate the
 		// per-fact list. The two paths produce identical numbers
 		// when CitedFacts is correctly flattened into Cited (which
 		// expert.RunWithEvents does), but the explicit branch

@@ -152,7 +152,7 @@ go run ./evaluator/runner \
   -mode evaluate \
   -results /tmp/teecheck-benchmark-results \
   -timeout 45m \
-  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --mode llm --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
+  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --repo-url {repository} --commit {revision} --mode llm --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
 ```
 
 Rescore existing results:

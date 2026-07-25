@@ -16,115 +16,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
-func Run(cfg config.Config) error {
-	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
-	if err != nil {
-		return fmt.Errorf("glob case packs: %w", err)
-	}
-	manifest, err := runfs.LoadManifest(cfg.RunDir)
-	if err != nil {
-		return fmt.Errorf("load manifest: %w", err)
-	}
-	findings := artifacts.Findings{
-		SchemaVersion: "teecheck.findings.v2",
-		RunID:         manifest.RunID,
-	}
-	count := 0
-	for idx, casePath := range casePaths {
-		var pack artifacts.CasePack
-		if err := runfs.ReadJSON(casePath, &pack); err != nil {
-			return fmt.Errorf("read case pack: %w", err)
-		}
-		var hypothesis artifacts.Hypothesis
-		if err := runfs.ReadJSON(filepath.Join(runfs.ExpertDir(cfg.RunDir), fmt.Sprintf("hypothesis-%03d.json", idx+1)), &hypothesis); err != nil {
-			return fmt.Errorf("read hypothesis: %w", err)
-		}
-		var challenge artifacts.Challenge
-		if err := runfs.ReadJSON(filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("challenge-%03d.json", idx+1)), &challenge); err != nil {
-			return fmt.Errorf("read challenge: %w", err)
-		}
-		var memo artifacts.VerificationMemo
-		if err := runfs.ReadJSON(filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1)), &memo); err != nil {
-			return fmt.Errorf("read verification memo: %w", err)
-		}
-
-		// PR-07 (§7.9, §25): the Arbiter aggregates the Architecture/
-		// Invariant/ToolFact evidence and the Challenger's phase-1
-		// independent view into clearly separated packet sections. It
-		// never rewrites any of them (§3.5) — loadCaseContext /
-		// loadIndependentView are read-only.
-		caseCtx := loadCaseContext(cfg.RunDir, pack)
-		independentView := loadIndependentView(challenge.IndependentViewPath)
-
-		item, packet := arbitrate(pack, hypothesis, challenge, memo, caseCtx, independentView)
-		if cfg.MaxFindings == 0 || len(findings.Findings) < cfg.MaxFindings {
-			findings.Findings = append(findings.Findings, item)
-		}
-		packetPath := filepath.Join(runfs.ArbiterPacketsDir(cfg.RunDir), fmt.Sprintf("review-%03d.md", idx+1))
-		if err := runfs.WriteText(packetPath, packet); err != nil {
-			return fmt.Errorf("write arbiter packet: %w", err)
-		}
-		count++
-	}
-	if err := runfs.WriteJSON(runfs.ArbiterFindingsPath(cfg.RunDir), findings); err != nil {
-		return fmt.Errorf("write arbiter findings: %w", err)
-	}
-	fmt.Printf("Wrote %d arbiter packet(s) to %s\n", count, runfs.ArbiterDir(cfg.RunDir))
-	return nil
-}
-
-func arbitrate(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, caseCtx caseContext, independent artifacts.ChallengerIndependentView) (artifacts.FindingItem, string) {
-	status := "needs_review"
-	confidence := "medium"
-	severity := severityForCategory(pack.Category)
-	switch memo.Status {
-	case "corroborated":
-		if hypothesis.Confidence == "high" {
-			status = "confirmed_candidate"
-			confidence = "high"
-		} else {
-			status = "likely_issue"
-		}
-	case "contested":
-		status = "needs_review"
-		confidence = "low"
-	case "inconclusive":
-		status = "needs_review"
-		confidence = "low"
-	}
-
-	// §25 mechanical gate: "confirmed_candidate" (or any other
-	// "confirmed*" status/wording) is only allowed when the attack
-	// chain is actually complete. See chain.go.
-	complete := attackChainComplete(pack, hypothesis, memo)
-
-	summary := fmt.Sprintf("%s | verifier=%s | exploitability=%s | %s", hypothesis.SuspectedIssue, memo.Status, challenge.Exploitability, chainCompletenessNote(pack, hypothesis, memo, complete))
-	sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
-	item := artifacts.FindingItem{
-		FindingID:  pack.CaseID,
-		SliceID:    pack.CaseID,
-		Status:     status,
-		Severity:   severity,
-		Confidence: confidence,
-		Files:      pack.TargetFiles,
-		Summary:    summary,
-		Evidence:   buildFindingEvidence(hypothesis, memo),
-		Sections:   &sections,
-	}
-	item = sanitizeFindingItem(item, complete)
-
-	// The packet quotes upstream prose (the Expert's SuspectedIssue,
-	// free-text notes, etc.) verbatim in several sections below — the
-	// §25 gate applies to the whole human-facing output, not just the
-	// fields this function itself composed, so scrub the assembled
-	// packet the same way sanitizeFindingItem scrubbed the item.
-	packet := buildPacket(pack, hypothesis, challenge, memo, item, sections)
-	if !complete {
-		packet = scrubConfirmedWording(packet)
-	}
-	return item, packet
-}
-
 // taggedJoin formats an untyped string list with a per-item tag
 // for inclusion in LLM prompts. Empty list → "(none)" so the LLM
 // sees an explicit signal instead of an empty placeholder.
@@ -137,37 +28,6 @@ func taggedJoin(items []string, tag string) string {
 		parts = append(parts, tag+" "+it)
 	}
 	return strings.Join(parts, " | ")
-}
-
-// buildFindingEvidence assembles the Evidence []string for a
-// finding. Validated (citation-backed) supporting facts and
-// confirmed facts go in unprefixed; untyped fields from both the
-// expert (UntypedFacts) and the verifier (UntypedConfirmedFacts /
-// UntypedContradictions) go in with an explicit "[unanchored]"
-// prefix so the human reviewer can tell at a glance which evidence
-// items the agents actually anchored to source bytes.
-//
-// Strict order: validated first, untyped last.
-func buildFindingEvidence(hypothesis artifacts.Hypothesis, memo artifacts.VerificationMemo) []string {
-	out := make([]string, 0,
-		len(hypothesis.SupportingFacts)+len(memo.ConfirmedFacts)+
-			len(hypothesis.UntypedFacts)+len(memo.UntypedConfirmedFacts)+
-			len(memo.UntypedContradictions))
-	out = append(out, hypothesis.SupportingFacts...)
-	out = append(out, memo.ConfirmedFacts...)
-	for _, candidate := range memo.CandidateFacts {
-		out = append(out, "[unvalidated candidate] "+candidate)
-	}
-	for _, u := range hypothesis.UntypedFacts {
-		out = append(out, "[unanchored] "+u)
-	}
-	for _, u := range memo.UntypedConfirmedFacts {
-		out = append(out, "[unanchored verifier confirm] "+u)
-	}
-	for _, u := range memo.UntypedContradictions {
-		out = append(out, "[unanchored verifier contradict] "+u)
-	}
-	return out
 }
 
 func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, memo artifacts.VerificationMemo, item artifacts.FindingItem, sections artifacts.ArbiterSections) string {
@@ -285,7 +145,7 @@ func severityForCategory(category string) string {
 	}
 }
 
-func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
+func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -294,8 +154,6 @@ func RunWithBus(cfg config.Config, bus *agentbus.Bus) error {
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-
-	client := llm.NewClient(cfg)
 
 	findings := artifacts.Findings{
 		SchemaVersion: "teecheck.findings.v2",

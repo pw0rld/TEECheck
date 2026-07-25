@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -127,8 +129,18 @@ func TestArbiterRun_NeverRewritesToolFactOrInvariants(t *testing.T) {
 	}
 
 	cfg := config.Config{RunDir: runDir, AgentID: "arbiter-001"}
-	if err := Run(cfg); err != nil {
-		t.Fatalf("Run: %v", err)
+	client := &llmtest.FakeClient{Responses: []string{`{
+		"status": "needs_review",
+		"severity": "medium",
+		"confidence": "low",
+		"summary": "aggregated",
+		"evidence": [],
+		"review_packet_markdown": "# Packet",
+		"queries": []
+	}`}}
+	bus := agentbus.New(0)
+	if err := RunWithBus(cfg, client, bus); err != nil {
+		t.Fatalf("RunWithBus: %v", err)
 	}
 
 	if afterFactHash := hashArbiterFile(t, factPath); afterFactHash != beforeFactHash {
