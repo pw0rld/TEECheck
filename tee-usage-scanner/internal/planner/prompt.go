@@ -320,6 +320,16 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 		b.WriteString("\n")
 	}
 
+	if len(state.PlaybookDetails) > 0 {
+		b.WriteString("=== TWE PLAYBOOK DETAIL (pulled this run; authoritative investigation method) ===\n")
+		for _, d := range state.PlaybookDetails {
+			fmt.Fprintf(&b, "--- %s ---\n", d.TWEID)
+			b.WriteString(d.Text)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
 	recent := state.LastRoundsForPrompt(2)
 	if len(recent) > 0 {
 		b.WriteString("=== RECENT ROUNDS ===\n")

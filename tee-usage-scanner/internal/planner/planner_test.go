@@ -366,6 +366,70 @@ func TestPlannerRun_FinalRoundPromptIncludesObservedPaths(t *testing.T) {
 	}
 }
 
+// ─── Sticky TWE playbook detail (Fix 1) ───────────────────────────────
+
+// fakePlaybookSource is a minimal actions.PlaybookDetailSource test double.
+type fakePlaybookSource struct {
+	byID map[string]string
+}
+
+func (f *fakePlaybookSource) Detail(tweID string) (string, bool) {
+	text, ok := f.byID[tweID]
+	return text, ok
+}
+
+// TestPlannerRun_PulledPlaybookDetailStaysInPromptAcrossRounds proves the
+// fix for the "throttled and then evaporates" bug: once the planner pulls a
+// TWE's detail via twe_playbook_detail, that full text must keep appearing
+// in every subsequent round's prompt — not just the 2-round, 1500-char
+// window that RECENT ROUNDS uses for ordinary action output.
+func TestPlannerRun_PulledPlaybookDetailStaysInPromptAcrossRounds(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+
+	detailText := "[TWE-STATE-001] Trusted State Rollback\nInvestigate: " + strings.Repeat("x", 2000) + "END-OF-DETAIL-MARKER\n"
+	src := &fakePlaybookSource{byID: map[string]string{"TWE-STATE-001": detailText}}
+	reg := actions.NewDefaultRegistryWithFacts(nil, "", src)
+
+	client := &mockLLM{scripts: []string{
+		`{"thought":"pull detail","actions":[{"name":"twe_playbook_detail","args":{"twe_id":"TWE-STATE-001"}}]}`,
+		`{"thought":"r2","actions":[{"name":"list_dir","args":{"path":"."}}]}`,
+		`{"thought":"r3","actions":[{"name":"list_dir","args":{"path":".","depth":1}}]}`,
+		`{"thought":"r4","actions":[{"name":"ripgrep","args":{"pattern":"verify","globs":["*.rs"]}}]}`,
+		`{"thought":"done","actions":[{"name":"done","args":{"summary":"ok","candidates":[]}}]}`,
+	}}
+
+	budget := defaultTestBudget()
+	budget.MaxRounds = 5
+
+	_ = planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "test-sticky-detail",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Client:   client,
+		Registry: reg,
+		Budget:   budget,
+	})
+
+	if len(client.sent) < 5 {
+		t.Fatalf("expected 5 LLM calls, got %d", len(client.sent))
+	}
+
+	// Round 5's prompt is 3 rounds after the pull, well outside the 2-round
+	// RECENT ROUNDS window — the sticky block is the only thing that could
+	// still carry it there, and it must carry it whole, tail marker
+	// included, not cut at 1500 chars.
+	round5Msg := client.sent[4].Messages[0].Content
+	if !strings.Contains(round5Msg, "TWE PLAYBOOK DETAIL") {
+		t.Errorf("round 5 prompt missing sticky TWE PLAYBOOK DETAIL section")
+	}
+	if !strings.Contains(round5Msg, "TWE-STATE-001") {
+		t.Errorf("round 5 prompt missing pulled TWE id")
+	}
+	if !strings.Contains(round5Msg, "END-OF-DETAIL-MARKER") {
+		t.Errorf("round 5 prompt truncated the pulled detail before its tail marker")
+	}
+}
+
 // ─── Non-final round soft whitelist ──────────────────────────────────
 
 func TestPlannerRun_MiddleRoundPromptUsesSoftWhitelist(t *testing.T) {

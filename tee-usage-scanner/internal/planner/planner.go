@@ -378,6 +378,22 @@ loop:
 				trackObservedPaths(act.Name, act.Args, result.Output, cfg.RepoRoot, observedPaths)
 			}
 
+			// Keep a pulled TWE playbook detail alive for the rest of the
+			// loop: BuildRoundPrompt's RECENT ROUNDS window truncates and
+			// scrolls out actions' Output far too aggressively for the
+			// detail tier's 3000-token budget (see PlaybookDetails' doc
+			// comment on PlannerState). Recording it here means the sticky
+			// "TWE PLAYBOOK DETAIL" section renders it in full every round
+			// from here on.
+			if result.Name == "twe_playbook_detail" && result.OK {
+				var detailArgs struct {
+					TWEID string `json:"twe_id"`
+				}
+				if err := json.Unmarshal(act.Args, &detailArgs); err == nil && detailArgs.TWEID != "" {
+					state.AddPlaybookDetail(detailArgs.TWEID, result.Output)
+				}
+			}
+
 			if result.Name == "done" && result.OK {
 				if err := json.Unmarshal([]byte(result.Output), &donePayload); err == nil {
 					state.AppendRoundAndPersist(roundRec, roundsLog)

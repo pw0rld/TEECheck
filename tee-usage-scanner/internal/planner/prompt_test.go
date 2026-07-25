@@ -155,6 +155,62 @@ func TestBuildRoundPrompt_IncludesCandidatesSoFar(t *testing.T) {
 	}
 }
 
+func TestBuildRoundPrompt_IncludesStickyPlaybookDetail(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AddPlaybookDetail("TWE-STATE-001", "Attacker: replays persisted state wholesale.")
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, "TWE PLAYBOOK DETAIL") {
+		t.Error("round prompt missing sticky playbook detail header")
+	}
+	if !strings.Contains(prompt, "TWE-STATE-001") {
+		t.Error("round prompt missing pulled TWE id")
+	}
+	if !strings.Contains(prompt, "Attacker: replays persisted state wholesale.") {
+		t.Error("round prompt missing pulled detail text")
+	}
+}
+
+func TestBuildRoundPrompt_StickyPlaybookDetailIsNotTruncated(t *testing.T) {
+	state := planner.NewState("run-001")
+
+	// Longer than the 1500-char RECENT ROUNDS truncation that action
+	// Output goes through — the sticky block must carry it in full
+	// regardless, for as many rounds as the loop runs, not just the last 2.
+	head := "Investigate: " + strings.Repeat("x", 2000)
+	tail := "END-OF-DETAIL-MARKER"
+	detail := head + tail
+	if len(detail) <= 1500 {
+		t.Fatalf("test detail is only %d chars; must exceed 1500 to prove no truncation", len(detail))
+	}
+	state.AddPlaybookDetail("TWE-STATE-001", detail)
+
+	// Push the detail's originating round out of the RECENT ROUNDS window
+	// (last 2 rounds) to prove the sticky block, not RECENT ROUNDS, is what
+	// carries it.
+	for i := 1; i <= 4; i++ {
+		state.AppendRound(artifacts.RoundRecord{Round: i, Thought: "unrelated round"})
+	}
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, tail) {
+		t.Errorf("round prompt truncated the sticky playbook detail before its tail marker %q", tail)
+	}
+}
+
+func TestPlannerState_AddPlaybookDetailDedupesByID(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AddPlaybookDetail("TWE-STATE-001", "first pull")
+	state.AddPlaybookDetail("TWE-STATE-001", "second pull should be ignored")
+
+	if len(state.PlaybookDetails) != 1 {
+		t.Fatalf("expected 1 stored detail, got %d", len(state.PlaybookDetails))
+	}
+	if state.PlaybookDetails[0].Text != "first pull" {
+		t.Errorf("expected first pull to win, got %q", state.PlaybookDetails[0].Text)
+	}
+}
+
 // ─── §7.5/§24: TWE/Architecture/Invariant prior-knowledge injection ──────
 
 func TestBuildSystemPrompt_InjectsTWEContext(t *testing.T) {
