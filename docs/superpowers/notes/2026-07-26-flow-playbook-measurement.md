@@ -42,9 +42,30 @@
 
 1. **这是 smoke signal，不是测量。** 每臂 n=2、每格单次运行、LLM 非确定性。不得据此做百分比声称。
 2. **holdout 出现 1 个误报**：`CVE-2019-0876` 指向 `calls.c` 而非 `report.c`——同目录、貌似合理但错误。有 finding ≠ finding 正确。
-3. **详版一次都没被拉取。** withflow 臂的 `twe_playbook_detail` 调用次数为 **0**；改进完全来自 250-token 的 **brief 档**。反倒是 baseline 臂调了 2 次（拉 rollback 的详版）却一无所获。分层注入让常驻成本从 14.4K 降到 4K 这一点成立，但**详版档的价值尚未被任何数据支持**。
+3. **详版一次都没被拉取**（详见下节的机制分析）。分层注入让常驻成本从 14.4K 降到 4K 这一点成立且已兑现，但**详版档的价值尚未被任何数据支持**。
 4. **fixture 是文件级抽取**（1–4 个文件），不是完整仓库。本结果不能外推到"在几万文件的 optee_os 里定位"。
 5. 数据泄漏风险仍在：这些是公开 CVE，命中可能部分来自模型记忆而非推理（见 spec §8）。
+
+## 机制分析：playbook 改变的不是知识量，是 agent 的工作模式
+
+统计两臂 planner 的实际动作分布（取自 `events.jsonl`）：
+
+| 案例 / 臂 | 动作分布 | 耗时 | 结果 |
+|---|---|---|---|
+| CVE-2021-43619 / baseline | list_dir×2, ripgrep×8, outline×2, **twe_playbook_detail×2**, **read_file×0** | 146s | 0 候选 |
+| CVE-2021-43619 / withflow | list_dir×2, **read_file×6**, **reverse_trace×2**, ripgrep×4, outline×2 | **50s** | **HIT** |
+| CVE-2019-0876 / baseline | list_dir×4, ripgrep×6, outline×2, **twe_playbook_detail×2**, **read_file×0** | 49s | 0 候选 |
+| CVE-2019-0876 / withflow | list_dir×2, **read_file×4**, ripgrep×8 | 51s | MISS（有候选） |
+
+**两个 baseline 运行一个文件都没读过。** 它们反复搜索、并去拉取 playbook 详版——因为手上唯一的 rollback 知识与眼前代码对不上，agent 持续在"索取更多知识"而不是"去看代码"，最终一无所获。
+
+**两个 withflow 运行都直接进入读代码与反向追踪**，预算花在了产出候选的动作上。CVE-2021-43619 在命中的同时还快了近 3 倍。
+
+由此得到本次测量最有价值的一条推论：
+
+> **baseline 拉取详版是"迷路"的症状，不是详版有价值的证据。** withflow 不拉，是因为 brief 已经给出了足够的方向，agent 把回合预算用在了读代码上。
+
+这不改变"详版价值未被验证"的结论，但改变了它的性质：**不应该通过 prompt 施压去制造拉取行为**——那会把 agent 推回 baseline 那种"要知识而不读码"的模式。详版的价值若存在，应体现在 brief 不足以定向的更难/更大的目标上，需要另设场景验证。
 
 ## 一处方法论自查
 
