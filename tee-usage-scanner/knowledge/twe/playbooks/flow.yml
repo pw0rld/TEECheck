@@ -1,0 +1,89 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-FLOW-001
+name: Host-Controlled Data Reaches Enclave Security Decision
+family: Flow
+
+scenario: >
+  Code outside the trust boundary supplies the offsets, sizes, counts, indices
+  or pointers that bound a privileged operation. The trusted side uses them
+  without proving they are in range and caller-owned, so it reads, writes or
+  authorizes beyond that caller's entitlement.
+
+attacker_capabilities:
+  - control_every_field_of_a_boundary_message_or_call_parameter
+  - supply_pointers_and_lengths_that_name_memory_the_caller_does_not_own
+  - invoke_boundary_entrypoints_in_any_order_and_with_any_argument_count
+  - force_early_failure_so_error_and_cleanup_paths_run
+  - inject_a_trap_or_exception_at_an_instruction_of_its_choosing
+  - call_the_privileged_service_from_a_lower_trust_partition
+
+look_for:
+  - untrusted_to_trusted_entrypoints_and_their_parameter_decoding
+  - host_supplied_offsets_sizes_counts_indices_or_pointers_reaching_a_privileged_operation
+  - subranges_accepted_without_proof_they_lie_inside_the_object_their_handle_selected
+  - bounds_arithmetic_that_can_wrap_before_its_comparison
+  - values_validated_on_one_path_but_reused_unvalidated_on_error_or_reply_paths
+  - host_chosen_tags_or_selectors_trusted_without_cross_checking_trusted_state
+  - checks_that_do_not_dominate_every_path_to_the_operation_they_guard
+  - untrusted_values_propagated_through_wrappers_decoders_and_accessors
+
+investigation_steps:
+  - enumerate_untrusted_to_trusted_entrypoints
+  - identify_which_parameter_fields_the_untrusted_side_fully_controls
+  - trace_each_controlled_value_to_the_operation_that_consumes_it
+  - locate_every_check_standing_between_the_entrypoint_and_that_operation
+  - test_whether_the_check_covers_the_whole_range_and_the_whole_value_domain
+  - test_whether_the_check_dominates_error_cleanup_and_reply_paths_too
+  - inspect_the_bounds_arithmetic_for_wraparound_before_the_comparison
+  - verify_the_check_uses_the_caller_identity_and_the_object_the_handle_actually_selected
+  - determine_whether_read_or_write_access_is_required_and_whether_both_are_checked
+  - decide_whether_the_consuming_operation_is_a_security_decision_or_only_an_observable_output
+  - establish_the_security_effect_of_an_out_of_contract_value
+  - construct_an_evidence_anchored_attack_sequence
+
+required_evidence:
+  - attacker_controlled_value_entering_at_an_identified_trust_boundary_entrypoint
+  - reachable_path_from_that_entrypoint_to_a_security_relevant_operation_or_decision
+  - no_check_on_that_path_constrains_the_value_to_the_operations_contract
+  - any_check_that_exists_is_incomplete_or_fails_to_dominate_the_operation
+  - the_value_is_not_cryptographically_constrained_before_the_operation
+  - the_path_is_in_production_scope_and_not_test_or_example_only
+  - a_concrete_out_of_contract_value_and_the_security_effect_it_produces
+
+common_defenses:
+  - overflow_checked_addition_before_the_bounds_comparison
+  - range_check_against_the_object_the_handle_actually_selected
+  - access_rights_check_taking_the_caller_context_and_the_required_direction
+  - ownership_check_that_the_referenced_range_belongs_to_the_calling_component
+  - every_loop_over_an_untrusted_count_clamped_to_the_static_capacity
+  - iteration_that_starts_at_the_rounded_down_boundary_and_covers_every_unit_before_the_end
+  - pointer_proven_to_lie_in_the_expected_address_space_before_dereference
+  - untrusted_selector_corroborated_against_locally_observed_trusted_state
+  - fail_closed_on_validation_failure_with_no_write_back_or_state_mutation
+  - cryptographic_verification_gate_or_signature_recovery_before_the_operation
+  - guard_placed_so_it_dominates_every_path_to_the_operation
+
+common_false_positives:
+  - the_callee_re_validates_the_value_before_using_it
+  - a_dominating_check_already_constrains_the_value_on_every_path
+  - the_source_or_the_consuming_operation_is_test_or_example_only
+  - the_value_is_self_authenticating_after_a_signature_mac_or_attestation_gate
+  - the_input_reaches_only_an_observable_output_and_no_security_decision
+  - the_consumed_range_stays_inside_the_callers_own_region_by_construction
+  - the_path_is_unreachable_in_the_shipped_configuration
+  - a_lower_layer_or_the_hardware_enforces_the_bound_before_this_code_runs
+  - the_input_is_an_attestation_artifact_the_attestation_protocol_itself_validates
+
+related_twes:
+  - TWE-FLOW-002
+  - TWE-CONFIG-002
+  - TWE-DESIGN-001
+
+trustir_hints:
+  - enumerate_boundary_entrypoints
+  - label_host_controlled_trust_sources
+  - label_security_decision_trust_sinks
+  - record_sanitizers_and_suppressors_on_the_path
+  - mark_additional_trust_flow_steps_through_propagators
+  - restrict_findings_to_production_scope
+  - compare_vulnerable_and_fixed_check_placement

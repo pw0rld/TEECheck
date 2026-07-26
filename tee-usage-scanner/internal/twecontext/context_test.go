@@ -111,8 +111,16 @@ func TestShippedRollbackPlaybook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile shipped playbooks: %v", err)
 	}
-	if len(compiled.Manifest.TWEIDs) != 1 || compiled.Manifest.TWEIDs[0] != "TWE-STATE-001" {
-		t.Fatalf("shipped TWE IDs = %v", compiled.Manifest.TWEIDs)
+	// The catalog grows as playbooks are authored, so assert this playbook is
+	// shipped rather than that it is the only one.
+	var rollback Playbook
+	for _, p := range catalog.playbooks {
+		if p.ID == "TWE-STATE-001" {
+			rollback = p
+		}
+	}
+	if rollback.ID != "TWE-STATE-001" {
+		t.Fatalf("shipped TWE IDs = %v, want TWE-STATE-001 among them", compiled.Manifest.TWEIDs)
 	}
 	// Compile now renders the brief tier: the look_for signal that lets an
 	// agent judge relevance must show up in the compiled context.
@@ -141,7 +149,7 @@ func TestShippedRollbackPlaybook(t *testing.T) {
 	// Measure the playbook's own brief block, not the whole compiled
 	// document (which also carries the fixed contextHeader) — that is what
 	// Compile()'s per-playbook ceiling actually enforces.
-	if briefTokens := estimateTokens(compileBriefBlock(catalog.playbooks[0])); briefTokens >= maxBriefContextTokens {
+	if briefTokens := estimateTokens(compileBriefBlock(rollback)); briefTokens >= maxBriefContextTokens {
 		t.Fatalf("shipped rollback playbook brief (~%d tokens) does not leave headroom under the %d-token ceiling",
 			briefTokens, maxBriefContextTokens)
 	}
