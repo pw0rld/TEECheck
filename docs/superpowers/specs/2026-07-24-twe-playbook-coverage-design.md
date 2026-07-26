@@ -49,11 +49,28 @@ TEECheck 用多个 LLM Agent 审计 TEE（可信执行环境）代码。它靠 *
 
 ---
 
-## 2. 范围
+## 2. 范围（2026-07-24 收窄）
 
-**写 3 份 playbook**：`flow.yml`（TWE-FLOW-001）、`leakage.yml`（TWE-LEAK-002）、`guard.yml`（TWE-GUARD-001）。
+### 2.1 发现：TWE 目录与本 benchmark 存在分类错位
 
-具体 TWE ID 在实现阶段按 `knowledge/twe/definitions/catalog.yml` 的 16 条锚点选定——每份 playbook 必须对应一个已存在的 TWE ID，不新增 TWE。
+把开发集案例与 `catalog.yml` 的条目定义逐一对照后发现：
+
+| 族 | 开发集实际案例 | 对应 TWE 条目 | 匹配度 |
+|---|---|---|---|
+| **Flow** | 未对齐范围跳过末页、`num_params=127`、无效指针对齐、攻击者控制的格式/索引 | `TWE-FLOW-001` 宿主机数据到达 enclave 安全决策 | 🟡 说得过去——都是"不可信输入未充分校验" |
+| **Leakage** | 内存池残留、FPU 状态、iovec 长度、RSA 时序 ×2 | `TWE-LEAK-001` 秘密进入日志/错误/元数据；`TWE-LEAK-002` 秘密相关的输出长度或结构 | 🟠 部分匹配——时序不是"输出长度或结构"，残留内存不是"日志/错误" |
+| **Guard** | 截断的 ChaCha20-Poly1305 tag 比较、ECDH 点不在曲线上 | `TWE-GUARD-001/002/003` 全部是 attestation 相关 | 🔴 **不匹配**——这是"密码学校验不完整"，与 attestation 无关 |
+
+**根因**：TWE 目录是 tee-audit 为 Web3/SGX **证明中心**场景所建，而本 benchmark 是 **OP-TEE 内核**的真实 CVE（参数校验、内存管理、密码学实现）。两套分类天生错位。这也解释了 §1.3 中那些 `twe_family` 标签当初为何被判定"无来源"——它们是硬套的。
+
+### 2.2 收窄后的范围：先写一份
+
+**本期只写 `flow.yml`（TWE-FLOW-001）**，理由：
+- Flow 是唯一匹配度可接受的族，且样本最多（全集 14，开发集 8，holdout 6）。
+- 它能以最小投入验证本设计的核心假设：**写一份对路的 playbook，真的能提升命中吗？**
+- 验证之后再决定 Leakage / Guard 怎么办（可能需要新增 TWE 条目，那是另一个议题）。
+
+§1.2 中"3 份覆盖 32 个 case"的估计据此作废——Guard 那 4 个即使写了 `TWE-GUARD-001` 的 playbook 也救不了。
 
 ---
 
@@ -93,12 +110,18 @@ playbook 只描述**类**，绝不描述**实例**。
 
 **实测结果（已算出，写死不再重算）**：
 
-| | 总数 | Flow | Guard | Leakage | State | 超出范围 | TWE 范围内 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| **dev** | 22 | 7 | 2 | 5 | 2 | 6 | **16** |
-| **holdout** | 22 | 7 | 2 | 4 | 3 | 6 | **16** |
+| | 总数 | Flow | Guard | Leakage | State | 超出范围 |
+|---|---:|---:|---:|---:|---:|---:|
+| **dev** | **23** | 8 | 2 | 5 | 2 | 6 |
+| **holdout** | **21** | 6 | 2 | 4 | 3 | 6 |
 
-两侧族分布对称，TWE 范围内样本各 16 个。
+### 5.1 一次已发生的污染（必须记录）
+
+`CVE-2019-1010292` 原本分到 holdout，但它的 `patches/fix.patch` 与 `oracle.yaml` 在 2026-07-24 的设计探索中被展示过（作为"patch 能提供什么原料"的举例），且 2026-07-24 的端到端探针也在其 fixture 上运行过。
+
+**处置**：将其**移入 dev**，划分改为 23/21。代价是少一个 holdout 样本，收益是 holdout 保持纯净。
+
+**纪律**：此后 holdout 的 21 个案例，其 patch、oracle、源码在编写 playbook 的全过程中不得打开。编写 playbook 的实施者应在**全新上下文**中工作，只被授予开发集材料。
 
 **落盘**：划分结果写入 `teecheck-benchmark/datasets/SPLIT.md`（人可读、可核验，含种子与生成方法），随本次变更提交并**冻结**。
 
@@ -110,7 +133,7 @@ playbook 只描述**类**，绝不描述**实例**。
 
 | # | 标准 |
 |---|---|
-| 1 | 三份 playbook 写成，每份通过 `twecontext.Load` + `Compile`（brief ≤250、detail ≤3000 token，fail closed） |
+| 1 | `flow.yml` 写成并通过 `twecontext.Load` + `Compile`（brief ≤250、detail ≤3000 token，fail closed） |
 | 2 | 机械检查通过：playbook 全文不含任何 holdout 案例的 `primary_file` / `primary_function` / CVE 编号 |
 | 3 | `SPLIT.md` 已提交且划分与 §5 表格一致 |
 | 4 | **开发集**上的 confirmed finding 数较基线（当前 1 份 playbook）有提升 |
@@ -122,6 +145,7 @@ playbook 只描述**类**，绝不描述**实例**。
 
 ## 7. 非目标
 
+- **本期不写 Leakage / Guard 的 playbook**——§2.1 的分类错位使其收益存疑；先用 Flow 验证核心假设再定（可能需新增 TWE 条目，属另一议题）。
 - **不写 Binding / Config / Design 的 playbook**——此 benchmark 上样本为 0，无法测量收益。（真实世界可能需要，届时另议。）
 - **不恢复 `twe_family` / `in_twe_scope` 到 oracle 文件**作为打分真值（§1.3）。
 - **不追求 >73% 召回**——超出部分是设计边界，不是缺陷。
