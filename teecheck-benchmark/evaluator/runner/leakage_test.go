@@ -46,10 +46,33 @@ func recoverHoldoutFunctions(t *testing.T, repoRoot string, holdout []string) ma
 	return recovered
 }
 
-// A playbook that names a holdout case's file, function, or CVE id has
-// memorized the answer instead of stating a generalizable obligation. That
-// would make the holdout measurement meaningless, so it fails the build.
-func TestPlaybooksDoNotLeakHoldoutCases(t *testing.T) {
+// scanFileForLeaks reads a single knowledge file and reports (via t.Errorf)
+// every forbidden term it contains, attributing each hit to the holdout case
+// it identifies. It returns true if the file was read successfully, so
+// callers can distinguish "checked, found nothing" from "couldn't read it".
+func scanFileForLeaks(t *testing.T, path, displayName string, forbidden map[string]string) bool {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", displayName, err)
+	}
+	text := string(body)
+	for term, fromCase := range forbidden {
+		if term == "" {
+			continue
+		}
+		if strings.Contains(text, term) {
+			t.Errorf("%s mentions %q, which identifies holdout case %s — knowledge files must state generalizable obligations, not memorized instances", displayName, term, fromCase)
+		}
+	}
+	return true
+}
+
+// A knowledge file (playbook or catalog entry) that names a holdout case's
+// file, function, or CVE id has memorized the answer instead of stating a
+// generalizable obligation. That would make the holdout measurement
+// meaningless, so it fails the build.
+func TestKnowledgeDoesNotLeakHoldoutCases(t *testing.T) {
 	var split struct {
 		Holdout []string `json:"holdout"`
 	}
@@ -121,22 +144,14 @@ func TestPlaybooksDoNotLeakHoldoutCases(t *testing.T) {
 		if e.IsDir() || (ext != ".yml" && ext != ".yaml") {
 			continue
 		}
-		body, err := os.ReadFile(filepath.Join(playbookDir, e.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", e.Name(), err)
-		}
-		checked++
-		text := string(body)
-		for term, fromCase := range forbidden {
-			if term == "" {
-				continue
-			}
-			if strings.Contains(text, term) {
-				t.Errorf("%s mentions %q, which identifies holdout case %s — playbooks must state generalizable obligations, not memorized instances", e.Name(), term, fromCase)
-			}
+		if scanFileForLeaks(t, filepath.Join(playbookDir, e.Name()), e.Name(), forbidden) {
+			checked++
 		}
 	}
 	if checked == 0 {
 		t.Fatal("no playbooks were checked; the path to the playbook directory is wrong")
 	}
+
+	catalogPath := filepath.Join("..", "..", "..", "tee-usage-scanner", "knowledge", "twe", "definitions", "catalog.yml")
+	scanFileForLeaks(t, catalogPath, "catalog.yml", forbidden)
 }
