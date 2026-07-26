@@ -1,7 +1,19 @@
-# Migrated verbatim from tee-audit's trustir/spec/twe_catalog.yml (PR-02 of
-# the TEECheck/tee-audit merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1).
+# This file has two parts, and the boundary between them is load-bearing.
 #
-# This is the fixed id/name/family/query-module anchor for all 16 TWEs — the
+# Part 1 (TWE-FLOW-001 .. TWE-LEAK-002, 16 entries): migrated verbatim from
+# tee-audit's trustir/spec/twe_catalog.yml (PR-02 of the TEECheck/tee-audit
+# merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1). That catalog is
+# attestation-centric (built for Web3/SGX consumers of remote attestation).
+#
+# Part 2 (below the "TEECheck-local extensions" marker, 3 entries): added by
+# TEECheck because this project's benchmark corpus is OP-TEE/TF-M kernel CVEs
+# — parameter validation, memory management, crypto implementation bugs — a
+# shape the migrated catalog has no entries for. See that section's own
+# header comment for details. A future maintainer merging an upstream
+# tee-audit catalog update should be able to replace Part 1 wholesale without
+# touching Part 2.
+#
+# This is the fixed id/name/family/query-module anchor for all TWEs — the
 # definition layer, not the experience layer. It carries no scenario, no
 # investigation method, and no CodeQL obligation encoding: those belong to
 # the experience Playbooks (knowledge/twe/playbooks/, internal/twecontext)
@@ -94,3 +106,57 @@ twe:
     name: Secret-Dependent Output Length or Structure Exposed
     query_modules: [leakage/SecretDependentOutputShape.ql]
     required_trustir: [secret_source, observable_sink, normalizer, secret_dependent_branch]
+
+  # ── TEECheck-local extensions ─────────────────────────────────────────
+  # The entries above are tee-audit's, migrated verbatim. Everything below
+  # was added by TEECheck because the migrated catalog is attestation-centric
+  # and has no entry for these classes, each of which the benchmark corpus
+  # actually contains. Each entry records the dev-half CVEs it generalizes.
+  # Keep this boundary intact: a future upstream catalog update must be able
+  # to replace the block above without touching these.
+
+  # Generalizes: truncated ChaCha20-Poly1305 tag comparison (CWE-187);
+  # ECDH public point not validated against the selected curve (CWE-347).
+  # query_modules names a planned module; the query does not exist yet.
+  # NOTE: none of these roles exist in enum_registry.yml yet.
+  - id: TWE-GUARD-004
+    family: Guard
+    name: Incomplete Cryptographic Verification
+    query_modules: [guard/IncompleteCryptographicVerification.ql]
+    required_trustir: [verification_operation, verified_input_span, accepted_domain_constraint, authority_point]
+
+  # Generalizes: RSA-OAEP invalid label-hash comparison timing (CWE-208);
+  # RSA PKCS#1 v1.5 decryption timing (CWE-208, Bleichenbacher-style padding
+  # oracle via response latency).
+  # query_modules names a planned module; the query does not exist yet.
+  # required_trustir reuses secret_source / observable_sink from TWE-LEAK-001
+  # and secret_dependent_branch from TWE-LEAK-002 — those are already anchored
+  # in enum_registry.yml's trust_source_role (secret_dependent_branch is a
+  # listed value there) and observable_sink_role categories.
+  # NOTE: constant_time_guard is not in enum_registry.yml — guard_kind's 15
+  # terms are all attestation-shaped and none covers timing-safety; flagged
+  # for the future fact/query layer.
+  - id: TWE-LEAK-003
+    family: Leakage
+    name: Secret-Dependent Timing Observable
+    query_modules: [leakage/SecretDependentTiming.ql]
+    required_trustir: [secret_source, secret_dependent_branch, observable_sink, constant_time_guard]
+
+  # Generalizes: over-sized memory-pool allocation left uncleared (CWE-459,
+  # Incomplete Cleanup); FPU/extended-register state not cleared at enclave
+  # entry (CWE-200); host-controlled iovec/length field sized past the
+  # intended buffer, exposing adjacent memory (CWE-125).
+  # query_modules names a planned module; the query does not exist yet.
+  # required_trustir reuses boundary_exit, the field TWE-FLOW-002 already
+  # established for "value crosses the TEE boundary".
+  # NOTE: uninitialized_memory_object, size_source, and clear_or_zero_guard
+  # are not in enum_registry.yml — state_object_kind's ten values (sealed_blob,
+  # checkpoint, ...) are all versioned/sealed state, not raw uncleared
+  # buffers, trust_source_role has no host-controlled-length term, and
+  # guard_kind has no zero/clear-on-exit term; flagged for the future
+  # fact/query layer.
+  - id: TWE-LEAK-004
+    family: Leakage
+    name: Residual or Uninitialized Memory Crosses a Boundary
+    query_modules: [leakage/ResidualMemoryCrossesBoundary.ql]
+    required_trustir: [uninitialized_memory_object, boundary_exit, size_source, clear_or_zero_guard]
