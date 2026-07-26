@@ -3,10 +3,48 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// holdoutFunctionRevision is the commit whose parent still had
+// primary_function populated in every oracle.yaml. c3e3e28 trimmed that
+// field from all 44 datasets, so we recover the pre-trim value straight
+// from git history at test time rather than ever writing it to disk.
+const holdoutFunctionRevision = "c3e3e28^"
+
+// recoverHoldoutFunctions shells out to git to read each holdout case's
+// primary_function as it existed before c3e3e28 stripped the field. The
+// values are kept only in memory for the duration of the test — persisting
+// them to a committed file would leak the holdout answers to playbook
+// authors, defeating the point of the guard.
+func recoverHoldoutFunctions(t *testing.T, repoRoot string, holdout []string) map[string]string {
+	t.Helper()
+	recovered := map[string]string{} // case id -> primary_function
+	for _, id := range holdout {
+		path := "teecheck-benchmark/datasets/" + id + "/oracle.yaml"
+		cmd := exec.Command("git", "show", holdoutFunctionRevision+":"+path)
+		cmd.Dir = repoRoot
+		out, err := cmd.Output()
+		if err != nil {
+			// Missing at that revision (or git failed for this one path) —
+			// skip this case's function name but keep going with the rest.
+			continue
+		}
+		var o struct {
+			PrimaryFunction string `json:"primary_function"`
+		}
+		if err := json.Unmarshal(out, &o); err != nil {
+			continue
+		}
+		if o.PrimaryFunction != "" {
+			recovered[id] = o.PrimaryFunction
+		}
+	}
+	return recovered
+}
 
 // A playbook that names a holdout case's file, function, or CVE id has
 // memorized the answer instead of stating a generalizable obligation. That
@@ -52,6 +90,24 @@ func TestPlaybooksDoNotLeakHoldoutCases(t *testing.T) {
 		if o.PrimaryFunction != "" {
 			forbidden[o.PrimaryFunction] = id
 		}
+	}
+
+	// No oracle on disk carries primary_function today (c3e3e28 trimmed it
+	// from all 44 datasets), so the loop above never populates it. Recover
+	// each holdout case's pre-trim primary_function from git history and
+	// add it to the forbidden vocabulary — without ever writing it to a
+	// committed file.
+	repoRootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git unavailable, cannot recover holdout primary_function values: %v", err)
+	}
+	repoRoot := strings.TrimSpace(string(repoRootOut))
+	recoveredFunctions := recoverHoldoutFunctions(t, repoRoot, split.Holdout)
+	if len(recoveredFunctions) == 0 {
+		t.Fatalf("recovered zero holdout primary_function values from %s; the function-name half of the leak guard would silently check nothing", holdoutFunctionRevision)
+	}
+	for id, fn := range recoveredFunctions {
+		forbidden[fn] = id
 	}
 
 	playbookDir := filepath.Join("..", "..", "..", "tee-usage-scanner", "knowledge", "twe", "playbooks")
