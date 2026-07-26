@@ -48,9 +48,9 @@ func recoverHoldoutFunctions(t *testing.T, repoRoot string, holdout []string) ma
 
 // scanFileForLeaks reads a single knowledge file and reports (via t.Errorf)
 // every forbidden term it contains, attributing each hit to the holdout case
-// it identifies. It returns true if the file was read successfully, so
-// callers can distinguish "checked, found nothing" from "couldn't read it".
-func scanFileForLeaks(t *testing.T, path, displayName string, forbidden map[string]string) bool {
+// it identifies. Its only failure path (t.Fatalf on a read error) aborts the
+// test immediately, so it has nothing left to report to its caller.
+func scanFileForLeaks(t *testing.T, path, displayName string, forbidden map[string]string) {
 	t.Helper()
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -65,7 +65,6 @@ func scanFileForLeaks(t *testing.T, path, displayName string, forbidden map[stri
 			t.Errorf("%s mentions %q, which identifies holdout case %s — knowledge files must state generalizable obligations, not memorized instances", displayName, term, fromCase)
 		}
 	}
-	return true
 }
 
 // A knowledge file (playbook or catalog entry) that names a holdout case's
@@ -144,9 +143,8 @@ func TestKnowledgeDoesNotLeakHoldoutCases(t *testing.T) {
 		if e.IsDir() || (ext != ".yml" && ext != ".yaml") {
 			continue
 		}
-		if scanFileForLeaks(t, filepath.Join(playbookDir, e.Name()), e.Name(), forbidden) {
-			checked++
-		}
+		scanFileForLeaks(t, filepath.Join(playbookDir, e.Name()), e.Name(), forbidden)
+		checked++
 	}
 	if checked == 0 {
 		t.Fatal("no playbooks were checked; the path to the playbook directory is wrong")

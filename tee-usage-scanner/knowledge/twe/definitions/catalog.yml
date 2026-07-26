@@ -118,21 +118,25 @@ twe:
   # Generalizes: truncated ChaCha20-Poly1305 tag comparison (CWE-187);
   # ECDH public point not validated against the selected curve (CWE-347).
   # query_modules names a planned module; the query does not exist yet.
-  # NOTE: none of these roles exist in enum_registry.yml yet.
+  # NOTE: authority_point is reused from most migrated entries above; the
+  # other three roles do not exist in enum_registry.yml yet.
   - id: TWE-GUARD-004
     family: Guard
     name: Incomplete Cryptographic Verification
     query_modules: [guard/IncompleteCryptographicVerification.ql]
     required_trustir: [verification_operation, verified_input_span, accepted_domain_constraint, authority_point]
 
-  # Generalizes: RSA-OAEP invalid label-hash comparison timing (CWE-208);
-  # RSA PKCS#1 v1.5 decryption timing (CWE-208, Bleichenbacher-style padding
+  # Generalizes: RSA-OAEP invalid label-hash comparison timing
+  # (CVE-2026-41514, CWE-385 Covert Timing Channel); RSA PKCS#1 v1.5
+  # decryption timing (CVE-2026-41516, CWE-385, Bleichenbacher-style padding
   # oracle via response latency).
   # query_modules names a planned module; the query does not exist yet.
-  # required_trustir reuses secret_source / observable_sink from TWE-LEAK-001
-  # and secret_dependent_branch from TWE-LEAK-002 — those are already anchored
-  # in enum_registry.yml's trust_source_role (secret_dependent_branch is a
-  # listed value there) and observable_sink_role categories.
+  # required_trustir reuses the secret_source / observable_sink role slots
+  # from TWE-LEAK-001 and the secret_dependent_branch role slot from
+  # TWE-LEAK-002 — those are reused from sibling entries, not newly anchored
+  # here. Of the three, only secret_dependent_branch is itself an
+  # enum_registry.yml value (a listed trust_source_role); secret_source and
+  # observable_sink are role slot names, not registry values.
   # NOTE: constant_time_guard is not in enum_registry.yml — guard_kind's 15
   # terms are all attestation-shaped and none covers timing-safety; flagged
   # for the future fact/query layer.
@@ -142,10 +146,12 @@ twe:
     query_modules: [leakage/SecretDependentTiming.ql]
     required_trustir: [secret_source, secret_dependent_branch, observable_sink, constant_time_guard]
 
-  # Generalizes: over-sized memory-pool allocation left uncleared (CWE-459,
-  # Incomplete Cleanup); FPU/extended-register state not cleared at enclave
-  # entry (CWE-200); host-controlled iovec/length field sized past the
-  # intended buffer, exposing adjacent memory (CWE-125).
+  # Generalizes: over-sized memory-pool allocation left uncleared
+  # (CVE-2019-1010294, CWE-226 Sensitive Information in Resource Not Removed
+  # Before Reuse); FPU/extended-register state not cleared at enclave entry
+  # (CVE-2020-15107, CWE-665 Improper Initialization); host-controlled
+  # iovec/length field sized past the intended buffer, exposing adjacent
+  # memory (CVE-2020-15224, CWE-200 Exposure of Sensitive Information).
   # query_modules names a planned module; the query does not exist yet.
   # required_trustir reuses boundary_exit, the field TWE-FLOW-002 already
   # established for "value crosses the TEE boundary".

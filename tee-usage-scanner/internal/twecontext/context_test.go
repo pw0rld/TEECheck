@@ -259,6 +259,28 @@ func TestShippedGuardPlaybook(t *testing.T) {
 	if guard.ID != "TWE-GUARD-004" {
 		t.Fatalf("shipped TWE IDs = %v, want TWE-GUARD-004 among them", compiled.Manifest.TWEIDs)
 	}
+	// The playbook must stay pinned to its catalog.yml entry: a rename on
+	// either side (id, name, or family) that isn't mirrored on the other
+	// would otherwise go undetected.
+	defs, err := twe.LoadDefinitions(filepath.Join("..", "..", "knowledge", "twe", "definitions", "catalog.yml"))
+	if err != nil {
+		t.Fatalf("load definitions: %v", err)
+	}
+	var def twe.Definition
+	for _, d := range defs {
+		if d.ID == "TWE-GUARD-004" {
+			def = d
+		}
+	}
+	if def.ID != "TWE-GUARD-004" {
+		t.Fatal("expected TWE-GUARD-004 among the catalog definitions")
+	}
+	if guard.Name != def.Name {
+		t.Errorf("playbook Name = %q, want it to match catalog.yml's TWE-GUARD-004 name %q", guard.Name, def.Name)
+	}
+	if guard.Family != def.Family {
+		t.Errorf("playbook Family = %q, want it to match catalog.yml's TWE-GUARD-004 family %q", guard.Family, def.Family)
+	}
 	// Compile renders the brief tier: a look_for signal that lets an agent
 	// judge relevance must show up in the compiled context.
 	if !strings.Contains(compiled.Text, "verification_that_covers_only_part_of_the_value_it_claims_to_authenticate") {
