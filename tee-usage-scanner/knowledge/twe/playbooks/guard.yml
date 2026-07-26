@@ -1,0 +1,89 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-GUARD-004
+name: Incomplete Cryptographic Verification
+family: Guard
+
+scenario: >
+  A cryptographic check runs and returns success, but covers less than the
+  property it is claimed to establish — only part of the value it authenticates,
+  or an operand never proven to satisfy the algorithm's domain constraints.
+  Callers then treat forged or attacker-chosen input as verified.
+
+attacker_capabilities:
+  - supply_the_tag_signature_or_public_operand_the_verification_consumes
+  - choose_the_length_or_size_field_that_accompanies_that_operand
+  - submit_operands_well_formed_in_encoding_but_outside_the_algorithms_domain
+  - repeat_the_operation_many_times_with_different_crafted_operands
+  - observe_whether_each_attempt_was_accepted_or_rejected
+  - invoke_the_operation_through_any_boundary_entrypoint_that_exposes_it
+
+look_for:
+  - verification_that_covers_only_part_of_the_value_it_claims_to_authenticate
+  - comparison_or_loop_bounds_taken_from_an_expression_other_than_the_verified_length
+  - crypto_operands_used_without_validating_the_algorithms_domain_constraints
+  - sibling_or_multipart_paths_that_verify_more_than_this_path_does
+  - untrusted_size_or_selector_fields_deciding_how_much_of_a_value_is_verified
+  - verification_results_that_do_not_gate_every_path_to_the_operation_they_authorize
+  - boundary_entrypoints_handing_external_key_tag_or_point_material_to_a_primitive
+
+investigation_steps:
+  - enumerate_the_verification_and_key_agreement_entrypoints_reachable_from_the_boundary
+  - state_for_each_one_the_property_its_success_return_is_claimed_to_establish
+  - read_the_comparison_or_check_body_instead_of_trusting_its_name_or_comment
+  - determine_the_span_the_check_actually_covers_and_compare_it_to_the_span_it_claims
+  - resolve_where_every_bound_length_and_size_operand_in_the_check_comes_from
+  - list_the_domain_constraints_the_algorithm_requires_of_each_input
+  - check_whether_each_constraint_is_enforced_before_the_primitive_consumes_the_input
+  - compare_the_path_against_sibling_implementations_of_the_same_operation_in_the_tree
+  - confirm_the_check_dominates_every_path_to_the_operation_it_authorizes
+  - confirm_the_failure_branch_aborts_and_does_not_fall_through_to_the_operation
+  - establish_what_an_accepted_but_unverified_operand_yields_the_attacker
+  - construct_an_evidence_anchored_attack_sequence
+
+required_evidence:
+  - the_verification_site_and_the_operation_whose_authorization_depends_on_it
+  - the_property_the_verification_is_claimed_to_establish_read_from_code_or_contract
+  - the_span_or_constraint_set_the_check_actually_covers_read_from_the_check_body
+  - a_concrete_gap_between_the_claimed_property_and_the_enforced_one
+  - an_attacker_reachable_input_that_falls_inside_that_gap
+  - the_check_still_returns_success_for_that_input
+  - the_gap_is_not_closed_by_a_dominating_check_elsewhere_on_the_path
+  - the_security_effect_that_follows_acceptance
+  - the_path_is_in_production_scope_and_not_test_or_example_only
+
+common_defenses:
+  - constant_time_comparison_spanning_the_full_declared_length_of_the_tag_or_digest
+  - bounds_taken_from_the_value_being_verified_not_from_the_type_of_a_length_variable
+  - an_explicit_length_equality_check_rejecting_any_size_but_the_algorithms_required_one
+  - public_operand_validated_against_the_selected_parameter_set_before_use
+  - a_validate_hook_wired_into_every_backend_so_no_implementation_silently_lacks_it
+  - failing_closed_when_no_backend_implements_the_validation_rather_than_skipping_it
+  - the_validation_placed_in_the_common_path_so_every_caller_inherits_it
+  - an_error_branch_that_jumps_past_the_operation_to_cleanup_instead_of_continuing
+  - guard_placed_so_it_dominates_every_path_to_the_operation_it_protects
+  - a_verification_gate_whose_success_the_caller_must_consume_before_the_operation
+
+common_false_positives:
+  - a_dominating_check_upstream_already_enforces_the_full_property
+  - validation_is_delegated_to_the_primitive_or_backend_that_consumes_the_operand
+  - the_narrowed_span_is_the_algorithms_own_specified_size_and_not_a_truncation
+  - a_length_equality_check_before_the_comparison_already_pins_the_span
+  - the_operand_is_produced_inside_the_trust_boundary_and_is_not_attacker_supplied
+  - the_operand_is_self_authenticating_so_it_cannot_be_freely_chosen
+  - the_incomplete_variant_is_unreachable_in_the_shipped_build_configuration
+  - the_result_reaches_only_an_observable_output_and_no_authority_point
+  - the_verification_site_is_on_a_test_or_example_only_path
+
+related_twes:
+  - TWE-GUARD-001
+  - TWE-FLOW-001
+  - TWE-LEAK-003
+
+trustir_hints:
+  - label_verification_operations_and_the_property_each_one_claims
+  - record_the_input_span_each_verification_actually_covers
+  - record_the_domain_constraints_accepted_for_each_crypto_operand
+  - label_the_authority_point_the_verification_authorizes
+  - record_sanitizers_and_suppressors_on_the_path
+  - restrict_findings_to_production_scope
+  - compare_vulnerable_and_fixed_check_extent

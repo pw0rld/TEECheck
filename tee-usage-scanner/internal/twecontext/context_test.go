@@ -237,6 +237,60 @@ func TestShippedFlowPlaybook(t *testing.T) {
 	}
 }
 
+func TestShippedGuardPlaybook(t *testing.T) {
+	dir := filepath.Join("..", "..", "knowledge", "twe", "playbooks")
+	catalog, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load shipped playbooks: %v", err)
+	}
+	compiled, err := catalog.Compile()
+	if err != nil {
+		t.Fatalf("compile shipped playbooks: %v", err)
+	}
+	// The catalog grows as playbooks are authored, so assert this playbook is
+	// shipped rather than that it is the only one. This is the guard against
+	// someone deleting the guard.yml deliverable outright.
+	var guard Playbook
+	for _, p := range catalog.playbooks {
+		if p.ID == "TWE-GUARD-004" {
+			guard = p
+		}
+	}
+	if guard.ID != "TWE-GUARD-004" {
+		t.Fatalf("shipped TWE IDs = %v, want TWE-GUARD-004 among them", compiled.Manifest.TWEIDs)
+	}
+	// Compile renders the brief tier: a look_for signal that lets an agent
+	// judge relevance must show up in the compiled context.
+	if !strings.Contains(compiled.Text, "verification_that_covers_only_part_of_the_value_it_claims_to_authenticate") {
+		t.Errorf("compiled guard brief context is missing look_for content")
+	}
+	// A detail-only field label must NOT be present in the always-injected
+	// brief compiled by Compile(), even though it IS present in the on-demand
+	// detail tier below — this is the tier-separation guarantee.
+	if strings.Contains(compiled.Text, "False positives:") {
+		t.Errorf("compiled guard brief context must not contain the detail-tier field label %q", "False positives:")
+	}
+	// Measure the playbook's own brief block, not the whole compiled
+	// document (which also carries the fixed contextHeader) — that is what
+	// Compile()'s per-playbook ceiling actually enforces.
+	if briefTokens := estimateTokens(compileBriefBlock(guard)); briefTokens > maxBriefContextTokens {
+		t.Fatalf("shipped guard playbook brief (~%d tokens) exceeds the %d-token ceiling",
+			briefTokens, maxBriefContextTokens)
+	}
+
+	detail, ok := catalog.Detail("TWE-GUARD-004")
+	if !ok {
+		t.Fatal("expected a Detail hit for the shipped TWE-GUARD-004 playbook")
+	}
+	if !strings.Contains(detail, "False positives:") {
+		t.Errorf("detail guard context is missing the %q field label", "False positives:")
+	}
+	if detailTokens := estimateTokens(detail); detailTokens > maxDetailContextTokens {
+		t.Fatalf("shipped guard playbook detail (~%d tokens) exceeds the %d-token ceiling",
+			detailTokens, maxDetailContextTokens)
+	}
+}
+
 // TestCompileFailsWhenPlaybookExceedsTokenBudget proves the token ceiling
 // (§11.1, §20.4) fails compilation instead of truncating the oversized
 // playbook — the only failure mode that keeps the injected context faithful
