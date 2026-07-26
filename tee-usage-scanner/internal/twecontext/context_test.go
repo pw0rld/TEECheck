@@ -180,6 +180,63 @@ func TestShippedRollbackPlaybook(t *testing.T) {
 	}
 }
 
+func TestShippedFlowPlaybook(t *testing.T) {
+	dir := filepath.Join("..", "..", "knowledge", "twe", "playbooks")
+	catalog, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load shipped playbooks: %v", err)
+	}
+	compiled, err := catalog.Compile()
+	if err != nil {
+		t.Fatalf("compile shipped playbooks: %v", err)
+	}
+	// The catalog grows as playbooks are authored, so assert this playbook is
+	// shipped rather than that it is the only one. This is the guard against
+	// someone deleting the flow.yml deliverable outright.
+	var flow Playbook
+	for _, p := range catalog.playbooks {
+		if p.ID == "TWE-FLOW-001" {
+			flow = p
+		}
+	}
+	if flow.ID != "TWE-FLOW-001" {
+		t.Fatalf("shipped TWE IDs = %v, want TWE-FLOW-001 among them", compiled.Manifest.TWEIDs)
+	}
+	// Compile now renders the brief tier: a look_for signal that lets an
+	// agent judge relevance must show up in the compiled context.
+	if !strings.Contains(compiled.Text, "host_supplied_offsets_sizes_counts_indices_or_pointers_reaching_a_privileged_operation") {
+		t.Errorf("compiled flow brief context is missing look_for content")
+	}
+	// A detail-only field label must NOT be present in the always-injected
+	// brief compiled by Compile(), even though it IS present in the on-demand
+	// detail tier below — this is the tier-separation guarantee.
+	if strings.Contains(compiled.Text, "False positives:") {
+		t.Errorf("compiled flow brief context must not contain the detail-tier field label %q", "False positives:")
+	}
+	// Measure the playbook's own brief block, not the whole compiled
+	// document (which also carries the fixed contextHeader) — that is what
+	// Compile()'s per-playbook ceiling actually enforces. Flow's brief is
+	// close to the ceiling (~239 of 250 tokens), so assert against the
+	// ceiling itself rather than a tight hand-picked number that would break
+	// on any wording change.
+	if briefTokens := estimateTokens(compileBriefBlock(flow)); briefTokens > maxBriefContextTokens {
+		t.Fatalf("shipped flow playbook brief (~%d tokens) exceeds the %d-token ceiling",
+			briefTokens, maxBriefContextTokens)
+	}
+
+	detail, ok := catalog.Detail("TWE-FLOW-001")
+	if !ok {
+		t.Fatal("expected a Detail hit for the shipped TWE-FLOW-001 playbook")
+	}
+	if !strings.Contains(detail, "False positives:") {
+		t.Errorf("detail flow context is missing the %q field label", "False positives:")
+	}
+	if detailTokens := estimateTokens(detail); detailTokens > maxDetailContextTokens {
+		t.Fatalf("shipped flow playbook detail (~%d tokens) exceeds the %d-token ceiling",
+			detailTokens, maxDetailContextTokens)
+	}
+}
+
 // TestCompileFailsWhenPlaybookExceedsTokenBudget proves the token ceiling
 // (§11.1, §20.4) fails compilation instead of truncating the oversized
 // playbook — the only failure mode that keeps the injected context faithful
