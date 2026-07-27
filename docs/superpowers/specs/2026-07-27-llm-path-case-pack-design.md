@@ -86,7 +86,18 @@ internal/stats/review.go:48
 
 两个直接后果：
 
-1. **5 个 run 现在记录为"0 候选"，实际各有 1–3 个 investigation 被丢弃**：`CVE-2019-0876-baseline`、`CVE-2019-1010293-baseline`、`CVE-2021-43619-baseline`、`CVE-2016-6129-withguard`、`probe-vuln`。这些"0 候选"是空的假象。
+1. **5 个 run 现在记录为"0 候选"，实际各有 1–3 个 investigation 被丢弃**：`CVE-2019-0876-baseline`、`CVE-2019-1010293-baseline`、`CVE-2021-43619-baseline`、`CVE-2016-6129-withguard`、`probe-vuln`。
+
+   但被丢弃的内容**多数是空的**——逐个查 `filled_roles` 后：
+
+   | run | filled_roles | missing_roles |
+   |---|---|---|
+   | `CVE-2019-0876-baseline` | 0 | 3 |
+   | `CVE-2021-43619-baseline` | 0 | 5 |
+   | `probe-vuln` | 0 | 5 |
+   | `CVE-2016-6129-withguard` | 1 / 1 / 0 | 0 / 0 / 2 |
+
+   前三个的 investigation 记录的是"我找了这个 TWE，全部角色都没定位到"——它们**没有可交给下游的目标**。这五个 run 里真正有实质内容被丢弃的只有 `CVE-2016-6129-withguard`。这直接决定了 §4 组件 1 的空目标规则。
 
 2. **`flow.yml` 与 `guard.yml` 两次对照测量的结论均不成立。** 两份测量记（`notes/2026-07-26-flow-playbook-measurement.md`、`notes/2026-07-27-guard-playbook-measurement.md`）比较的是 candidate 路径的产出，而 playbook 经验字段走的是被丢弃的那条通道。修复后必须重跑，在此之前不得引用这两份结论。
 
@@ -102,6 +113,19 @@ internal/stats/review.go:48
 | `CasePack.CaseID` 的格式在全仓**没有任何代码解析** | 全仓 grep 无 split/parse/prefix 命中 | 可以让两个生产者各自保留自己的 ID 形态，无需统一格式，也无需新增字段 |
 | `cases.Run` 被 llm 路径与 legacy 路径共用 | `pipeline/run.go:159` 与 `:184` | 改动必须以不触碰 legacy 分支的方式进行（§4 组件 3） |
 | `planner/actions/legacy_keyword_scan.go:62` 这个 planner **动作**自身会跑 `mapper.Run` 写 `01_repo_map`/`02_hotspots`，而后 `WriteHotspotShim` 再覆盖它们 | 同左 | 这是清单里的 "`twescan` legacy bypass"，与垫片是两件事，**本期不动**（§7） |
+
+### 2.1 去重规则在真实数据上的分布（29 个 L3 run 全量统计）
+
+把每个 run 的 candidate 路径集合与 investigation 的 `filled_roles` 路径集合逐一比对：
+
+| 情形 | 出现次数 |
+|---|---|
+| 两侧集合**完全相等** | 14 |
+| **部分重叠但不相等** | **0** |
+| 完全不相交 | **0** |
+| 至少一侧为空 | 15 |
+
+**"部分重叠"这个分支在真实数据上一次都没有出现过。** 这不意味着它不会发生（29 个样本、其中 18 个是 1–4 个文件的 fixture），但它说明：去重规则的复杂度主要是防御性的，而"两侧指向同一个文件"才是主导形态。规则仍按 §4 组件 1 的写法实现并全分支单测，但设计上不应为"部分重叠"付出额外代价。
 
 ---
 
@@ -151,7 +175,13 @@ func Write(runDir string, packs []artifacts.CasePack) error
 - 合并时以富 pack 为底，并入瘦 pack 的 `WhySelected`；`Priority` 取两者中较高者（high > medium > low）。
 - 富 pack 排在瘦 pack 之前编号（`case-001` 起），使编号顺序稳定可复现。
 
-**规则的理由**：宁可多出一个 case（expert 多跑一次，成本可见、可测量），不可合并掉两个不同漏洞（损失静默、且正是本次事故的形态）。
+**规则的理由**：宁可多出一个 case（expert 多跑一次，成本可见、可测量），不可合并掉两个不同漏洞（损失静默、且正是本次事故的形态）。§2.1 的实测显示"部分重叠"分支在现有数据上从未触发，因此这条规则的代价目前是零，但仍需实现与单测。
+
+**空目标规则：`TargetFiles` 为空的 pack 不落盘。**
+
+一个 `filled_roles` 全空的 investigation（所有角色都在 `missing_roles` 里）转成的 Case Pack 没有任何文件可供下游查看——把它交给 expert 等于要求 expert 对着空气做假设。§1.4 的实测显示这种形态占被丢弃 investigation 的多数（5 个 run 中的 3 个）。
+
+该 investigation 的记录**不会丢失**：它仍完整保存在 `03_investigations/`，并按 planner 系统提示（`prompt.go:88`）的定性，是"下一步侦查任务"，不是漏洞结论、也不是安全证据。它只是不构成一个 case。
 
 ### 组件 2：`internal/planner/shim.go`
 
@@ -209,14 +239,17 @@ planner done 负载
 
 ## 6. 验收标准
 
+全部验收以单测形式表达，输入手写构造。**不依赖 `runs/` 下的任何历史运行**——那些运行是坏 pipeline 的产物，它们的价值已经在 §1.4 与 §2.1 的统计中被提取完毕，随后即被删除。
+
 | # | 标准 |
 |---|---|
-| 1 | 用 `runs/CVE-2016-6129-baseline` 的 `evidence_bundle.json` + `03_investigations/` 重放：`03_cases/` 产出 **1 份富 pack**（含 `common_defenses` / `common_false_positives` / `required_evidence`），而非现状的 1 瘦 pack + 1 孤儿 |
-| 2 | §1.4 列出的 5 个"0 候选" run 重放后各产出 ≥1 个 case |
-| 3 | **存在一个断言"下游 glob 能读到 planner 产出的 pack"的测试**——即先由 planner 路径落盘，再以 expert 使用的同一 glob 读回并校验字段非空。PR-06 缺的正是这个测试 |
-| 4 | 去重规则有独立单测，至少覆盖三种输入：集合相等（合并）、交集非空但不等（不合并）、无交集（不合并） |
-| 5 | legacy 路径（`--mode` 非 `llm`）的产物逐字节不变 |
-| 6 | `go build ./...` 与 `go test ./...` 两模块全绿（既有的 `internal/collabrun` live-endpoint 失败除外） |
+| 1 | **消费者侧读回测试**：由 planner 路径落盘一批 pack，再用 expert 所用的同一 glob（`case-*.json`）读回，断言富 pack 的 `common_defenses` / `common_false_positives` / `required_evidence` 非空。PR-06 缺的正是这个测试，它是本次事故的直接防线 |
+| 2 | **去重规则单测**，覆盖四种输入：集合相等（合并，且 `WhySelected` 并入、`Priority` 取高）、交集非空但不等（不合并）、无交集（不合并）、一侧为空（各自保留） |
+| 3 | **空目标规则单测**：`filled_roles` 全空的 investigation 不产生落盘文件；对应的 `03_investigations/` 记录仍然存在 |
+| 4 | **编号稳定性单测**：同一批输入两次运行，`case-%03d.json` 的编号与内容一致（富 pack 在前） |
+| 5 | `cases.Enrich` 单测：读一份已落盘的 pack，补上 `Snippets` 与 `KnowledgeHints` 后回写，其余字段逐字段不变 |
+| 6 | legacy 路径（`--mode` 非 `llm`）的产物逐字节不变 |
+| 7 | `go build ./...` 与 `go test ./...` 两模块全绿（既有的 `internal/collabrun` live-endpoint 失败除外） |
 
 ---
 
@@ -236,7 +269,7 @@ planner done 负载
 
 1. **大仓库上 investigation 的产出率无数据。** 18/18 benchmark run 都产出了 investigation，但它们全是 1–4 个文件的 fixture。真实项目扫描的 10 个样本早于该功能，不构成证据。决定 2 采纳"两者都转 pack"正是为了让这个未知不致命：即便大仓库上 investigation 为空，candidate 路径仍会产出 case。
 
-2. **去重规则可能过于保守。** "集合完全相等才合并"会让部分重叠的候选各自成 case，增加 expert 的调用次数。这是刻意选择的方向（多花钱 vs. 静默漏报）。若实测发现 case 数膨胀到影响预算，再放宽——放宽前需要一个衡量"被合并掉的两份是否确实同一处"的方法。
+2. **去重规则的保守方向目前无代价，但也未被验证。** "集合完全相等才合并"理论上会让部分重叠的候选各自成 case、增加 expert 调用次数；而 §2.1 的实测显示该分支在 29 个 run 上从未触发，所以当前代价为零。反过来说，这也意味着**该分支的正确性只由单测保证，没有任何真实数据背书**。若将来在大仓库上观察到 case 数膨胀，再考虑放宽——放宽前需要一个衡量"被合并掉的两份是否确实同一处"的方法。
 
 3. **富 pack 的 `filled_roles` 本身可能含幻觉符号。** 审计在 `inv-flow-001-3a998d336f97.json` 中发现 `der_decode_sequence_flexi` 这个整个 fixture 里不存在的符号通过了校验（`investigations/validate.go:183` 只 `os.Stat` 文件）。接通管道会把这类幻觉一并送到下游。这是 §7 点名的另一份 spec 的范围，但**接通本身会放大它的影响**，两份工作的先后顺序需要留意。
 
