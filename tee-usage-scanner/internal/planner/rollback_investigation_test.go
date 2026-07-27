@@ -121,25 +121,29 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 		t.Errorf("CoverageGaps = %v, want the missing role reflected", inv.CoverageGaps)
 	}
 
-	// Read back through the exact glob every downstream stage uses. The
-	// previous assertion checked result.CasePacks — it passed for four days
-	// while no consumer could see the file on disk.
-	paths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
-	if err != nil {
-		t.Fatal(err)
+	// The pack must carry the playbook knowledge out of Run. Persistence is
+	// no longer Run's job: it is called once per --samples pass, so writing
+	// per pass restarted the case-%03d numbering and spliced passes
+	// together. internal/pipeline now writes the deduped union once, and
+	// TestRunL3Planner_MultiSample_WritesDedupedUnionOnce there asserts the
+	// downstream case-*.json glob sees exactly that.
+	if len(result.CasePacks) != 1 {
+		t.Fatalf("want 1 pack out of Run, got %d: %+v", len(result.CasePacks), result.CasePacks)
 	}
-	if len(paths) != 1 {
-		t.Fatalf("want 1 pack visible to the downstream glob, got %d: %v", len(paths), paths)
-	}
-	var pack artifacts.CasePack
-	if err := runfs.ReadJSON(paths[0], &pack); err != nil {
-		t.Fatal(err)
-	}
+	pack := result.CasePacks[0]
 	if len(pack.CommonDefenses) == 0 || len(pack.CommonFalsePositives) == 0 {
-		t.Fatalf("the playbook knowledge must survive to disk: %+v", pack)
+		t.Fatalf("the playbook knowledge must survive onto the pack: %+v", pack)
 	}
 	if len(pack.MissingLinks) != 1 {
 		t.Errorf("CasePack.MissingLinks = %v, want one entry for the missing role", pack.MissingLinks)
+	}
+	// Nothing may reach 03_cases/ from Run itself.
+	stray, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stray) != 0 {
+		t.Fatalf("planner.Run must not write case packs (the pipeline does, once per run), found %v", stray)
 	}
 
 	// The investigation must be persisted as a schema-valid artifact
@@ -206,5 +210,6 @@ func setupRollbackFixtureRepo(t *testing.T) (repoRoot, runDir string) {
 	runDir = t.TempDir()
 	writeRepoFile(t, repoRoot, "core/crypto/signed_hdr.c",
 		"TEE_Result shdr_load_pub_key(void) {\n// ...\nkey->version = subkey->subkey_version;\n}\n")
+	writeRunManifest(t, repoRoot, runDir)
 	return repoRoot, runDir
 }

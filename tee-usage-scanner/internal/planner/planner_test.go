@@ -13,6 +13,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 // ─── Test harness ────────────────────────────────────────────────────
@@ -57,8 +58,27 @@ pub enum Error {
 }
 `
 	writeRepoFile(t, repoRoot, "src/attest.rs", attestRs)
+	writeRunManifest(t, repoRoot, runDir)
 
 	return repoRoot, runDir
+}
+
+// writeRunManifest puts a valid 00_manifest.json in the run dir. Without it
+// runfs.LoadManifest fails inside planner.Run and the candidate-derived
+// ("thin") Case Pack branch is skipped entirely — which is exactly what
+// happened in every planner test until this was added, leaving that half of
+// Run's output untested.
+func writeRunManifest(t *testing.T, repoRoot, runDir string) {
+	t.Helper()
+	if err := runfs.WriteJSON(runfs.ManifestPath(runDir), artifacts.Manifest{
+		SchemaVersion: "teecheck.manifest.v1",
+		RunID:         "test-run",
+		LocalPath:     repoRoot,
+		Commit:        "abcdef1234567",
+		Focus:         "tee",
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeRepoFile(t *testing.T, repoRoot, rel, content string) {
@@ -325,6 +345,24 @@ func TestPlannerRun_HallucinatedPathsDroppedAndRecorded(t *testing.T) {
 	}
 	if !foundHallucinationErr {
 		t.Errorf("no 'hallucinated' error in Bundle.Errors: %+v", result.Bundle.Errors)
+	}
+
+	// The candidate half of the done payload must reach RunResult.CasePacks
+	// as a thin pack — and only the surviving candidate may. This is the
+	// assertion that fails if Run ever returns `packs` (rich only) instead
+	// of `merged`, or if the hallucinated candidate leaks past
+	// convertCandidates into a pack.
+	if len(result.CasePacks) != 1 {
+		t.Fatalf("CasePacks = %d, want exactly 1 thin pack for the surviving candidate: %+v", len(result.CasePacks), result.CasePacks)
+	}
+	got := result.CasePacks[0]
+	if len(got.TargetFiles) != 1 || got.TargetFiles[0] != "src/attest.rs" {
+		t.Fatalf("CasePacks[0].TargetFiles = %v, want [src/attest.rs] — the real path, not the hallucinated one", got.TargetFiles)
+	}
+	for _, f := range got.TargetFiles {
+		if strings.Contains(f, "sgx/svc") {
+			t.Fatalf("hallucinated path reached a Case Pack: %v", got.TargetFiles)
+		}
 	}
 }
 

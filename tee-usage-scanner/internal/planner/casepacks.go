@@ -153,6 +153,48 @@ func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	return base
 }
 
+// DedupePacks collapses packs that name the same set of target files,
+// across planner passes as well as within one. Merge only folds thin
+// packs into rich ones; two rich packs sharing a target set are left
+// alone there because within a single pass they are distinct
+// investigations. Across passes they are the same finding seen twice.
+//
+// Packs carrying playbook knowledge (non-empty RelatedTWEs) are returned
+// first, preserving relative order within each group, so that a --max-cases
+// truncation drops the least informative packs rather than an arbitrary
+// slice.
+func DedupePacks(packs []artifacts.CasePack) []artifacts.CasePack {
+	var out []artifacts.CasePack
+	byKey := map[string]int{}
+	for _, p := range packs {
+		key := targetKey(p)
+		if key == "" {
+			// Same rule as Merge: a pack with no target files is not a
+			// review unit.
+			continue
+		}
+		if at, ok := byKey[key]; ok {
+			// First occurrence wins the slot; the later duplicate is
+			// absorbed into it (WhySelected union, higher Priority).
+			out[at] = absorb(out[at], p)
+			continue
+		}
+		byKey[key] = len(out)
+		out = append(out, p)
+	}
+
+	withPlaybook := make([]artifacts.CasePack, 0, len(out))
+	rest := make([]artifacts.CasePack, 0, len(out))
+	for _, p := range out {
+		if len(p.RelatedTWEs) > 0 {
+			withPlaybook = append(withPlaybook, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	return append(withPlaybook, rest...)
+}
+
 // normalizePriority folds a priority string for lookup in priorityRank only;
 // it does not change what gets stored on the pack (absorb still assigns
 // extra.Priority verbatim). An unrecognised value — including one that only

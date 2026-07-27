@@ -197,6 +197,136 @@ func TestMerge_UnnormalizedPriorityStillWins(t *testing.T) {
 	}
 }
 
+// ─── DedupePacks (across --samples passes) ───────────────────────────
+
+// withTWEs marks a pack as carrying playbook knowledge, which is what
+// DedupePacks sorts on.
+func withTWEs(p artifacts.CasePack, ids ...string) artifacts.CasePack {
+	p.RelatedTWEs = ids
+	return p
+}
+
+// The C1 regression in one test: pass 1 and pass 2 both surface the same
+// file. Merge cannot collapse them — it only folds thin into rich, and these
+// are two separate Run results — so DedupePacks must.
+func TestDedupePacks_SameTargetSetAcrossPassesCollapses(t *testing.T) {
+	pass1 := thin("cand-1", "low", "a.c")
+	pass2 := thin("cand-2", "high", "a.c")
+
+	got := DedupePacks([]artifacts.CasePack{pass1, pass2})
+	if len(got) != 1 {
+		t.Fatalf("the same target set seen in two passes is one finding, got %d packs", len(got))
+	}
+	if got[0].CaseID != "cand-1" {
+		t.Errorf("first occurrence must win the slot, got %q", got[0].CaseID)
+	}
+	if got[0].Priority != "high" {
+		t.Errorf("the duplicate must be absorbed (higher priority wins), got %q", got[0].Priority)
+	}
+	if len(got[0].WhySelected) != 2 {
+		t.Errorf("WhySelected must be the union of both, got %v", got[0].WhySelected)
+	}
+}
+
+// Two rich packs sharing a target set survive Merge on purpose (distinct
+// investigations within one pass) but must NOT survive DedupePacks.
+func TestDedupePacks_TwoRichPacksWithSameTargetSetCollapse(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		withTWEs(rich("inv-1", "a.c"), "TWE-STATE-001"),
+		withTWEs(rich("inv-2", "a.c"), "TWE-STATE-001"),
+	})
+	if len(got) != 1 {
+		t.Fatalf("want 1 pack, got %d", len(got))
+	}
+	if got[0].CaseID != "inv-1" {
+		t.Errorf("first occurrence must win, got %q", got[0].CaseID)
+	}
+}
+
+func TestDedupePacks_DifferentTargetSetsAreKept(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		thin("cand-1", "low", "a.c"),
+		thin("cand-2", "low", "b.c"),
+		// A partial overlap is a different set and must not collapse —
+		// same rule Merge enforces.
+		thin("cand-3", "low", "a.c", "b.c"),
+	})
+	if len(got) != 3 {
+		t.Fatalf("want 3 distinct packs, got %d: %+v", len(got), got)
+	}
+}
+
+// --max-cases truncates the tail, so the tail must be the least informative
+// packs: the ones with no playbook knowledge behind them.
+func TestDedupePacks_PlaybookPacksSortBeforeThinOnes(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		thin("cand-1", "low", "a.c"),
+		withTWEs(rich("inv-1", "b.c"), "TWE-STATE-001"),
+		thin("cand-2", "low", "c.c"),
+		withTWEs(rich("inv-2", "d.c"), "TWE-ATT-001"),
+	})
+	wantOrder := []string{"inv-1", "inv-2", "cand-1", "cand-2"}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("want %d packs, got %d", len(wantOrder), len(got))
+	}
+	for i, want := range wantOrder {
+		if got[i].CaseID != want {
+			t.Fatalf("order = %v, want %v (playbook packs first, relative order preserved within each group)",
+				caseIDs(got), wantOrder)
+		}
+	}
+}
+
+func TestDedupePacks_DropsEmptyTargets(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		rich("inv-empty"),
+		thin("cand-1", "low", "a.c"),
+	})
+	if len(got) != 1 || got[0].CaseID != "cand-1" {
+		t.Fatalf("a pack with no target files must not survive, got %+v", caseIDs(got))
+	}
+}
+
+func TestDedupePacks_OrderIsDeterministicAcrossCalls(t *testing.T) {
+	in := []artifacts.CasePack{
+		thin("cand-1", "low", "z.c"),
+		withTWEs(rich("inv-1", "a.c"), "TWE-STATE-001"),
+		thin("cand-2", "high", "z.c"),
+		thin("cand-3", "low", "m.c"),
+	}
+	a := DedupePacks(in)
+	b := DedupePacks(in)
+	if len(a) != len(b) {
+		t.Fatalf("length differs between identical calls: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i].CaseID != b[i].CaseID {
+			t.Fatalf("ordering must be identical across calls: %v vs %v", caseIDs(a), caseIDs(b))
+		}
+	}
+}
+
+// DedupePacks must not corrupt its input: the pipeline logs the pre-dedupe
+// count and the caller's slice is still live after the call.
+func TestDedupePacks_DoesNotMutateInput(t *testing.T) {
+	in := []artifacts.CasePack{
+		thin("cand-1", "low", "a.c"),
+		thin("cand-2", "high", "a.c"),
+	}
+	_ = DedupePacks(in)
+	if in[0].Priority != "low" || len(in[0].WhySelected) != 1 {
+		t.Fatalf("input pack was mutated: %+v", in[0])
+	}
+}
+
+func caseIDs(packs []artifacts.CasePack) []string {
+	out := make([]string, 0, len(packs))
+	for _, p := range packs {
+		out = append(out, p.CaseID)
+	}
+	return out
+}
+
 func TestBuildFromCandidate_CarriesPathsAndWhySelected(t *testing.T) {
 	cand := artifacts.Candidate{
 		Paths:       []string{"src/a.c"},

@@ -157,7 +157,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
 		if err := cases.Enrich(stageCfg); err != nil {
-			return "", fmt.Errorf("cases enrich: %w", err)
+			return runDir, fmt.Errorf("cases enrich: %w", err)
 		}
 	} else {
 		// === Agent 1: Legacy Scanner ===
@@ -287,11 +287,11 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-// runL3Planner drives the L3 LLM planner against a cloned repo,
-// persists its evidence bundle + rounds log, and writes a hotspot /
-// repo_map shim so the downstream 4-agent chain (cases -> expert ->
-// challenger -> verifier -> arbiter) consumes the planner's candidates
-// unchanged.
+// runL3Planner drives the L3 LLM planner against a cloned repo (once per
+// --samples pass), persists its evidence bundle + rounds log, and writes
+// the deduped, --max-cases-capped Case Packs to 03_cases/case-*.json so the
+// downstream chain (cases.Enrich -> expert -> challenger -> verifier ->
+// arbiter) consumes the planner's output directly.
 //
 // Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
@@ -367,6 +367,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	}
 
 	var bundles []*artifacts.EvidenceBundle
+	var allPacks []artifacts.CasePack
 	var avoid []string
 
 	for pass := 1; pass <= samples; pass++ {
@@ -424,6 +425,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			break
 		}
 		bundles = append(bundles, result.Bundle)
+		// Case Packs accumulate across passes and are deduped, capped and
+		// written once after the loop. Writing per pass would renumber
+		// case-*.json from 001 each time and splice the passes together.
+		allPacks = append(allPacks, result.CasePacks...)
 
 		// Persist per-pass bundle when running multi-sample so the
 		// stats collector can later replay pass-by-pass metrics.
@@ -480,11 +485,26 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		return fmt.Errorf("write merged evidence bundle: %w", err)
 	}
 
-	// The planner writes its Case Packs itself (03_cases/case-*.json), so
-	// there is nothing left to translate here. The legacy HotspotIndex +
-	// RepoMap shim that used to run at this point is gone: downstream now
-	// consumes the packs directly instead of re-deriving them from a
-	// synthesized 02_hotspots/01_repo_map pair.
+	// Case Packs are written exactly once, here, from the union of every
+	// pass. planner.Run deliberately writes nothing to 03_cases/ — it is
+	// called once per --samples pass, so a per-pass write would restart the
+	// case-%03d numbering each time and leave an earlier pass's
+	// higher-numbered files orphaned among the current pass's.
+	//
+	// Dedupe first, cap second: capping a list that still holds duplicates
+	// would let the same finding consume two of the --max-cases slots. The
+	// legacy HotspotIndex + RepoMap shim that used to run at this point is
+	// gone — downstream consumes these packs directly instead of
+	// re-deriving them from a synthesized 02_hotspots/01_repo_map pair.
+	final := planner.DedupePacks(allPacks)
+	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
+		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
+		final = final[:cfg.MaxCases]
+	}
+	if err := planner.Write(runDir, final); err != nil {
+		return fmt.Errorf("write case packs: %w", err)
+	}
+	fmt.Printf("Wrote %d case pack(s) to %s\n", len(final), runfs.CasePacksDir(runDir))
 	return nil
 }
 

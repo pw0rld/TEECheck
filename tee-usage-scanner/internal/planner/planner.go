@@ -474,7 +474,7 @@ loop:
 		// Deliberately no zero-value Manifest fallback: it would mint
 		// CaseIDs like "repo@:tee:candidate:001" that look normal but say
 		// nothing about their origin. Record the failure and skip the thin
-		// packs; the rich packs still land on disk.
+		// packs; the rich packs still reach the caller.
 		bundle.Errors = append(bundle.Errors, artifacts.RoundError{
 			Round: -1, Action: "case_pack.manifest", Error: err.Error()})
 	} else {
@@ -482,13 +482,12 @@ loop:
 			thin = append(thin, BuildFromCandidate(cand, manifest, i))
 		}
 	}
+	// Nothing is written to 03_cases/ here. Run is invoked once per
+	// --samples pass, so a per-pass Write would renumber case-*.json from
+	// 001 on every pass and leave the higher-numbered files of an earlier
+	// pass orphaned in place. The caller accumulates CasePacks across
+	// passes, dedupes and caps them, and calls Write exactly once.
 	merged := Merge(packs, thin)
-	if cfg.RunDir != "" {
-		if err := Write(cfg.RunDir, merged); err != nil {
-			bundle.Errors = append(bundle.Errors, artifacts.RoundError{
-				Round: -1, Action: "case_pack.write", Error: err.Error()})
-		}
-	}
 
 	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
 }
@@ -553,10 +552,11 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			CommonDefenses:       playbook.CommonDefenses,
 			CommonFalsePositives: playbook.CommonFalsePositives,
 		})
-		// Packs are NOT written here. The caller merges them with the
-		// candidate-derived packs and writes the combined list through
-		// planner.Write, so numbering across both halves stays consistent
-		// and every pack lands on the case-*.json glob consumers use.
+		// Packs are NOT written here. Run merges them with the
+		// candidate-derived packs and returns the combined list; the
+		// pipeline writes it through planner.Write once per run, so
+		// numbering across both halves — and across --samples passes —
+		// stays consistent on the case-*.json glob consumers use.
 		packs = append(packs, pack)
 	}
 	return invs, packs, errs

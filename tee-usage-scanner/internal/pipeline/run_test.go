@@ -48,11 +48,12 @@ const invariantWireJSON = `{
 }`
 
 // plannerDoneJSON drives the L3 planner to terminate on its first round with
-// an empty candidate list. With zero candidates the hotspot shim produces no
-// case packs, so cases -> expert -> challenger -> verifier -> arbiter run
-// with empty inputs and make ZERO further LLM calls — the pipeline completes
-// with empty findings. Used both as the queued planner response and as the
-// Default so any extra planner rounds also terminate immediately.
+// an empty candidate list and no investigations. With neither half of the
+// done payload populated the planner returns no case packs, so
+// cases.Enrich -> expert -> challenger -> verifier -> arbiter run with empty
+// inputs and make ZERO further LLM calls — the pipeline completes with empty
+// findings. Used both as the queued planner response and as the Default so
+// any extra planner rounds also terminate immediately.
 const plannerDoneJSON = `{"thought":"done","actions":[{"name":"done","args":{"summary":"none","candidates":[],"investigations":[]}}]}`
 
 // TestPipelineEndToEnd_FakeClient exercises the RunWithClient injection seam:
