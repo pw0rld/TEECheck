@@ -52,6 +52,46 @@ func Run(cfg config.Config) error {
 	return nil
 }
 
+// Enrich is the llm path's counterpart to Run. The Planner has already
+// written the Case Packs — it knows which TWE investigation and which
+// candidate produced each one, and that knowledge cannot be recovered from
+// a hotspot index. Enrich therefore adds only the two things the Planner
+// has no cheap way to produce: source snippets for the target files, and
+// knowledge-base hints looked up from the pack itself.
+//
+// Run stays exactly as it was and continues to serve the legacy path.
+func Enrich(cfg config.Config) error {
+	manifest, err := runfs.LoadManifest(cfg.RunDir)
+	if err != nil {
+		return fmt.Errorf("load manifest: %w", err)
+	}
+	if err := knowledge.EnsureLayout(cfg.KnowledgeRoot); err != nil {
+		return fmt.Errorf("ensure knowledge layout: %w", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
+	if err != nil {
+		return fmt.Errorf("glob case packs: %w", err)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		var pack artifacts.CasePack
+		if err := runfs.ReadJSON(p, &pack); err != nil {
+			return fmt.Errorf("read case pack %s: %w", p, err)
+		}
+		pack.Snippets = collectSnippets(manifest.LocalPath, pack.TargetFiles, pack.TargetSymbols)
+		hints, err := knowledge.LookupForCase(cfg.KnowledgeRoot, pack, 4)
+		if err != nil {
+			return fmt.Errorf("lookup knowledge for %s: %w", pack.CaseID, err)
+		}
+		pack.KnowledgeHints = hints
+		if err := runfs.WriteJSON(p, pack); err != nil {
+			return fmt.Errorf("write case pack %s: %w", p, err)
+		}
+	}
+	fmt.Printf("Enriched %d case pack(s) in %s\n", len(paths), runfs.CasePacksDir(cfg.RunDir))
+	return nil
+}
+
 func buildCasePacks(manifest artifacts.Manifest, profile artifacts.ProjectProfile, repoMap artifacts.RepoMap, hotspots []artifacts.Hotspot, knowledgeRoot string, maxCases int) ([]artifacts.CasePack, error) {
 	limit := maxCases
 	if limit <= 0 || limit > len(hotspots) {

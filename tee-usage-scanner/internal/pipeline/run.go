@@ -156,8 +156,8 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
-		if err := cases.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("cases: %w", err)
+		if err := cases.Enrich(stageCfg); err != nil {
+			return "", fmt.Errorf("cases enrich: %w", err)
 		}
 	} else {
 		// === Agent 1: Legacy Scanner ===
