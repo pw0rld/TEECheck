@@ -1116,6 +1116,12 @@ git commit -m "cases: split Enrich out of Run for the llm path"
 
 这是 spec 验收标准 1 的最终形态，也是本次事故最直接的防线。
 
+> **本任务在 Task 4 的修复后被改写。** 原方案让测试直接调 `planner.Merge` + `planner.Write`。但 C1 的修复把持久化从 `planner.Run` 移到了 `runL3Planner`（循环外、对跨趟去重后的结果写一次），所以直接调 `Write` 不再走真实路径。
+>
+> 现状缺口：`rollback_investigation_test.go` 改为断言内存中的 `result.CasePacks`，并要求此时 `03_cases/` 为**空**；`l3planner_test.go` 断言落盘的 `target_files`，但**不**断言 playbook 字段。于是"`common_defenses` / `common_false_positives` 能活着到达消费者 glob"——本次事故的核心命题——目前没有任何测试覆盖。
+>
+> 本任务必须通过 `runL3Planner` 这条真实路径断言它。
+
 - [ ] **Step 1: 写测试**
 
 `internal/pipeline/casepack_delivery_test.go`：
