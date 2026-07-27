@@ -43,14 +43,22 @@ func TestFileContainsSymbol_AbsentLookalike(t *testing.T) {
 	}
 }
 
+// Both operands must be lowered. Testing only one direction lets a later
+// "simplification" drop the other ToLower while the suite stays green — the
+// exact shape of passing-but-meaningless test this package exists to prevent.
 func TestFileContainsSymbol_CaseInsensitive(t *testing.T) {
 	root := writeRepo(t, "src/a.c", "void TEE_Malloc(void);\n")
-	got, err := FileContainsSymbol(root, "src/a.c", "tee_malloc")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !got {
-		t.Fatal("want true — matching is case-insensitive")
+	for _, symbol := range []string{
+		"tee_malloc", // lowercase needle, mixed-case body — exercises lowering the body
+		"TEE_MALLOC", // uppercase needle, mixed-case body — exercises lowering the symbol
+	} {
+		got, err := FileContainsSymbol(root, "src/a.c", symbol)
+		if err != nil {
+			t.Fatalf("symbol %q: unexpected error: %v", symbol, err)
+		}
+		if !got {
+			t.Fatalf("symbol %q: want true — matching is case-insensitive on both operands", symbol)
+		}
 	}
 }
 

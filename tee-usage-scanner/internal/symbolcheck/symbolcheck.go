@@ -36,7 +36,9 @@ func FileContainsSymbol(repoRoot, path, symbol string) (bool, error) {
 	}
 	body, err := os.ReadFile(full)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
+		// Report the resolved path, not the argument: when repoRoot-joining
+		// happened, the argument alone does not say what was actually tried.
+		return false, fmt.Errorf("read %s: %w", full, err)
 	}
 	return strings.Contains(strings.ToLower(string(body)), strings.ToLower(symbol)), nil
 }
