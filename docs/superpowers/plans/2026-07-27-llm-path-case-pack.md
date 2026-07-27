@@ -1128,6 +1128,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -1142,9 +1143,10 @@ import (
 func TestCasePacksReachDownstreamGlob(t *testing.T) {
 	runDir := t.TempDir()
 
-	// Stand in for a Planner run that produced one investigation-derived
-	// pack carrying playbook knowledge.
-	pack := artifacts.CasePack{
+	// Drive the REAL production path: the same Merge and Write the planner
+	// calls. Writing the file by hand here would make this test unable to
+	// fail — it is precisely the filename Write chooses that was the defect.
+	rich := artifacts.CasePack{
 		SchemaVersion:        "teecheck.case_pack.v1",
 		CaseID:               "inv-flow-001-deadbeef",
 		TargetFiles:          []string{"src/a.c"},
@@ -1153,7 +1155,12 @@ func TestCasePacksReachDownstreamGlob(t *testing.T) {
 		CommonDefenses:       []string{"a dominating check already constrains the value"},
 		CommonFalsePositives: []string{"the caller validated it earlier"},
 	}
-	if err := runfs.WriteJSON(filepath.Join(runfs.CasePacksDir(runDir), "case-001.json"), pack); err != nil {
+	thin := planner.BuildFromCandidate(
+		artifacts.Candidate{Paths: []string{"src/a.c"}, Priority: "high", WhySelected: []string{"w"}},
+		artifacts.Manifest{LocalPath: "/tmp/repo", Commit: "abcdef1234", Focus: "tee"},
+		0,
+	)
+	if err := planner.Write(runDir, planner.Merge([]artifacts.CasePack{rich}, []artifacts.CasePack{thin})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1163,6 +1170,7 @@ func TestCasePacksReachDownstreamGlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Equal target sets, so Merge folds the thin pack into the rich one.
 	if len(paths) != 1 {
 		t.Fatalf("downstream glob sees %d packs, want 1", len(paths))
 	}
