@@ -14,7 +14,6 @@
 package symbolcheck
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,9 +35,11 @@ func FileContainsSymbol(repoRoot, path, symbol string) (bool, error) {
 	}
 	body, err := os.ReadFile(full)
 	if err != nil {
-		// Report the resolved path, not the argument: when repoRoot-joining
-		// happened, the argument alone does not say what was actually tried.
-		return false, fmt.Errorf("read %s: %w", full, err)
+		// os.ReadFile already returns a *os.PathError whose own message
+		// includes the resolved path ("open <path>: ..." / "read <path>: ...").
+		// Re-wrapping with the same path here would make callers see it
+		// twice; return it as-is.
+		return false, err
 	}
 	return strings.Contains(strings.ToLower(string(body)), strings.ToLower(symbol)), nil
 }

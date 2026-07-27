@@ -26,7 +26,9 @@ type ValidationInput struct {
 	// RepoRoot, when set, grounds FilledRoles: a role location whose Path
 	// does not resolve to a real file under RepoRoot is demoted to
 	// MissingRoles — the same anti-hallucination discipline
-	// internal/planner already applies to Candidate.Paths.
+	// internal/planner already applies to Candidate.Paths. It also gates
+	// symbol verification: a role whose declared Symbol does not appear in
+	// its file is demoted too.
 	RepoRoot string
 }
 

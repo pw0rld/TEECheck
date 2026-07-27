@@ -144,13 +144,13 @@ func TestValidate_NoOpWhenEverythingResolves(t *testing.T) {
 	}
 }
 
-// TestValidateRoleLocations_DemotesHallucinatedSymbol exercises
+// TestValidate_DemotesHallucinatedRoleSymbol exercises
 // validateRoleLocations (invoked here through the exported Validate, since
 // this file is package investigations_test and cannot call the unexported
 // function directly) for the case a real audit hit: the file exists and the
 // line is real, only the symbol is fabricated. This is the exact shape the
 // 2026-07-27 audit found in inv-flow-001-3a998d336f97.json.
-func TestValidateRoleLocations_DemotesHallucinatedSymbol(t *testing.T) {
+func TestValidate_DemotesHallucinatedRoleSymbol(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src", "pk", "rsa")
 	if err := os.MkdirAll(src, 0o755); err != nil {
@@ -191,7 +191,7 @@ func TestValidateRoleLocations_DemotesHallucinatedSymbol(t *testing.T) {
 	}
 }
 
-func TestValidateRoleLocations_KeepsRealSymbol(t *testing.T) {
+func TestValidate_KeepsRealRoleSymbol(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func TestValidateRoleLocations_KeepsRealSymbol(t *testing.T) {
 
 // An empty Symbol must behave exactly as before this change: the file
 // existence check alone decides.
-func TestValidateRoleLocations_EmptySymbolUnchanged(t *testing.T) {
+func TestValidate_EmptyRoleSymbolUnchanged(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
 		t.Fatal(err)
@@ -233,6 +233,39 @@ func TestValidateRoleLocations_EmptySymbolUnchanged(t *testing.T) {
 	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
 	if _, ok := got.FilledRoles["r"]; !ok {
 		t.Fatal("a role with no declared symbol must be unaffected by the symbol check")
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("want no adjustments, got %+v", adjustments)
+	}
+}
+
+// TestValidate_EmptyRoleSymbolUnaffectedByUnreadablePath guards the same
+// "empty Symbol means skip the symbol check entirely" contract as
+// TestValidate_EmptyRoleSymbolUnchanged, but for the error path the naive
+// fix of just deleting `if loc.Symbol != ""` gets wrong: os.Stat succeeding
+// does not mean os.ReadFile will. A directory is the portable way to force
+// that split (permission bits are unreliable when the suite runs as root).
+// With the guard removed, symbolcheck.FileContainsSymbol(root, path, "")
+// returns (false, error) for a directory, and the `err != nil || !ok` check
+// would demote the role with the nonsense reason that it "declares symbol
+// \"\" which does not appear in" its own path. File existence alone must
+// keep deciding when no symbol was declared.
+func TestValidate_EmptyRoleSymbolUnaffectedByUnreadablePath(t *testing.T) {
+	root := t.TempDir()
+	dirPath := filepath.Join("src", "adir")
+	if err := os.MkdirAll(filepath.Join(root, dirPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := artifacts.TWEInvestigation{
+		InvestigationID: "inv-test-004",
+		FilledRoles: map[string]artifacts.ToolLocation{
+			"r": {Path: dirPath, StartLine: 1},
+		},
+	}
+	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
+	if _, ok := got.FilledRoles["r"]; !ok {
+		t.Fatal("a role with no declared symbol must stay filled even when its path is unreadable, as long as it exists")
 	}
 	if len(adjustments) != 0 {
 		t.Fatalf("want no adjustments, got %+v", adjustments)
