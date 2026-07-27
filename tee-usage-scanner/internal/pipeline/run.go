@@ -480,9 +480,12 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		return fmt.Errorf("write merged evidence bundle: %w", err)
 	}
 
-	// Convert merged evidence_bundle candidates into the legacy
-	// HotspotIndex + RepoMap shapes the downstream pipeline expects.
-	return planner.WriteHotspotShim(cfg, &merged)
+	// The planner writes its Case Packs itself (03_cases/case-*.json), so
+	// there is nothing left to translate here. The legacy HotspotIndex +
+	// RepoMap shim that used to run at this point is gone: downstream now
+	// consumes the packs directly instead of re-deriving them from a
+	// synthesized 02_hotspots/01_repo_map pair.
+	return nil
 }
 
 // accumulatedLen returns how many unique candidates the dedupe

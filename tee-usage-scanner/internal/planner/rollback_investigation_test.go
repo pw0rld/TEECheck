@@ -11,6 +11,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 // roundResponseWithDone builds one round's raw LLM response text: a single
@@ -120,12 +121,22 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 		t.Errorf("CoverageGaps = %v, want the missing role reflected", inv.CoverageGaps)
 	}
 
-	if len(result.CasePacks) != 1 {
-		t.Fatalf("CasePacks len = %d, want 1", len(result.CasePacks))
+	// Read back through the exact glob every downstream stage uses. The
+	// previous assertion checked result.CasePacks — it passed for four days
+	// while no consumer could see the file on disk.
+	paths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	pack := result.CasePacks[0]
-	if len(pack.CommonDefenses) != 1 || len(pack.CommonFalsePositives) != 1 {
-		t.Errorf("CasePack playbook context not carried: defenses=%v fps=%v", pack.CommonDefenses, pack.CommonFalsePositives)
+	if len(paths) != 1 {
+		t.Fatalf("want 1 pack visible to the downstream glob, got %d: %v", len(paths), paths)
+	}
+	var pack artifacts.CasePack
+	if err := runfs.ReadJSON(paths[0], &pack); err != nil {
+		t.Fatal(err)
+	}
+	if len(pack.CommonDefenses) == 0 || len(pack.CommonFalsePositives) == 0 {
+		t.Fatalf("the playbook knowledge must survive to disk: %+v", pack)
 	}
 	if len(pack.MissingLinks) != 1 {
 		t.Errorf("CasePack.MissingLinks = %v, want one entry for the missing role", pack.MissingLinks)

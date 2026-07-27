@@ -458,7 +458,39 @@ loop:
 		bundle.Errors = append(bundle.Errors, invErrors...)
 	}
 
-	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: packs}
+	// Both halves of the done payload become Case Packs. candidates and
+	// investigations are independent lists with no id linking them
+	// (prompt.go's done schema), and investigations is optional — so
+	// neither can be derived from the other, and dropping either loses runs.
+	//
+	// bundle.Candidates is used rather than donePayload.Candidates because
+	// convertCandidates (above) has already dropped hallucinated paths.
+	//
+	// invErrors has already been folded into bundle.Errors, so anything new
+	// must be appended to bundle.Errors directly — appending to invErrors
+	// here would silently discard it.
+	var thin []artifacts.CasePack
+	if manifest, err := runfs.LoadManifest(cfg.RunDir); err != nil {
+		// Deliberately no zero-value Manifest fallback: it would mint
+		// CaseIDs like "repo@:tee:candidate:001" that look normal but say
+		// nothing about their origin. Record the failure and skip the thin
+		// packs; the rich packs still land on disk.
+		bundle.Errors = append(bundle.Errors, artifacts.RoundError{
+			Round: -1, Action: "case_pack.manifest", Error: err.Error()})
+	} else {
+		for i, cand := range bundle.Candidates {
+			thin = append(thin, BuildFromCandidate(cand, manifest, i))
+		}
+	}
+	merged := Merge(packs, thin)
+	if cfg.RunDir != "" {
+		if err := Write(cfg.RunDir, merged); err != nil {
+			bundle.Errors = append(bundle.Errors, artifacts.RoundError{
+				Round: -1, Action: "case_pack.write", Error: err.Error()})
+		}
+	}
+
+	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
 }
 
 // processInvestigations converts the LLM's loosely-typed `done.investigations`
@@ -521,12 +553,10 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			CommonDefenses:       playbook.CommonDefenses,
 			CommonFalsePositives: playbook.CommonFalsePositives,
 		})
-		if cfg.RunDir != "" {
-			path := filepath.Join(runfs.CasePacksDir(cfg.RunDir), pack.CaseID+".json")
-			if err := runfs.WriteJSON(path, pack); err != nil {
-				errs = append(errs, artifacts.RoundError{Round: -1, Action: "case_pack.write:" + pack.CaseID, Error: err.Error()})
-			}
-		}
+		// Packs are NOT written here. The caller merges them with the
+		// candidate-derived packs and writes the combined list through
+		// planner.Write, so numbering across both halves stays consistent
+		// and every pack lands on the case-*.json glob consumers use.
 		packs = append(packs, pack)
 	}
 	return invs, packs, errs
