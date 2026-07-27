@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/symbolcheck"
 )
 
 // ValidationInput bundles the grounding context Validate checks an
@@ -36,7 +37,7 @@ type ValidationInput struct {
 // reader of the persisted JSON alone can see it happened.
 type Adjustment struct {
 	InvestigationID string `json:"investigation_id"`
-	Kind            string `json:"kind"` // "unresolved_architecture_ref" | "unresolved_invariant_ref" | "unresolved_tool_fact_ref" | "unresolved_role_location"
+	Kind            string `json:"kind"` // "unresolved_architecture_ref" | "unresolved_invariant_ref" | "unresolved_tool_fact_ref" | "unresolved_role_location" | "unresolved_role_symbol"
 	Reason          string `json:"reason"`
 }
 
@@ -173,13 +174,18 @@ func validateToolFactRefs(inv artifacts.TWEInvestigation, repoRoot string) (arti
 	return inv, adjustments
 }
 
-// validateRoleLocations demotes any FilledRoles entry whose Path does not
-// resolve to a real file under repoRoot into MissingRoles — the same
-// anti-hallucination discipline internal/planner already applies to
-// Candidate.Paths (see planner.normalizePath), applied here to investigation
-// role evidence so a fabricated file location cannot masquerade as a filled
-// role. A blank repoRoot skips this check entirely (nothing to resolve
-// against) rather than dropping every role.
+// validateRoleLocations demotes any FilledRoles entry into MissingRoles
+// whose location does not stand up to two checks: (1) Path must resolve to
+// a real file under repoRoot — the same anti-hallucination discipline
+// internal/planner already applies to Candidate.Paths (see
+// planner.normalizePath); (2) when Symbol is set, it must actually appear
+// in that file (whole-file, case-insensitive substring containment via
+// symbolcheck.FileContainsSymbol). File existence alone proves nothing
+// about content — a fabricated symbol in a real file would otherwise stand
+// as located evidence and, once the Case Pack pipe is connected, reach
+// Expert as fact. A blank repoRoot skips both checks entirely (nothing to
+// resolve against) rather than dropping every role; a blank Symbol skips
+// only the second check, leaving pre-existing behavior unchanged.
 func validateRoleLocations(inv artifacts.TWEInvestigation, repoRoot string) (artifacts.TWEInvestigation, []Adjustment) {
 	if repoRoot == "" || len(inv.FilledRoles) == 0 {
 		return inv, nil
@@ -197,6 +203,18 @@ func validateRoleLocations(inv artifacts.TWEInvestigation, repoRoot string) (art
 			adjustments = append(adjustments, Adjustment{InvestigationID: inv.InvestigationID, Kind: "unresolved_role_location", Reason: reason})
 			demoted = append(demoted, role)
 			continue
+		}
+		// File existence proves nothing about content. Without this, a
+		// fabricated symbol in a real file stands as located evidence and —
+		// once the Case Pack pipe is connected — reaches Expert as fact.
+		if loc.Symbol != "" {
+			ok, err := symbolcheck.FileContainsSymbol(repoRoot, loc.Path, loc.Symbol)
+			if err != nil || !ok {
+				reason := fmt.Sprintf("role %q declares symbol %q which does not appear in %s", role, loc.Symbol, loc.Path)
+				adjustments = append(adjustments, Adjustment{InvestigationID: inv.InvestigationID, Kind: "unresolved_role_symbol", Reason: reason})
+				demoted = append(demoted, role)
+				continue
+			}
 		}
 		kept[role] = loc
 	}

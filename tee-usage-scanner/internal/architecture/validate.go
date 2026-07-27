@@ -8,6 +8,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/symbolcheck"
 )
 
 // StateAdjustment records one place ValidateAndDowngrade (or
@@ -245,11 +246,11 @@ func checkEvidence(evidence []artifacts.EvidenceReference, expectedSymbol, repoR
 			if symbol == "" {
 				return fmt.Sprintf("source citation %s has no line range and no symbol to verify", ref.File), false
 			}
-			body, err := os.ReadFile(resolveRepoPath(repoRoot, ref.File))
+			ok, err := symbolcheck.FileContainsSymbol(repoRoot, ref.File, symbol)
 			if err != nil {
 				return fmt.Sprintf("could not read cited file %s: %v", ref.File, err), false
 			}
-			if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(symbol)) {
+			if !ok {
 				return fmt.Sprintf("cited file %s does not contain declared symbol %q", ref.File, symbol), false
 			}
 			continue
