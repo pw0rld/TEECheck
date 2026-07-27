@@ -32,10 +32,29 @@ func BuildFromCandidate(cand artifacts.Candidate, manifest artifacts.Manifest, i
 		SchemaVersion: "teecheck.case_pack.v1",
 		CaseID:        fmt.Sprintf("%s@%s:%s:candidate:%03d", repoName, commit, sanitizeSlug(manifest.Focus), idx+1),
 		Focus:         manifest.Focus,
+		Category:      categoryForKind(cand.Kind),
 		Priority:      cand.Priority,
 		TargetFiles:   append([]string{}, cand.Paths...),
 		TargetSymbols: append([]string{}, cand.Symbols...),
 		WhySelected:   append([]string{}, cand.WhySelected...),
+	}
+}
+
+// categoryForKind mirrors internal/cases' caseTemplate (internal/cases/run.go:269)
+// insofar as it returns the same category string for the same kind: an
+// identity mapping for the five known kinds and "boundary" for anything else,
+// including "". It is duplicated rather than exported from there on purpose:
+// exporting it would make the llm path import the legacy case-building
+// package, which this change exists to disentangle — the same reasoning
+// already recorded on sanitizeSlug in this file. Unlike caseTemplate, this
+// helper does not produce obligations or open-questions lists; those are
+// deliberately retired on the candidate path.
+func categoryForKind(kind string) string {
+	switch kind {
+	case "attestation", "authorization", "state_machine", "key_management", "fallback":
+		return kind
+	default:
+		return "boundary"
 	}
 }
 
@@ -56,6 +75,12 @@ func targetKey(p artifacts.CasePack) string {
 
 // Merge combines investigation-derived (rich) and candidate-derived (thin)
 // packs into the final list to persist.
+//
+// Two rich packs that happen to share a target-file set are deliberately NOT
+// deduped against each other — only rich-vs-thin merges happen, via the
+// byKey map below. Both rich packs are kept, and a later thin pack with the
+// same key merges into whichever rich pack was seen last (the map entry the
+// second rich pack overwrote the first with).
 //
 // Two rules, both deliberate:
 //
@@ -100,22 +125,41 @@ func Merge(rich, thin []artifacts.CasePack) []artifacts.CasePack {
 
 // absorb folds a thin pack into the rich pack that shares its target set.
 // The rich pack is the base — it carries the playbook knowledge, which is the
-// whole reason this pipe exists.
+// whole reason this pipe exists. absorb also runs thin-into-thin, when
+// neither side has an investigation behind it; in that case there is no
+// playbook knowledge to prefer, but the same base-wins rule still applies.
+// Fields other than WhySelected and Priority are deliberately taken from the
+// base only — e.g. the absorbed pack's TargetSymbols are dropped by design,
+// not by oversight.
 func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	seen := map[string]bool{}
+	merged := make([]string, 0, len(base.WhySelected)+len(extra.WhySelected))
 	for _, w := range base.WhySelected {
-		seen[w] = true
+		if !seen[w] {
+			seen[w] = true
+			merged = append(merged, w)
+		}
 	}
 	for _, w := range extra.WhySelected {
 		if !seen[w] {
 			seen[w] = true
-			base.WhySelected = append(base.WhySelected, w)
+			merged = append(merged, w)
 		}
 	}
-	if priorityRank[extra.Priority] > priorityRank[base.Priority] {
+	base.WhySelected = merged
+	if priorityRank[normalizePriority(extra.Priority)] > priorityRank[normalizePriority(base.Priority)] {
 		base.Priority = extra.Priority
 	}
 	return base
+}
+
+// normalizePriority folds a priority string for lookup in priorityRank only;
+// it does not change what gets stored on the pack (absorb still assigns
+// extra.Priority verbatim). An unrecognised value — including one that only
+// differs from "low"/"medium"/"high" by case or surrounding whitespace, such
+// as a model emitting "High" — still ranks 0 and simply cannot win a merge.
+func normalizePriority(p string) string {
+	return strings.ToLower(strings.TrimSpace(p))
 }
 
 // Write persists packs as 03_cases/case-%03d.json — the filename shape every

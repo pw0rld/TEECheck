@@ -130,6 +130,73 @@ func TestWrite_UsesCaseGlobFilenames(t *testing.T) {
 	}
 }
 
+// target files are a set, not a list: two packs naming the same files in a
+// different order, or with duplicates, must still merge.
+func TestMerge_SameSetDifferentOrderAndDupesStillMerge(t *testing.T) {
+	got := Merge(
+		[]artifacts.CasePack{rich("inv-1", "a.c", "z.c")},
+		[]artifacts.CasePack{thin("cand-1", "high", "z.c", "a.c", "z.c")},
+	)
+	if len(got) != 1 {
+		t.Fatalf("target files are a set, not a list: want 1 pack, got %d", len(got))
+	}
+}
+
+func TestBuildFromCandidate_SetsCategoryFromKind(t *testing.T) {
+	manifest := artifacts.Manifest{LocalPath: "/tmp/repo", Commit: "abcdef1234", Focus: "tee"}
+
+	attestation := BuildFromCandidate(artifacts.Candidate{Kind: "attestation", Paths: []string{"a.c"}}, manifest, 0)
+	if attestation.Category != "attestation" {
+		t.Fatalf("known kind must map to itself, got %q", attestation.Category)
+	}
+
+	unknown := BuildFromCandidate(artifacts.Candidate{Kind: "something_else", Paths: []string{"a.c"}}, manifest, 1)
+	if unknown.Category != "boundary" {
+		t.Fatalf("unknown kind must fall back to boundary, got %q", unknown.Category)
+	}
+
+	empty := BuildFromCandidate(artifacts.Candidate{Paths: []string{"a.c"}}, manifest, 2)
+	if empty.Category != "boundary" {
+		t.Fatalf("empty kind must fall back to boundary, got %q", empty.Category)
+	}
+}
+
+// absorb writes WhySelected onto a struct copy of base, but the slice header
+// still points at the caller's backing array; if absorb appended onto it
+// directly, an append with spare capacity would corrupt the caller's
+// pre-merge pack in place. Build base with cap > len so an in-place append
+// would succeed silently if this regressed.
+func TestAbsorb_DoesNotMutateCallersBackingArray(t *testing.T) {
+	backing := make([]string, 1, 4) // len 1, cap 4: room for an in-place append
+	backing[0] = "why-base"
+	base := rich("inv-1", "a.c")
+	base.WhySelected = backing
+
+	preMerge := base.WhySelected
+
+	_ = Merge([]artifacts.CasePack{base}, []artifacts.CasePack{thin("cand-1", "low", "a.c")})
+
+	if len(preMerge) != 1 || preMerge[0] != "why-base" {
+		t.Fatalf("absorb must not mutate the caller's pre-merge slice, got %+v", preMerge)
+	}
+}
+
+// priority strings from the model come through with no case-folding
+// (planner.go copies cand.Priority verbatim), so a merge must not let an
+// unnormalized-but-recognisable value like "High" lose to a lowercase one.
+func TestMerge_UnnormalizedPriorityStillWins(t *testing.T) {
+	got := Merge(
+		[]artifacts.CasePack{rich("inv-1", "a.c")}, // priority "medium"
+		[]artifacts.CasePack{thin("cand-1", "High", "a.c")},
+	)
+	if len(got) != 1 {
+		t.Fatalf("want 1 merged pack, got %d", len(got))
+	}
+	if got[0].Priority != "High" {
+		t.Fatalf(`"High" must beat "medium" once normalized for comparison, got %q`, got[0].Priority)
+	}
+}
+
 func TestBuildFromCandidate_CarriesPathsAndWhySelected(t *testing.T) {
 	cand := artifacts.Candidate{
 		Paths:       []string{"src/a.c"},
