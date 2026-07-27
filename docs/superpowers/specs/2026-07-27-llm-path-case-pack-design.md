@@ -206,6 +206,30 @@ llm 分支的 `cases.Run(stageCfg)` 改为 `cases.Enrich(stageCfg)`。`:184` 的
 
 `processInvestigations` 不再自行写盘，只返回 packs。写盘统一由 `casepacks.Write` 承担，使编号与去重在同一处发生。
 
+### 组件 6：`internal/symbolcheck`（新建）+ `internal/investigations/validate.go`
+
+**为什么在本期做**：接通管道会把 `filled_roles` 里的幻觉符号一并送到下游。审计在 `runs/CVE-2016-6129-baseline` 的 `inv-flow-001-3a998d336f97.json` 中发现 `filled_roles` 有一项 `{line: 141, symbol: "der_decode_sequence_flexi"}`，而该符号在整个 fixture 中**不存在**（141 行是 `LTC_SET_ASN1`，143 行是 `der_decode_sequence`）。它通过了校验，因为 `validate.go:183` 的 `validateRoleLocations` **只 `os.Stat` 文件是否存在，不检查符号**。
+
+在管道接通之前，这个幻觉止步于一个没人读的孤儿文件；接通之后它会直达 expert。**修复放大缺陷，因此缺陷必须同期修。**
+
+**新建 `internal/symbolcheck`**，暴露一个函数：
+
+```go
+// FileContainsSymbol 报告 symbol 是否作为大小写不敏感的子串出现在
+// repoRoot/path 的文件内容中。
+func FileContainsSymbol(repoRoot, path, symbol string) (bool, error)
+```
+
+**为什么是新包而不是放进 `internal/citations`**：`architecture/validate.go:280-287` 有一条明确的既有设计决定——citations 包的职责止于"证明字节区间存在且哈希一致"，"这段内容是否包含 X"属于项目理解层，刻意不放进去。本设计遵守该决定。
+
+**为什么是共享包而不是就地写 5 行**：这个概念已经有三个消费者——`architecture`（已实现）、`investigations`（本期）、`verifier` 的 citation 校验（§7 点名的下一份 spec）。本项目刚刚被"两处本该一致却不一致"咬过一次。
+
+**`internal/architecture` 的改动范围（精确）**：只把 `validate.go:248-254` 那段"无行号分支的整文件包含性检查"替换为调用 `symbolcheck.FileContainsSymbol`，行为逐字保持一致（同样大小写不敏感、同样的失败文案）。**`citedRegionContains`（`validate.go:288`，按字节区间检查）不动、不搬**——它读的是 `citations.Resolve` 后的字节区间，与整文件检查是两个不同的问题，合并它们需要先想清楚 verifier 那份 spec 要哪一个，本期不预判。
+
+**`validateRoleLocations` 的改动**：在现有 `os.Stat` 检查之后追加一步——若 `loc.Symbol` 非空且未出现在该文件中，同样降级进 `MissingRoles`，`Adjustment.Kind` 用新值 `unresolved_role_symbol`（与既有的 `unresolved_role_location` 并列）。`loc.Symbol` 为空时跳过该步，不改变现有行为。
+
+**刻意不做的**：不检查符号是否出现在 `loc.StartLine` **附近**。整文件包含性能证明地捕获已观察到的缺陷形态，且不引入"附近是多少行"这个任意常数。代价是"符号确实在文件里、但 `start_line` 指错了地方"这一形态仍会漏过——记入 §8 风险 5。这与 `architecture/validate.go:252` 无行号分支的既有做法一致。
+
 ### 数据流（改后）
 
 ```
@@ -248,15 +272,17 @@ planner done 负载
 | 3 | **空目标规则单测**：`filled_roles` 全空的 investigation 不产生落盘文件；对应的 `03_investigations/` 记录仍然存在 |
 | 4 | **编号稳定性单测**：同一批输入两次运行，`case-%03d.json` 的编号与内容一致（富 pack 在前） |
 | 5 | `cases.Enrich` 单测：读一份已落盘的 pack，补上 `Snippets` 与 `KnowledgeHints` 后回写，其余字段逐字段不变 |
-| 6 | legacy 路径（`--mode` 非 `llm`）的产物逐字节不变 |
-| 7 | `go build ./...` 与 `go test ./...` 两模块全绿（既有的 `internal/collabrun` live-endpoint 失败除外） |
+| 6 | **符号校验单测**：`filled_roles` 中 symbol 不存在于文件 → 降级进 `MissingRoles` 且产生 `unresolved_role_symbol` 调整记录；symbol 存在 → 保留；symbol 为空 → 保留（行为不变）。用审计中实际观察到的 `der_decode_sequence_flexi` 形态作为其中一个用例 |
+| 7 | `internal/symbolcheck` 有独立单测；`internal/architecture` 改为调用它后，其既有测试全部仍然通过 |
+| 8 | legacy 路径（`--mode` 非 `llm`）的产物逐字节不变 |
+| 9 | `go build ./...` 与 `go test ./...` 两模块全绿（既有的 `internal/collabrun` live-endpoint 失败除外） |
 
 ---
 
 ## 7. 非目标
 
-- **不修 citation 校验**（`internal/citations/validation.go` 只查 sha256 不查内容包含性）——同次审计发现的另一个严重问题，属"证据链诚实性"主题，单独一份 spec。
-- **不修 `investigations/validate.go:183` 的符号存在性校验**——同上主题。
+- **不修 verifier 的 citation 校验**（`internal/citations/validation.go` 只查 sha256 不查内容包含性）——同次审计发现的另一个严重问题，属"证据链诚实性"主题，单独一份 spec。本期新建的 `internal/symbolcheck` 是那份工作的现成材料。
+- **不做符号的行号邻近性检查**——只做整文件包含性，理由见组件 6。
 - **不改硬编码 `expected_obligations` 表本身**（只是让它在 llm 路径下失去消费者）。
 - **不动 legacy 路径**的任何代码。
 - **不动 `legacy_keyword_scan` 动作**与它写垫片目录的行为。
@@ -271,6 +297,10 @@ planner done 负载
 
 2. **去重规则的保守方向目前无代价，但也未被验证。** "集合完全相等才合并"理论上会让部分重叠的候选各自成 case、增加 expert 调用次数；而 §2.1 的实测显示该分支在 29 个 run 上从未触发，所以当前代价为零。反过来说，这也意味着**该分支的正确性只由单测保证，没有任何真实数据背书**。若将来在大仓库上观察到 case 数膨胀，再考虑放宽——放宽前需要一个衡量"被合并掉的两份是否确实同一处"的方法。
 
-3. **富 pack 的 `filled_roles` 本身可能含幻觉符号。** 审计在 `inv-flow-001-3a998d336f97.json` 中发现 `der_decode_sequence_flexi` 这个整个 fixture 里不存在的符号通过了校验（`investigations/validate.go:183` 只 `os.Stat` 文件）。接通管道会把这类幻觉一并送到下游。这是 §7 点名的另一份 spec 的范围，但**接通本身会放大它的影响**，两份工作的先后顺序需要留意。
+3. ~~富 pack 的 `filled_roles` 可能含幻觉符号~~ — **已纳入本期范围**，见组件 6。原风险为："接通管道会放大该缺陷，两份工作的先后顺序需要留意"；解决方式是不留时间窗，同期修。
 
-4. **本次事故的形态是"造了但没接"，而修复引入的新代码同样有这个风险。** 验收标准 3 就是针对它设的：任何新增的产出通道都必须有一个从消费者一侧读回来的测试，而不是只断言产出存在。
+4. **本次事故的形态是"造了但没接"，而修复引入的新代码同样有这个风险。** 验收标准 1 就是针对它设的：任何新增的产出通道都必须有一个从消费者一侧读回来的测试，而不是只断言产出存在。
+
+5. **符号校验只做整文件包含性，"符号在文件里但 `start_line` 指错位置"仍会漏过。** 这是组件 6 刻意的取舍（不引入任意的邻近窗口常数）。若将来发现该形态在真实数据上频繁出现，再考虑加窗口——加之前需要先量出一个有依据的窗口大小，而不是拍一个数字。
+
+6. **整文件子串匹配会有假阴性放行以外的另一面：短符号可能假阳性通过。** 例如符号 `i` 或 `ok` 几乎必然出现在任何 C 文件中，于是校验形同虚设。本期不加最小长度限制——`architecture/validate.go:252` 的既有实现同样没有，而统一两处行为的价值高于各自打补丁。若要加，应两处一起加，属 §7 点名的那份 spec。
