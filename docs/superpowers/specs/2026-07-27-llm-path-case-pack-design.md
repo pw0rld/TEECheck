@@ -259,6 +259,18 @@ planner done 负载
 
 **该后果已向决策者说明并获确认。**
 
+### 5.1 一个本节最初漏掉的字段：`Category`（已修正）
+
+本节最初只点了 `expected_obligations`。实施期间的复审发现 `Category` 也走同一条垫片链，而它**不是**可以一并作废的：
+
+`internal/cases` 的 `caseTemplate(kind)` 对 `attestation` / `authorization` / `state_machine` / `key_management` / `fallback` 五个 kind 是恒等映射，其余归 `boundary`；`internal/arbiter` 的 `severityForCategory` 再把 `attestation` / `authorization` / `key_management` 判为 **high**，其余 medium。
+
+若瘦 pack 的 `Category` 留空，一个模型标注为 `attestation` 的候选会从 severity `high` 静默降为 `medium`——出现在最终 findings 里，日志上看不出。
+
+**处置**：`BuildFromCandidate` 用 `categoryForKind` 复现同一映射（仅 category，不复制 obligations 与 open-questions 列表）。这是**保持现状**，不是新增行为。
+
+**另记**：富 pack 的 `Category` 取自 `inv.Classification`，值域是 `standard` / `variant`，落进 `severityForCategory` 的 default 分支恒为 medium。这是 PR-06 以来的既有行为，本期不改，记入 §8 风险 7。
+
 ---
 
 ## 6. 验收标准
@@ -302,5 +314,7 @@ planner done 负载
 4. **本次事故的形态是"造了但没接"，而修复引入的新代码同样有这个风险。** 验收标准 1 就是针对它设的：任何新增的产出通道都必须有一个从消费者一侧读回来的测试，而不是只断言产出存在。
 
 5. **符号校验只做整文件包含性，"符号在文件里但 `start_line` 指错位置"仍会漏过。** 这是组件 6 刻意的取舍（不引入任意的邻近窗口常数）。若将来发现该形态在真实数据上频繁出现，再考虑加窗口——加之前需要先量出一个有依据的窗口大小，而不是拍一个数字。
+
+7. **富 pack 的 `Category` 恒为 `standard` 或 `variant`，因而 `severityForCategory` 恒判 medium。** 这是 `investigations.BuildCasePack` 自 PR-06 起的既有行为（`Category: inv.Classification`），本期不改。后果：investigation 派生的 case 无法被评为 high，无论它涉及的是 attestation 还是 key management。修它需要先决定 investigation 的 classification 与 case 的 category 是不是同一个概念——它们看起来不是。属证据链诚实性那份 spec 或其后续。
 
 6. **整文件子串匹配会有假阴性放行以外的另一面：短符号可能假阳性通过。** 例如符号 `i` 或 `ok` 几乎必然出现在任何 C 文件中，于是校验形同虚设。本期不加最小长度限制——`architecture/validate.go:252` 的既有实现同样没有，而统一两处行为的价值高于各自打补丁。若要加，应两处一起加，属 §7 点名的那份 spec。
