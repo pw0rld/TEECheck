@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 )
 
 // buildSections assembles the §7.9 / §25 clearly-separated packet
@@ -146,9 +147,35 @@ func renderVerifierResolutionSection(memo artifacts.VerificationMemo) string {
 	if len(memo.ArchitectureChecks) > 0 {
 		fmt.Fprintf(&b, "Architecture statements consulted: %s\n", strings.Join(memo.ArchitectureChecks, "; "))
 	}
+	// InvariantChecks is the documented twin of ArchitectureChecks
+	// (types.go: "short text notes on the architecture statements /
+	// invariants the Verifier consulted"), so it belongs in the same
+	// "what did the Verifier's judgment lean on" section rather than
+	// in the gaps list — the entries carry each invariant's status
+	// verbatim, including satisfied ones.
+	if len(memo.InvariantChecks) > 0 {
+		fmt.Fprintf(&b, "Invariant verification plans consulted: %s\n", strings.Join(memo.InvariantChecks, "; "))
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// verifierGapPrefix marks the entries the Verifier left open, so a
+// reader can tell them apart from the Case Pack's pre-agent gaps.
+const verifierGapPrefix = "verifier: "
+
+// renderRemainingCoverageGaps answers "what is still uncovered now
+// that the Expert, Challenger and Verifier have run". The Case Pack
+// contributes what was open before they started; the memo contributes
+// what the Verifier could not close.
+//
+// Only memo fields whose semantics are "still outstanding" are folded
+// in. Anything the Verifier settled stays out: ConfirmedFacts /
+// ConfirmedCitedFacts are confirmations, Contradictions /
+// ContradictedCitedFacts are reached conclusions, proven_absent
+// distinctions are verified absences, and valid expert citations
+// still anchor. ChecksRun and Notes narrate the work rather than name
+// a gap; InvariantUpdates, ArchitectureChecks and InvariantChecks are
+// each already rendered, with more context, by another section.
 func renderRemainingCoverageGaps(pack artifacts.CasePack, memo artifacts.VerificationMemo) []string {
 	var out []string
 	out = append(out, pack.CoverageGaps...)
@@ -158,6 +185,49 @@ func renderRemainingCoverageGaps(pack artifacts.CasePack, memo artifacts.Verific
 	for _, req := range pack.RequiredEvidence {
 		out = append(out, "still-required evidence: "+req)
 	}
+
+	addVerifier := func(format string, args ...any) {
+		out = append(out, verifierGapPrefix+fmt.Sprintf(format, args...))
+	}
+
+	// An inconclusive memo is itself the top-level open item: the
+	// dispute the three agents were run to settle is not settled.
+	if memo.Status == "inconclusive" {
+		out = append(out, verifierGapPrefix+"dispute still inconclusive after verification")
+	}
+	// not_found means the tool layer was asked and saw nothing, but
+	// nothing ran an exhaustive check — the property may still hold,
+	// so the claim is uncovered rather than resolved (§7.8).
+	for _, d := range memo.EvidenceDistinctions {
+		if d.Outcome != artifacts.EvidenceNotFound {
+			continue
+		}
+		line := fmt.Sprintf("not found, NOT proven absent: %s", d.Claim)
+		if d.Note != "" {
+			line += fmt.Sprintf(" (%s)", d.Note)
+		}
+		addVerifier("%s", line)
+	}
+	// CandidateFacts are static-tool hits the Verifier did not
+	// independently confirm; by contract they must not carry the
+	// verdict on their own, which makes each one an open item.
+	for _, f := range memo.CandidateFacts {
+		addVerifier("unconfirmed candidate fact: %s", f)
+	}
+	// An expert claim whose citations no longer anchor (stale /
+	// unanchored / unresolved) has no live evidence behind it after
+	// verification. Valid ones are skipped.
+	for _, v := range memo.ExpertCitationValidation {
+		if v.Status == citations.StatusValid {
+			continue
+		}
+		line := fmt.Sprintf("expert claim not backed by live citations [%s]: %s", v.Status, v.FactText)
+		if v.Reason != "" {
+			line += fmt.Sprintf(" (%s)", v.Reason)
+		}
+		addVerifier("%s", line)
+	}
+
 	return out
 }
 

@@ -59,8 +59,14 @@ func TestBuildSections_PopulatesAllEightSections(t *testing.T) {
 	if !strings.Contains(sections.VerifierResolution, "contested") || !strings.Contains(sections.VerifierResolution, "not-found") {
 		t.Errorf("VerifierResolution missing content: %q", sections.VerifierResolution)
 	}
-	if len(sections.RemainingCoverageGaps) != 3 { // CoverageGaps + MissingLinks + RequiredEvidence
-		t.Errorf("RemainingCoverageGaps = %v, want 3 entries", sections.RemainingCoverageGaps)
+	// 3 pack-derived (CoverageGaps + MissingLinks + RequiredEvidence)
+	// plus the Verifier's own not-found distinction, which is still
+	// open after verification.
+	if len(sections.RemainingCoverageGaps) != 4 {
+		t.Errorf("RemainingCoverageGaps = %v, want 4 entries", sections.RemainingCoverageGaps)
+	}
+	if !hasPrefixed(sections.RemainingCoverageGaps, wantVerifierPrefix, "not found, NOT proven absent") {
+		t.Errorf("RemainingCoverageGaps = %v, want a verifier-origin entry", sections.RemainingCoverageGaps)
 	}
 	if len(sections.HumanReviewQuestions) < 4 { // 3 static + case-specific
 		t.Errorf("HumanReviewQuestions = %v, want at least 4", sections.HumanReviewQuestions)
