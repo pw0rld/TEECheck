@@ -67,7 +67,48 @@ func TestOpenAIClientGenerate(t *testing.T) {
 	if got.Stream {
 		t.Fatal("expected non-stream request")
 	}
+	// JSONMode must reach the wire. Fourteen agents set it and every one of
+	// them parses the reply with ExtractJSONObject; a model that narrates
+	// instead of emitting an object fails the stage outright. This assertion
+	// previously required the opposite — it pinned the fact that nothing
+	// consumed the flag, rather than any decision to omit it.
+	if got.ResponseFormat == nil {
+		t.Fatal("JSONMode was set but no response_format reached the request")
+	}
+	if got.ResponseFormat.Type != "json_object" {
+		t.Fatalf("response_format type = %q, want %q", got.ResponseFormat.Type, "json_object")
+	}
+}
+
+// A caller that does NOT ask for JSON must not get response_format — some
+// OpenAI-compatible endpoints reject the field, so it is sent only on request.
+func TestOpenAIClientGenerate_NoJSONModeSendsNoResponseFormat(t *testing.T) {
+	type requestBody struct {
+		ResponseFormat *struct {
+			Type string `json:"type"`
+		} `json:"response_format"`
+	}
+	var got requestBody
+	client := NewOpenAIClient(config.Config{
+		LLMBaseURL: "https://example.test", LLMAPIKey: "test-key",
+		LLMModel: "gpt-test", LLMTimeoutSec: 5, LLMTemp: 0.1,
+	})
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewBufferString(`{"choices":[{"message":{"content":"plain text"}}]}`)),
+		}, nil
+	})}
+	if _, err := client.Generate(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	}); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
 	if got.ResponseFormat != nil {
-		t.Fatalf("did not expect response_format for generic openai provider, got %+v", got.ResponseFormat)
+		t.Fatalf("response_format must be absent without JSONMode, got %+v", got.ResponseFormat)
 	}
 }

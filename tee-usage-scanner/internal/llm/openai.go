@@ -42,6 +42,16 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 	if body.Temperature == 0.0 {
 		body.Temperature = c.temperature
 	}
+	// Honour the caller's JSONMode. Every LLM-backed agent in this repo sets
+	// it (14 call sites) because every one of them parses the reply as a JSON
+	// object and fails the stage otherwise. Until now nothing consumed the
+	// flag on this path, so "JSON mode" rested entirely on the model choosing
+	// to obey the prompt's instructions. Models that narrate before acting —
+	// glm-5.2 replies "Let me start by getting the TWE playbook details…" —
+	// then break every agent with a parse error.
+	if req.JSONMode {
+		body.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
+	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {

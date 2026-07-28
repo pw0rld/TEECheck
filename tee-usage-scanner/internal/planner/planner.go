@@ -242,54 +242,92 @@ loop:
 		}
 
 		fmt.Fprintf(os.Stdout, "[planner] round %d/%d — calling LLM...\n", roundNum, cfg.Budget.MaxRounds)
-		genReq := llm.GenerateRequest{
-			SystemPrompt: systemPrompt,
-			Messages:     []llm.Message{{Role: "user", Content: roundPrompt}},
-			Temperature:  cfg.Temperature,
-			JSONMode:     true,
+
+		// Token cost for this round. A corrective re-ask ACCUMULATES onto
+		// these rather than replacing them: the round really did cost two
+		// calls, and rounds.jsonl must not under-report it.
+		var tokensIn, tokensOut int
+
+		// askOnce performs one LLM call for this round, including token
+		// accounting, blob persistence and the started/completed event pair.
+		// It is a closure rather than a method so the corrective re-ask below
+		// reuses exactly the same accounting instead of a second copy of it.
+		askOnce := func(prompt string) (llm.GenerateResponse, error) {
+			genReq := llm.GenerateRequest{
+				SystemPrompt: systemPrompt,
+				Messages:     []llm.Message{{Role: "user", Content: prompt}},
+				Temperature:  cfg.Temperature,
+				JSONMode:     true,
+			}
+			_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
+			genResp, err := cfg.Client.Generate(ctx, genReq)
+			if err != nil {
+				// Emit a completion event with Error populated so
+				// downstream consumers can pair the started/completed
+				// events even on failure.
+				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
+				failed.Error = err.Error()
+				_ = cfg.Events.Emit(failed)
+				return llm.GenerateResponse{}, err
+			}
+
+			// Prefer provider-reported token usage. If the provider did
+			// not return it (older OpenAI-compatible endpoints, stream
+			// responses), fall back to a crude ~4 chars/token estimate so
+			// the budget still advances.
+			callIn := genResp.Usage.PromptTokens
+			callOut := genResp.Usage.CompletionTokens
+			if callIn == 0 && callOut == 0 {
+				callIn = len(systemPrompt)/4 + len(prompt)/4
+				callOut = len(genResp.Text) / 4
+			}
+			cfg.Budget.ConsumeTokens(callIn + callOut)
+			tokensIn += callIn
+			tokensOut += callOut
+
+			// Persist prompt + response bodies to the blob store (if
+			// configured) and emit llm_call_completed with refs only.
+			var promptBlob, responseBlob string
+			if cfg.Blobs != nil {
+				if ref, err := cfg.Blobs.WriteString(systemPrompt + "\n\n---\n\n" + prompt); err == nil {
+					promptBlob = ref
+				}
+				if ref, err := cfg.Blobs.WriteString(genResp.Text); err == nil {
+					responseBlob = ref
+				}
+			}
+			_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
+			return genResp, nil
 		}
-		_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
-		genResp, err := cfg.Client.Generate(ctx, genReq)
+
+		genResp, err := askOnce(roundPrompt)
 		if err != nil {
-			// Emit a completion event with Error populated so
-			// downstream consumers can pair the started/completed
-			// events even on failure.
-			failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
-			failed.Error = err.Error()
-			_ = cfg.Events.Emit(failed)
 			runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
 			terminationReason = "llm_error"
 			break
 		}
 
-		// Prefer provider-reported token usage. If the provider did
-		// not return it (older OpenAI-compatible endpoints, stream
-		// responses), fall back to a crude ~4 chars/token estimate so
-		// the budget still advances.
-		tokensIn := genResp.Usage.PromptTokens
-		tokensOut := genResp.Usage.CompletionTokens
-		if tokensIn == 0 && tokensOut == 0 {
-			tokensIn = len(systemPrompt)/4 + len(roundPrompt)/4
-			tokensOut = len(genResp.Text) / 4
-		}
-		cfg.Budget.ConsumeTokens(tokensIn + tokensOut)
-
-		// Persist prompt + response bodies to the blob store (if
-		// configured) and emit llm_call_completed with refs only.
-		var promptBlob, responseBlob string
-		if cfg.Blobs != nil {
-			if ref, err := cfg.Blobs.WriteString(systemPrompt + "\n\n---\n\n" + roundPrompt); err == nil {
-				promptBlob = ref
-			}
-			if ref, err := cfg.Blobs.WriteString(genResp.Text); err == nil {
-				responseBlob = ref
+		parsed, parseErr := ParseLLMResponse(genResp.Text)
+		if parseErr != nil {
+			// One corrective re-ask before giving up. response_format is not
+			// honoured on every round by every endpoint, and models that
+			// narrate before acting ("Let me continue reading.") produce a
+			// reply with no JSON object in it. Discarding seven good rounds
+			// because the eighth slipped is the wrong trade — the cost of
+			// re-asking is one extra call, the cost of not re-asking is the
+			// whole run.
+			fmt.Fprintf(os.Stdout, "[planner] round %d: reply was not a JSON object — re-asking once\n", roundNum)
+			retryPrompt := roundPrompt + "\n\n=== YOUR PREVIOUS REPLY WAS REJECTED ===\n" +
+				"It contained no JSON object. Do not narrate, explain, or announce what you are about to do.\n" +
+				"Reply with the JSON object described in the response format and NOTHING else — no prose before it, no prose after it, no markdown fence.\n" +
+				"Your rejected reply began: " + truncate(genResp.Text, 200) + "\n"
+			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {
+				genResp = retryResp
+				parsed, parseErr = ParseLLMResponse(genResp.Text)
 			}
 		}
-		_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
-
-		parsed, err := ParseLLMResponse(genResp.Text)
-		if err != nil {
-			runErr = fmt.Errorf("round %d: %w", roundNum, err)
+		if parseErr != nil {
+			runErr = fmt.Errorf("round %d: %w", roundNum, parseErr)
 			terminationReason = "llm_malformed"
 			state.AppendRoundAndPersist(artifacts.RoundRecord{
 				Round:   roundNum,
