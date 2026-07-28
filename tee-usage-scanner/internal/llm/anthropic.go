@@ -47,6 +47,20 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 	if len(body.Messages) == 0 {
 		body.Messages = []anthropicMessage{{Role: "user", Content: "Hello."}}
 	}
+	// Honour JSONMode. The Messages API has no response_format, so the
+	// protocol's own mechanism is used instead: a trailing assistant turn
+	// containing just "{" forces the model to continue the object rather
+	// than narrate first. Verified against z.ai's /api/anthropic endpoint
+	// on 2026-07-28 — glm-5.2 replies `"thought":…}` with no preamble.
+	//
+	// Without this, "JSON mode" on the GLM path is only a request in the
+	// prompt that the model is free to ignore, which is exactly how a live
+	// run died on round 1. The OpenAI path was fixed in c54cbfc; that fix
+	// did not reach here because NewClient routes the glm preset to this
+	// client, and nothing pointed the two implementations at each other.
+	if req.JSONMode {
+		body.Messages = append(body.Messages, anthropicMessage{Role: "assistant", Content: jsonPrefill})
+	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -82,11 +96,39 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		return GenerateResponse{}, fmt.Errorf("parse anthropic response: %w | raw=%s", err, truncateForError(string(respBody), 300))
 	}
 
+	if req.JSONMode {
+		text = restorePrefill(text)
+	}
+
 	return GenerateResponse{
 		Text:  text,
 		Raw:   string(respBody),
 		Usage: usage,
 	}, nil
+}
+
+// jsonPrefill is the assistant turn that opens the object the model must
+// complete. It carries no trailing whitespace: the Messages API rejects a
+// prefill that ends in whitespace.
+const jsonPrefill = "{"
+
+// restorePrefill puts back the brace the prefilled turn opened, because a
+// prefilled turn is not echoed back — the reply is the continuation only.
+//
+// It does NOT do so blindly. Prefill is honoured intermittently, exactly as
+// response_format is on the OpenAI path: observed against glm-5.2 on
+// 2026-07-28, one reply continued the object correctly while another ignored
+// the prefill and opened a fresh ```json fence. Prepending a brace to that
+// second shape would turn a reply the extractor can recover into one it
+// cannot — the fix would manufacture a new defect on the very path it exists
+// to protect. So when the continuation already opens an object or a fence,
+// the model restarted and the reply is returned untouched.
+func restorePrefill(text string) string {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "```") {
+		return text
+	}
+	return jsonPrefill + text
 }
 
 type anthropicMessagesRequest struct {
