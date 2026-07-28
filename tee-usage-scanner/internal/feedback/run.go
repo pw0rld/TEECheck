@@ -62,7 +62,10 @@ func formatArchiveContent(record artifacts.ReviewRecord, finding *artifacts.Find
 	content += fmt.Sprintf("# %s\n\n", record.FindingID)
 	content += fmt.Sprintf("**Summary**: %s\n\n", finding.Summary)
 	content += fmt.Sprintf("**Verdict**: %s\n", record.Verdict)
-	content += fmt.Sprintf("**Severity**: %s\n", record.Severity)
+	content += fmt.Sprintf("**Severity**: %s\n", record.EffectiveSeverity())
+	if record.ConfidenceOverride != "" {
+		content += fmt.Sprintf("**Confidence**: %s\n", record.ConfidenceOverride)
+	}
 	if len(record.Tags) > 0 {
 		content += fmt.Sprintf("**Tags**: %v\n", record.Tags)
 	}
@@ -170,10 +173,20 @@ Return a JSON object with fields:
 - wiki_updates: array of objects, each with: action ("append"|"suggest_new"), page_path (string), content (string), reason (string)
 - queries: array of objects (optional, each with: to_agent, kind, question)`
 
+	// An empty ConfidenceOverride means the reviewer pressed enter to
+	// keep the agent's confidence, which is a different statement
+	// from "the reviewer said nothing" — say so rather than emitting
+	// a blank field the model has to guess about.
+	confidence := rec.ConfidenceOverride
+	if confidence == "" {
+		confidence = "(reviewer kept the agent value)"
+	}
+
 	userMsg := fmt.Sprintf(`Review record:
 - Case: %s
 - Verdict: %s
 - Severity: %s
+- Confidence: %s
 - Tags: %s
 - Notes: %s
 - Reviewed at: %s
@@ -186,7 +199,8 @@ Finding context:
 
 Existing wiki pages:
 %s`,
-		rec.CaseID, rec.Verdict, rec.Severity,
+		rec.CaseID, rec.Verdict, rec.EffectiveSeverity(),
+		confidence,
 		strings.Join(rec.Tags, ", "), rec.Notes, rec.ReviewedAt,
 		finding.Summary, finding.Status,
 		strings.Join(finding.Files, ", "),
