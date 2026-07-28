@@ -233,6 +233,53 @@ The constructor `events.ClaimEmitted` is wired and ready; the
 expert / verifier prompt updates that will start emitting these
 land in a later commit.
 
+### `value_normalized`
+
+Emitted whenever a stage **replaces a value the model actually
+produced** with a different one. Additive in v1: no existing consumer
+is affected, and a run that rewrites nothing emits none.
+
+| field        | meaning                                                            |
+|--------------|--------------------------------------------------------------------|
+| `agent`      | the stage that did the rewriting (`challenger-001`, …)             |
+| `case_id`    | the case whose artifact was rewritten                              |
+| `field`      | the artifact field replaced (`confidence`, `exploitability`, …)    |
+| `from_value` | what the model said, verbatim (trimmed)                            |
+| `to_value`   | what the artifact ended up carrying                                |
+| `reason`     | why — including every rejected value and the vocabulary it failed  |
+
+```json
+{
+  "seq": 142,
+  "time": "2026-07-28T09:31:07Z",
+  "type": "value_normalized",
+  "run_id": "oasis-core-l3",
+  "agent": "challenger-001",
+  "case_id": "case-001",
+  "field": "exploitability",
+  "from_value": "moderate",
+  "to_value": "unrated",
+  "reason": "challenger returned \"moderate\" for exploitability and \"sort of\" on the corrective re-ask; neither is one of proven | likely | theoretical | unlikely, so the field is recorded as unrated — missing data, not another agent's judgement"
+}
+```
+
+**Why this event type exists.** On 2026-07-28 the Challenger was found
+to be normalizing its phase-1 `confidence` against the *exploitability*
+vocabulary, so every legal answer the model gave (`low`/`medium`/`high`)
+was silently rewritten to `theoretical`; the phase-2 `exploitability`
+field, on an off-vocabulary answer, fell back to the **Expert's** own
+confidence. The independent challenger was a synthetic echo of the
+agent it exists to challenge, and downstream stages built a
+"divergence" narrative on top of it. That survived for exactly one
+reason: the rewrite left no trace. Any stage that rewrites model output
+should emit this instead of rewriting silently.
+
+Emission is best-effort and never fails a run. Stages that rewrite
+model output are also expected to keep a durable, stage-local record
+(the Challenger writes `<run>/05_challenger/normalizations.json`,
+`artifacts.ChallengerNormalizations`), because a stage invoked manually
+against an existing run dir deliberately owns no event sink.
+
 ## Citation contract — `claim_emitted`
 
 Every claim an agent (expert / challenger / verifier / arbiter)

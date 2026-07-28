@@ -261,7 +261,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	}))
 
 	stageCfg.AgentID = "challenger-001"
-	if err := challenger.Run(stageCfg, forAgent(stageCfg.AgentID)); err != nil {
+	if err := challenger.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec); err != nil {
 		return runDir, fmt.Errorf("challenger: %w", err)
 	}
 	stageCfg.AgentID = "verifier-001"

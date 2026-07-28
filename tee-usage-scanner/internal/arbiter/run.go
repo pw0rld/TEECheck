@@ -78,7 +78,7 @@ func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, chall
 	}
 	b.WriteString("\n")
 	b.WriteString("## Challenger View\n\n")
-	b.WriteString(fmt.Sprintf("- Exploitability: %s\n", challenge.Exploitability))
+	b.WriteString(fmt.Sprintf("- Exploitability: %s\n", artifacts.FormatRating(challenge.Exploitability)))
 	b.WriteString(fmt.Sprintf("- Narrative: %s\n", challenge.ExploitNarrative))
 	if len(challenge.CounterArguments) > 0 {
 		b.WriteString("- Counter-arguments:\n")
@@ -288,7 +288,7 @@ citation-validated. Validated items are the basis for any
 		strings.Join(hypothesis.SupportingFacts, " | "),
 		taggedJoin(hypothesis.UntypedFacts, "[unanchored]"),
 		independent.IssuePresent, independent.Reasoning, strings.Join(orNone(challenge.KeyDifferences), " | "),
-		challenge.Exploitability, challenge.ReviewerStance,
+		artifacts.FormatRating(challenge.Exploitability), challenge.ReviewerStance,
 		strings.Join(challenge.CounterArguments, " | "),
 		memo.Status,
 		strings.Join(memo.ConfirmedFacts, " | "),

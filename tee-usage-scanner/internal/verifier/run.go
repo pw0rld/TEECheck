@@ -242,7 +242,7 @@ Static check findings (%d total):
 		hypothesis.Confidence,
 		formatExpertCitationStatus(expertValidation),
 		challenge.IndependentIssuePresent, strings.Join(challenge.KeyDifferences, " | "),
-		challenge.Exploitability, challenge.ExploitNarrative,
+		artifacts.FormatRating(challenge.Exploitability), challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
 		artifacts.FormatToolPath(pack.ObservedFlow), firstNonEmptyStr(strings.Join(pack.CounterEvidence, " | "), "(none)"),

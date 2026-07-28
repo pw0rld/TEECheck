@@ -124,7 +124,7 @@ func renderIndependentChallengerSection(challenge artifacts.Challenge, independe
 		fmt.Fprintf(&b, "Defenses considered: %s\n", strings.Join(independent.DefensesConsidered, "; "))
 	}
 	fmt.Fprintf(&b, "Key differences vs. Expert hypothesis: %s\n", strings.Join(orNone(challenge.KeyDifferences), "; "))
-	fmt.Fprintf(&b, "Exploitability: %s | Reviewer stance: %s\n", challenge.Exploitability, challenge.ReviewerStance)
+	fmt.Fprintf(&b, "Exploitability: %s | Reviewer stance: %s\n", artifacts.FormatRating(challenge.Exploitability), challenge.ReviewerStance)
 	return strings.TrimRight(b.String(), "\n")
 }
 

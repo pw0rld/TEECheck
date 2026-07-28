@@ -88,7 +88,7 @@ func TestBuildIndependentViewLLM_PromptExcludesExpertConclusion(t *testing.T) {
 		Category: "rollback",
 		Snippets: []artifacts.PromptSnippet{{Path: "src/x.c", StartLine: 1, EndLine: 1, Content: "int x;"}},
 	}
-	_, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "challenger-001", 0)
+	_, _, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "challenger-001", 0)
 	if err != nil {
 		t.Fatalf("buildIndependentViewLLM: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestBuildIndependentViewLLM_PromptCarriesObservedFlow(t *testing.T) {
 		}},
 		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER"},
 	}
-	if _, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, t.TempDir(), pack, caseContext{}, "challenger-001", 0); err != nil {
+	if _, _, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, t.TempDir(), pack, caseContext{}, "challenger-001", 0); err != nil {
 		t.Fatalf("buildIndependentViewLLM: %v", err)
 	}
 	prompt := stub.lastRequest().Messages[0].Content

@@ -29,6 +29,7 @@ const (
 	TypeToolCallStarted        = "tool_call_started"
 	TypeToolCallCompleted      = "tool_call_completed"
 	TypeClaimEmitted           = "claim_emitted"
+	TypeValueNormalized        = "value_normalized"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -88,6 +89,13 @@ type Event struct {
 	ClaimID string                 `json:"claim_id,omitempty"`
 	Claim   string                 `json:"claim,omitempty"`
 	Cited   []citations.CitedBytes `json:"cited,omitempty"`
+
+	// value_normalized. Reason (above) carries the explanation; these
+	// three carry the part a reader cannot reconstruct from prose —
+	// which field, and what it said before and after.
+	Field     string `json:"field,omitempty"`
+	FromValue string `json:"from_value,omitempty"`
+	ToValue   string `json:"to_value,omitempty"`
 }
 
 // Constructors — keep callers from misfiling event-type-specific
@@ -219,6 +227,29 @@ func ClaimEmitted(runID, agent, caseID, claimID, claim string, cited []citations
 		ClaimID: claimID,
 		Claim:   claim,
 		Cited:   cited,
+	}
+}
+
+// ValueNormalized records that a stage replaced a value the model
+// actually produced with a different one — an off-vocabulary rating
+// recovered by a corrective re-ask, or demoted to "unrated" when no
+// legal value could be obtained.
+//
+// This event exists because the Challenger's "synthetic echo" defect
+// (2026-07-28) survived four days for one reason: the rewrite left no
+// trace. The artifact said "theoretical" and nothing anywhere recorded
+// that the model had said "high". Any stage that rewrites model output
+// should emit this rather than rewriting silently.
+func ValueNormalized(runID, agent, caseID, field, from, to, reason string) Event {
+	return Event{
+		Type:      TypeValueNormalized,
+		RunID:     runID,
+		Agent:     agent,
+		CaseID:    caseID,
+		Field:     field,
+		FromValue: from,
+		ToValue:   to,
+		Reason:    reason,
 	}
 }
 
