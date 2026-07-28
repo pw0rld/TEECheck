@@ -86,6 +86,91 @@ func verifierResponse(t *testing.T, confirmedCited, contradictedCited []citation
 	return string(raw)
 }
 
+// ─── Investigation knowledge reaches the prompt (2026-07-28) ────────
+
+// sectionBody returns the text under the prompt section whose header
+// starts with headerPrefix, up to the next blank line — so the empty
+// case is checkable: a header with nothing under it fails, a header
+// with "(none)" passes.
+func sectionBody(t *testing.T, prompt, headerPrefix string) string {
+	t.Helper()
+	i := strings.Index(prompt, headerPrefix)
+	if i < 0 {
+		t.Fatalf("prompt has no section starting %q:\n%s", headerPrefix, prompt)
+	}
+	rest := prompt[i:]
+	nl := strings.Index(rest, "\n")
+	if nl < 0 {
+		t.Fatalf("section %q has no body at all:\n%s", headerPrefix, prompt)
+	}
+	body := rest[nl+1:]
+	if end := strings.Index(body, "\n\n"); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
+}
+
+const (
+	observedFlowHeader    = "Observed flow ("
+	counterEvidenceHeader = "Counter-evidence the Investigator already found ("
+)
+
+// The Verifier decides corroborated / contested / inconclusive, and
+// arbitrates the Expert against the Challenger. Counter-evidence the
+// Planner already recorded is an input to exactly that decision, and the
+// traced flow is the chain whose completeness the Arbiter's gate later
+// depends on. A field that reached only the Expert would be a partial
+// fix.
+func TestBuildMemoLLM_PromptCarriesObservedFlowAndCounterEvidence(t *testing.T) {
+	repo, _ := repoFixture(t)
+	stub := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}
+	bus := agentbus.New(0)
+
+	pack := artifacts.CasePack{
+		CaseID: "case-001",
+		ObservedFlow: []artifacts.ToolPathStep{{
+			Location: artifacts.ToolLocation{Path: "core/tee/tee_rollback.c", StartLine: 91, Symbol: "rollback_check"},
+			Kind:     "sink",
+			Message:  "OBSERVED-STEP-MARKER",
+		}},
+		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER"},
+	}
+	if _, err := buildMemoLLM(context.Background(), stub, bus, repo, pack,
+		artifacts.Hypothesis{}, artifacts.Challenge{}, caseContext{}, "verifier-001", 0, nil, nil); err != nil {
+		t.Fatalf("buildMemoLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	flow := sectionBody(t, prompt, observedFlowHeader)
+	for _, want := range []string{"core/tee/tee_rollback.c:91", "rollback_check", "OBSERVED-STEP-MARKER"} {
+		if !strings.Contains(flow, want) {
+			t.Errorf("observed-flow section missing %q:\n%s", want, flow)
+		}
+	}
+	if counter := sectionBody(t, prompt, counterEvidenceHeader); !strings.Contains(counter, "COUNTER-EVIDENCE-MARKER") {
+		t.Errorf("counter-evidence section missing the marker:\n%s", counter)
+	}
+}
+
+func TestBuildMemoLLM_EmptyFlowAndCounterEvidenceRenderCleanly(t *testing.T) {
+	repo, _ := repoFixture(t)
+	stub := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}
+	bus := agentbus.New(0)
+
+	if _, err := buildMemoLLM(context.Background(), stub, bus, repo, artifacts.CasePack{CaseID: "case-001"},
+		artifacts.Hypothesis{}, artifacts.Challenge{}, caseContext{}, "verifier-001", 0, nil, nil); err != nil {
+		t.Fatalf("buildMemoLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	if got := sectionBody(t, prompt, observedFlowHeader); got != "(none)" {
+		t.Errorf("empty observed flow rendered as %q, want %q", got, "(none)")
+	}
+	if got := sectionBody(t, prompt, counterEvidenceHeader); got != "(none)" {
+		t.Errorf("empty counter-evidence rendered as %q, want %q", got, "(none)")
+	}
+}
+
 // ─── Validation prompt block ────────────────────────────────────────
 
 func TestFormatExpertCitationStatus_ValidStaleUnanchoredUnresolved(t *testing.T) {

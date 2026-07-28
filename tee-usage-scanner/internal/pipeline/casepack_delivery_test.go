@@ -86,6 +86,13 @@ func setupPlaybookKnowledgeRoot(t *testing.T) string {
 const (
 	evidenceFromFirstInvestigation  = "freshness_value_is_never_propagated_from_load_or_provisioning_into_the_guards_input"
 	evidenceFromSecondInvestigation = "the_rollback_guard_never_reads_the_propagated_freshness_value"
+
+	// The traced attack path is carried by the first investigation and the
+	// counter-evidence by the second, so the pack on disk can only hold
+	// both if the collapse preserves the primary's ordered flow AND unions
+	// the loser's counter-evidence.
+	flowStepFromFirstInvestigation         = "signed version read here and never propagated"
+	counterEvidenceFromSecondInvestigation = "the_caller_revalidates_the_version_before_the_guard_runs"
 )
 
 // donePassWithInvestigation builds one planner round response whose single
@@ -134,6 +141,15 @@ func donePassWithInvestigation(t *testing.T) string {
 					"filled_roles": map[string]any{
 						"claim_producer": map[string]any{"path": "src/a.c", "start_line": 1, "symbol": "f"},
 					},
+					// The attack path this investigation traced: until
+					// 2026-07-28 it existed only in
+					// 03_investigations/<id>.json, a file no production
+					// reader opens, so it never reached an agent.
+					"observed_flow": []map[string]any{{
+						"location": map[string]any{"path": "src/a.c", "start_line": 1, "symbol": "f"},
+						"kind":     "source",
+						"message":  flowStepFromFirstInvestigation,
+					}},
 				}, {
 					// A SECOND investigation resolving to the same file: two
 					// TWE scenarios about one function, which is routine on
@@ -149,6 +165,11 @@ func donePassWithInvestigation(t *testing.T) string {
 					"filled_roles": map[string]any{
 						"rollback_authority": map[string]any{"path": "src/a.c", "start_line": 1, "symbol": "f"},
 					},
+					// Counter-evidence on the SECOND investigation, which
+					// loses the identity slot in the collapse: it reaches
+					// disk only if absorb unions the field rather than
+					// keeping the primary's.
+					"counterevidence": []string{counterEvidenceFromSecondInvestigation},
 				}},
 			},
 		}},
@@ -236,6 +257,25 @@ func TestCasePacksReachDownstreamGlob(t *testing.T) {
 			t.Errorf("required_evidence = %v, missing %q — a collapse of two investigations "+
 				"on the same file must union their knowledge, not pick one", got.RequiredEvidence, want)
 		}
+	}
+
+	// The attack path and the counter-evidence must reach the same
+	// case-*.json every agent globs. Before 2026-07-28 both were built,
+	// validated and persisted to 03_investigations/<id>.json — and stopped
+	// there, because BuildCasePack carried eleven fields and not these two.
+	if len(got.ObservedFlow) != 1 || got.ObservedFlow[0].Message != flowStepFromFirstInvestigation {
+		t.Errorf("observed_flow = %+v, want the traced step from the first investigation — "+
+			"the attack path is stranded in 03_investigations/ again", got.ObservedFlow)
+	}
+	foundCounter := false
+	for _, c := range got.CounterEvidence {
+		if c == counterEvidenceFromSecondInvestigation {
+			foundCounter = true
+		}
+	}
+	if !foundCounter {
+		t.Errorf("counterevidence = %v, missing %q — evidence against the case must survive the "+
+			"collapse the same way required_evidence does", got.CounterEvidence, counterEvidenceFromSecondInvestigation)
 	}
 
 	// ...and the candidate it absorbed contributed its why_selected and its

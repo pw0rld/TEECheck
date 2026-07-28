@@ -262,6 +262,12 @@ Verifier resolution:
 - Evidence distinctions (not-found vs proven-absent): %s
 - Invariant status updates proposed (NOT yet applied to the stored artifact): %s
 
+Observed flow (the attack path the Investigator actually traced, in order — this is the chain attack_chain_complete above refers to):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — a judgment that does not account for it is not an aggregation of the evidence):
+%s
+
 Anchored ToolFacts:
 %s
 
@@ -291,6 +297,7 @@ citation-validated. Validated items are the basis for any
 		taggedJoin(memo.UntypedContradictions, "[unanchored]"),
 		formatEvidenceDistinctionsForLLM(memo.EvidenceDistinctions),
 		formatInvariantUpdatesForLLM(memo.InvariantUpdates),
+		artifacts.FormatToolPath(pack.ObservedFlow), taggedJoin(pack.CounterEvidence, "-"),
 		taggedJoin(renderAnchoredToolFacts(caseCtx), "-"),
 		taggedJoin(renderArchitectureEvidenceStatus(caseCtx.archModel), "-"),
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))

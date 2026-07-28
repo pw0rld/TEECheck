@@ -250,6 +250,11 @@ func fullyLoaded(id, twe string, files ...string) artifacts.CasePack {
 		CommonDefenses:       []string{id + "-def"},
 		CommonFalsePositives: []string{id + "-fp"},
 		CoverageGaps:         []string{id + "-gap"},
+		CounterEvidence:      []string{id + "-counter"},
+		ObservedFlow: []artifacts.ToolPathStep{{
+			Location: artifacts.ToolLocation{Path: files[0], StartLine: 1, Symbol: id + "-step"},
+			Message:  id + "-flow",
+		}},
 	}
 }
 
@@ -269,6 +274,29 @@ func knowledgeFields(p artifacts.CasePack) map[string][]string {
 		"common_defenses":        p.CommonDefenses,
 		"common_false_positives": p.CommonFalsePositives,
 		"coverage_gaps":          p.CoverageGaps,
+		"counterevidence":        p.CounterEvidence,
+	}
+}
+
+// TestAbsorb_KeepsOneCoherentObservedFlow pins the one knowledge field a
+// collapse deliberately does NOT union. ObservedFlow is an ORDERED path,
+// not a set: appending the other pack's steps to the primary's would
+// hand every downstream agent a numbered sequence that no tool ever
+// traced — a fabricated attack path, which is worse than losing one. The
+// losing side's path stays in its 03_investigations/<id>.json record.
+func TestAbsorb_KeepsOneCoherentObservedFlow(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		fullyLoaded("inv-1", "TWE-FLOW-001", "a.c"),
+		fullyLoaded("inv-2", "TWE-GUARD-004", "a.c"),
+	})
+	if len(got) != 1 {
+		t.Fatalf("want 1 pack, got %d", len(got))
+	}
+	if len(got[0].ObservedFlow) != 1 {
+		t.Fatalf("observed_flow = %+v, want exactly the surviving pack's own path (splicing two traced paths invents one)", got[0].ObservedFlow)
+	}
+	if got[0].ObservedFlow[0].Message != "inv-1-flow" {
+		t.Errorf("observed_flow came from %q, want the pack that supplied CaseID/Category (inv-1)", got[0].ObservedFlow[0].Message)
 	}
 }
 

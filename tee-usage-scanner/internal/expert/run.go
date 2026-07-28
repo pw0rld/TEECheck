@@ -191,6 +191,12 @@ Case:
 - missing_links: %s
 - coverage_gaps: %s
 
+Observed flow (the attack path the Investigator actually traced, in order):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — weigh it before concluding, do not restate it as your own finding):
+%s
+
 TWE prior knowledge:
 %s
 
@@ -213,6 +219,7 @@ Snippets:
 %s
 `, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.RequiredEvidence, " | "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
 		strings.Join(pack.RelatedTWEs, ", "), strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
+		artifacts.FormatToolPath(pack.ObservedFlow), firstNonEmpty(strings.Join(pack.CounterEvidence, " | "), "(none)"),
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants), renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
 

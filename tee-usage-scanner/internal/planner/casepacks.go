@@ -151,7 +151,9 @@ func hasInvestigationKnowledge(p artifacts.CasePack) bool {
 		len(p.MissingLinks) > 0 ||
 		len(p.CommonDefenses) > 0 ||
 		len(p.CommonFalsePositives) > 0 ||
-		len(p.CoverageGaps) > 0
+		len(p.CoverageGaps) > 0 ||
+		len(p.CounterEvidence) > 0 ||
+		len(p.ObservedFlow) > 0
 }
 
 // absorb collapses two packs that name the same target-file set into one.
@@ -185,8 +187,12 @@ func hasInvestigationKnowledge(p artifacts.CasePack) bool {
 // produced and then discarded before any agent could read it.
 //
 // Fields deliberately NOT unioned: SchemaVersion/HotspotID/Focus are run-wide
-// constants taken from the primary; TargetFiles are equal as sets by the
-// caller's own merge rule; ExpectedObligations/OpenQuestions/ToolFacts/
+// constants taken from the primary; ObservedFlow is an ORDERED path rather
+// than a set, so concatenating the two sides' steps would present downstream
+// agents with a numbered sequence no tool ever traced — the primary's path is
+// kept whole and the other side's stays in its own 03_investigations/<id>.json
+// record (see TestAbsorb_KeepsOneCoherentObservedFlow); TargetFiles are equal
+// as sets by the caller's own merge rule; ExpectedObligations/OpenQuestions/ToolFacts/
 // GraphFacts/Snippets/KnowledgeHints are never populated on this path — only
 // internal/cases (legacy) and the post-planner enrichment stage write them,
 // and neither feeds packs through Merge or DedupePacks.
@@ -208,6 +214,7 @@ func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	out.CommonDefenses = unionStrings(primary.CommonDefenses, other.CommonDefenses)
 	out.CommonFalsePositives = unionStrings(primary.CommonFalsePositives, other.CommonFalsePositives)
 	out.CoverageGaps = unionStrings(primary.CoverageGaps, other.CoverageGaps)
+	out.CounterEvidence = unionStrings(primary.CounterEvidence, other.CounterEvidence)
 
 	if priorityRank[normalizePriority(other.Priority)] > priorityRank[normalizePriority(primary.Priority)] {
 		out.Priority = other.Priority

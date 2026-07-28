@@ -209,6 +209,12 @@ Challenger view:
 - Counter arguments: %s
 - Remaining questions: %s
 
+Observed flow (the attack path the Investigator actually traced, in order — check the disputed step against the source below, do not re-derive the path):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — resolve it explicitly; corroborating a case whose counter-evidence you never addressed is how a false positive survives review):
+%s
+
 TWE prior knowledge:
 %s
 
@@ -239,6 +245,7 @@ Static check findings (%d total):
 		challenge.Exploitability, challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
+		artifacts.FormatToolPath(pack.ObservedFlow), firstNonEmptyStr(strings.Join(pack.CounterEvidence, " | "), "(none)"),
 		firstNonEmptyStr(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants),
 		renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatSnippets(pack.Snippets),

@@ -43,6 +43,10 @@ Check specifically for:
   this snippet misses
 - the TWE's own common_defenses and common_false_positives lists —
   if the visible code matches one of those patterns, say so
+- the counter-evidence section below: the Investigator already
+  recorded observations AGAINST this issue in THIS repository. Start
+  from those rather than re-deriving them, and say explicitly if one
+  of them settles the question
 
 Return exactly one JSON object with fields:
 - issue_present (boolean)
@@ -70,6 +74,12 @@ Return exactly one JSON object with fields:
 - coverage_gaps: %s
 - open_questions: %s
 
+Counter-evidence the Investigator already found (evidence AGAINST the issue — this is your starting material: confirm it, extend it, or say why it does not hold):
+%s
+
+Observed flow (the attack path the Investigator actually traced, in order — the specific chain you are being asked to break):
+%s
+
 TWE prior knowledge:
 %s
 
@@ -95,6 +105,7 @@ Snippets (the raw source this case is about):
 		strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "),
 		strings.Join(pack.RequiredEvidence, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
 		strings.Join(pack.OpenQuestions, " | "),
+		firstNonEmpty(strings.Join(pack.CounterEvidence, " | "), "(none)"), artifacts.FormatToolPath(pack.ObservedFlow),
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants),
 		renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))

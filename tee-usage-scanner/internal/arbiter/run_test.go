@@ -1,11 +1,14 @@
 package arbiter
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
 
 // TestBuildPacket_SurfacesUntypedSections confirms the packet
@@ -57,3 +60,94 @@ func TestTaggedJoin(t *testing.T) {
 // CitedFact is referenced from imported package; touch it once so
 // imports stay tidy if test variants are added.
 var _ = citations.CitedFact{}
+
+// ─── Investigation knowledge reaches the prompt (2026-07-28) ────────
+
+type stubLLM struct {
+	responseJSON string
+	gotRequest   *llm.GenerateRequest
+}
+
+func (s *stubLLM) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+	s.gotRequest = &req
+	return llm.GenerateResponse{Text: s.responseJSON}, nil
+}
+
+const arbiterResponseJSON = `{"status":"needs_review","severity":"low","confidence":"low","summary":"s","evidence":[],"review_packet_markdown":"m","queries":[]}`
+
+// sectionBody returns the text under the prompt section whose header
+// starts with headerPrefix, up to the next blank line, so the empty case
+// is checkable rather than merely absent.
+func sectionBody(t *testing.T, prompt, headerPrefix string) string {
+	t.Helper()
+	i := strings.Index(prompt, headerPrefix)
+	if i < 0 {
+		t.Fatalf("prompt has no section starting %q:\n%s", headerPrefix, prompt)
+	}
+	rest := prompt[i:]
+	nl := strings.Index(rest, "\n")
+	if nl < 0 {
+		t.Fatalf("section %q has no body at all:\n%s", headerPrefix, prompt)
+	}
+	body := rest[nl+1:]
+	if end := strings.Index(body, "\n\n"); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
+}
+
+const (
+	observedFlowHeader    = "Observed flow ("
+	counterEvidenceHeader = "Counter-evidence the Investigator already found ("
+)
+
+// The Arbiter's own mechanical gate (attackChainComplete) decides whether
+// "confirmed" wording is allowed, and its prompt asks the model to judge
+// the same chain. Handing it the traced path and the Planner's
+// counter-evidence is the difference between judging the chain and
+// judging three agents' summaries of it.
+func TestArbitrateLLM_PromptCarriesObservedFlowAndCounterEvidence(t *testing.T) {
+	stub := &stubLLM{responseJSON: arbiterResponseJSON}
+	pack := artifacts.CasePack{
+		CaseID: "case-001",
+		ObservedFlow: []artifacts.ToolPathStep{{
+			Location: artifacts.ToolLocation{Path: "core/tee/tee_rollback.c", StartLine: 91, Symbol: "rollback_check"},
+			Message:  "OBSERVED-STEP-MARKER",
+		}},
+		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER"},
+	}
+
+	if _, _, err := arbitrateLLM(context.Background(), stub, agentbus.New(0), pack,
+		artifacts.Hypothesis{}, artifacts.Challenge{}, artifacts.VerificationMemo{},
+		caseContext{}, artifacts.ChallengerIndependentView{}, "arbiter-001", 0); err != nil {
+		t.Fatalf("arbitrateLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	flow := sectionBody(t, prompt, observedFlowHeader)
+	for _, want := range []string{"core/tee/tee_rollback.c:91", "rollback_check", "OBSERVED-STEP-MARKER"} {
+		if !strings.Contains(flow, want) {
+			t.Errorf("observed-flow section missing %q:\n%s", want, flow)
+		}
+	}
+	if counter := sectionBody(t, prompt, counterEvidenceHeader); !strings.Contains(counter, "COUNTER-EVIDENCE-MARKER") {
+		t.Errorf("counter-evidence section missing the marker:\n%s", counter)
+	}
+}
+
+func TestArbitrateLLM_EmptyFlowAndCounterEvidenceRenderCleanly(t *testing.T) {
+	stub := &stubLLM{responseJSON: arbiterResponseJSON}
+	if _, _, err := arbitrateLLM(context.Background(), stub, agentbus.New(0), artifacts.CasePack{CaseID: "case-001"},
+		artifacts.Hypothesis{}, artifacts.Challenge{}, artifacts.VerificationMemo{},
+		caseContext{}, artifacts.ChallengerIndependentView{}, "arbiter-001", 0); err != nil {
+		t.Fatalf("arbitrateLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	if got := sectionBody(t, prompt, observedFlowHeader); got != "(none)" {
+		t.Errorf("empty observed flow rendered as %q, want %q", got, "(none)")
+	}
+	if got := sectionBody(t, prompt, counterEvidenceHeader); got != "(none)" {
+		t.Errorf("empty counter-evidence rendered as %q, want %q", got, "(none)")
+	}
+}
