@@ -1,5 +1,26 @@
 # Flow Playbook 对照测量
 
+> ## ⛔ 本文结论已作废（2026-07-28）
+>
+> 本次测量比较的是 **candidate 路径**的产出，而 playbook 的经验字段
+> （`common_defenses` / `common_false_positives`）走的是另一条通道——
+> 一条当时**没有任何下游消费者能读到**的通道。
+>
+> 起因见 `docs/superpowers/specs/2026-07-27-llm-path-case-pack-design.md` §1：
+> planner 把 investigation 派生的 Case Pack 写成 `03_cases/<investigation_id>.json`，
+> 而全部 6 个下游消费者都 glob `case-*.json`，所以那份 pack 落盘即死。
+> 缺陷由 `bf9ead6`（2026-07-23）引入，这 4 天恰好覆盖了本次测量。
+>
+> 因此下面表格里的 baseline 与 withflow 两臂，**都没有把 playbook 的经验内容
+> 送到 expert / challenger / verifier / arbiter**。两臂之间的差异只反映了
+> playbook 对 planner 一个 agent 的 prompt 注入效果，不是本文声称的东西。
+>
+> 缺陷已于 `merge/tee-audit-integration` 分支修复（Task 1–6，末次提交 `22350e0`）。
+> **重跑之前，本文任何结论都不得被引用。**
+>
+> 下文原样保留，作为方法学记录（尤其是"机制分析"与"方法论自查"两节，
+> 它们讨论的 agent 行为模式观察本身仍然成立）。
+
 > 日期：2026-07-26
 > 对象：`knowledge/twe/playbooks/flow.yml`（TWE-FLOW-001，commit `e7a0263`）
 > 划分：`teecheck-benchmark/datasets/split.v1.json`（dev 23 / holdout 21，种子 20260724）

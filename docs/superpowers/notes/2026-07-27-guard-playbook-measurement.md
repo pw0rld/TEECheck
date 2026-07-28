@@ -1,5 +1,26 @@
 # Guard Playbook 对照测量 — 负面结果,已撤回
 
+> ## ⛔ 本文结论已作废（2026-07-28）—— 撤回 guard.yml 的依据不成立
+>
+> 与 `2026-07-26-flow-playbook-measurement.md` 同因：本次测量比较的是
+> **candidate 路径**的产出，而 playbook 的经验字段走的是一条当时
+> **没有任何下游消费者能读到**的通道（详见
+> `docs/superpowers/specs/2026-07-27-llm-path-case-pack-design.md` §1）。
+>
+> 本文据此得出"guard.yml 收益为零"并**撤回了该 playbook**。那个结论没有依据：
+> 两臂都没能把 playbook 的经验内容送到 expert 之后的任何 agent。
+>
+> 更具体地，本文表格里 `CVE-2016-6129 / withguard` 第 1 轮记为"无候选"。
+> 事后核查该 run 的 `03_cases/` 里有 **3 个 `inv-*.json`** 被静默丢弃，
+> `findings.json` 只有 105 字节的 `findings: null`，而进程 exit=0。
+> 那不是"没找到"，是"找到了但没人接"。
+>
+> 缺陷已于 `merge/tee-audit-integration` 分支修复（末次提交 `22350e0`）。
+> **`guard.yml` 的撤回决定应在重跑后重新评估**；`TWE-GUARD-004` 目录条目仍在。
+>
+> 下文原样保留。其中"一次未能重现的回退"一节记录的自我纠正仍然有效，
+> 且本次事故进一步印证了它的教训：n=1 的运行不足以支撑机制性结论。
+
 > 日期：2026-07-27
 > 对象：`knowledge/twe/playbooks/guard.yml`（TWE-GUARD-004，commit `e675324`，已于本次撤回）
 > 结论：**未测得收益，playbook 撤回；`TWE-GUARD-004` 目录条目保留。**
