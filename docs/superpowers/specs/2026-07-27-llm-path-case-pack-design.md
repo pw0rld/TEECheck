@@ -99,7 +99,9 @@ internal/stats/review.go:48
 
    前三个的 investigation 记录的是"我找了这个 TWE，全部角色都没定位到"——它们**没有可交给下游的目标**。这五个 run 里真正有实质内容被丢弃的只有 `CVE-2016-6129-withguard`。这直接决定了 §4 组件 1 的空目标规则。
 
-2. **`flow.yml` 与 `guard.yml` 两次对照测量的结论均不成立。** 两份测量记（`notes/2026-07-26-flow-playbook-measurement.md`、`notes/2026-07-27-guard-playbook-measurement.md`）比较的是 candidate 路径的产出，而 playbook 经验字段走的是被丢弃的那条通道。修复后必须重跑，在此之前不得引用这两份结论。
+2. **`flow.yml` 与 `guard.yml` 两次对照测量的结论均不成立，两份测量记已删除。** 它们比较的是 candidate 路径的产出，而 playbook 经验字段走的是被丢弃的那条通道，两臂都没能把经验内容送达 expert 之后的任何 agent。原文见 git 历史（删除提交之前的 `docs/superpowers/notes/2026-07-2{6,7}-*-playbook-measurement.md`）。
+
+   连带后果：**`guard.yml` 是依据其中一份结论被撤回的，那个依据不成立。** `TWE-GUARD-004` 目录条目仍在，撤回决定应在重跑后重新评估。
 
 ---
 
