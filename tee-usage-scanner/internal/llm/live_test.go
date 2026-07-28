@@ -27,7 +27,7 @@ func TestLiveLLMDataSource(t *testing.T) {
 func TestLiveGLMDataSource(t *testing.T) {
 	runLiveLLMDataSourceTest(t, config.Config{
 		LLMProvider:   "glm",
-		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_GLM_BASE_URL", "GLM_BASE_URL", "ZAI_BASE_URL", "TEECHECK_LLM_BASE_URL"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_GLM_BASE_URL", "GLM_BASE_URL", "ZAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_GLM_API_KEY", "GLM_API_KEY", "ZAI_API_KEY", "TEECHECK_LLM_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_GLM_MODEL", "GLM_MODEL", "ZAI_MODEL", "TEECHECK_LLM_MODEL"),
 		LLMTimeoutSec: 60,

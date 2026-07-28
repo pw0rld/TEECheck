@@ -104,7 +104,7 @@ func parseCollabRun(args []string) (Config, error) {
 		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		StaticTools:     "auto",
 	}
@@ -121,7 +121,7 @@ func parseCollabRun(args []string) (Config, error) {
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for LLM-backed agents")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for LLM-backed agents")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for LLM-backed agents")
@@ -287,14 +287,14 @@ func parseExpert(args []string) (Config, error) {
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable expert agent identifier")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the expert agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the expert agent")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the expert agent")
@@ -317,14 +317,14 @@ func parseChallenge(args []string) (Config, error) {
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable challenger agent identifier")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the challenger agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the challenger agent")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the challenger agent")
@@ -347,7 +347,7 @@ func parseVerifier(args []string) (Config, error) {
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		StaticTools:   "auto",
 	}
@@ -355,7 +355,7 @@ func parseVerifier(args []string) (Config, error) {
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable verifier agent identifier")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the verifier agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the verifier agent")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the verifier agent")
@@ -380,7 +380,7 @@ func parseArbiter(args []string) (Config, error) {
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
@@ -388,7 +388,7 @@ func parseArbiter(args []string) (Config, error) {
 	fs.IntVar(&cfg.MaxFindings, "max-findings", cfg.MaxFindings, "Maximum number of findings to emit; 0 means all")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the arbiter agent")
@@ -413,7 +413,7 @@ func parseCurator(args []string) (Config, error) {
 		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
@@ -422,7 +422,7 @@ func parseCurator(args []string) (Config, error) {
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "OpenAI-compatible API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature")
@@ -445,14 +445,14 @@ func parseReport(args []string) (Config, error) {
 		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec: envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
 	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode (synthesized via LLM)")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
 	if err := fs.Parse(args); err != nil {
@@ -515,7 +515,7 @@ func parseRun(args []string) (Config, error) {
 		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec:   envInt(60, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:         1,
 	}
@@ -537,7 +537,7 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
-	fs.StringVar(&cfg.LLMAPIKey, "llm-api-key", cfg.LLMAPIKey, "LLM API key")
+	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
@@ -665,4 +665,23 @@ func envFloat(defaultValue float64, keys ...string) float64 {
 		}
 	}
 	return defaultValue
+}
+
+// redactedKey binds --llm-api-key without ever revealing what it holds.
+//
+// The flag package captures Value.String() at registration time and echoes it
+// back as "(default …)" in every usage dump. Binding the key with StringVar
+// therefore printed it to the terminal on --help and on ANY flag error — which
+// happened for real on 2026-07-28, putting a live API key into a terminal and a
+// task log. Returning "" here means the flag package sees a zero default and
+// prints none, while cfg.LLMAPIKey keeps whatever the environment supplied.
+type redactedKey struct{ p *string }
+
+func (r redactedKey) String() string { return "" }
+
+func (r redactedKey) Set(v string) error {
+	if r.p != nil {
+		*r.p = v
+	}
+	return nil
 }
