@@ -56,6 +56,18 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 			"missing_roles":     []string{"version_propagated_to_authority"},
 			"required_evidence": []string{"freshness_value_is_never_propagated_from_load_or_provisioning_into_the_guards_input"},
 			"tool_fact_refs":    []string{},
+		}, {
+			// A second investigation that located NOTHING: every role
+			// missing, so its Case Pack has no target files and Merge
+			// drops it. Acceptance criterion 3 is that dropping the pack
+			// must not drop the 03_investigations/ record — "I looked and
+			// found nothing" is the next investigative task, and it is the
+			// only thing that stops the next pass from re-running the same
+			// search. Nothing in the code enforces the ordering that makes
+			// this true (investigations.Persist happens to run before pack
+			// construction), so it is asserted here.
+			"twe_ids":       []string{"TWE-STATE-001"},
+			"missing_roles": []string{"claim_producer", "version_propagated_to_authority"},
 		}},
 	})
 	client := &mockLLM{scripts: []string{roundResp}}
@@ -90,8 +102,8 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 	if result.Err != nil {
 		t.Fatalf("unexpected error: %v", result.Err)
 	}
-	if len(result.Investigations) != 1 {
-		t.Fatalf("Investigations len = %d, want 1", len(result.Investigations))
+	if len(result.Investigations) != 2 {
+		t.Fatalf("Investigations len = %d, want 2 (the located one and the located-nothing one)", len(result.Investigations))
 	}
 	inv := result.Investigations[0]
 
@@ -127,6 +139,9 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 	// together. internal/pipeline now writes the deduped union once, and
 	// TestRunL3Planner_MultiSample_WritesDedupedUnionOnce there asserts the
 	// downstream case-*.json glob sees exactly that.
+	// One pack, not two: the second investigation located nothing, so its
+	// pack has no target files and Merge drops it (handing Expert a case
+	// with nothing to read asks it to hypothesise about nothing).
 	if len(result.CasePacks) != 1 {
 		t.Fatalf("want 1 pack out of Run, got %d: %+v", len(result.CasePacks), result.CasePacks)
 	}
@@ -146,13 +161,27 @@ func TestPlannerRun_RollbackInvestigation_Vulnerable(t *testing.T) {
 		t.Fatalf("planner.Run must not write case packs (the pipeline does, once per run), found %v", stray)
 	}
 
-	// The investigation must be persisted as a schema-valid artifact
+	// Both investigations must be persisted as schema-valid artifacts
 	// (Persist itself schema-validates — see internal/investigations) —
-	// checking the file exists on disk proves the planner actually wrote
-	// it, not just built it in memory.
-	invPath := filepath.Join(runDir, "03_investigations", inv.InvestigationID+".json")
-	if _, err := os.Stat(invPath); err != nil {
-		t.Errorf("expected investigation persisted at %s: %v", invPath, err)
+	// checking the files exist on disk proves the planner actually wrote
+	// them, not just built them in memory. The second one is the acceptance
+	// criterion: its Case Pack was just dropped for having no target files,
+	// and its 03_investigations/ record must survive that regardless.
+	for _, got := range result.Investigations {
+		invPath := filepath.Join(runDir, "03_investigations", got.InvestigationID+".json")
+		if _, err := os.Stat(invPath); err != nil {
+			t.Errorf("expected investigation persisted at %s: %v", invPath, err)
+		}
+	}
+	// IDs are content-derived, so the loop above would be vacuous if both
+	// investigations hashed to the same file. Count what actually landed.
+	records, err := filepath.Glob(filepath.Join(runDir, "03_investigations", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Errorf("03_investigations/ holds %d record(s), want 2 — dropping the empty-target Case Pack "+
+			"must not drop the investigation that produced it: %v", len(records), records)
 	}
 }
 

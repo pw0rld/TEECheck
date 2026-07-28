@@ -104,11 +104,16 @@ Snippets (the raw source this case is about):
 
 // buildIndependentViewLLM runs phase 1 against the LLM. Search terms
 // for the tool-hit lookup come only from the CasePack (expected
-// obligations, target symbols, common defenses/false positives) — the
+// obligations, required evidence, target symbols) — the
 // same "no hypothesis anywhere in this call chain" property
 // buildIndependentPrompt has.
 func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.ChallengerIndependentView, error) {
 	searchTerms := append([]string{}, pack.ExpectedObligations...)
+	// RequiredEvidence is the investigation-derived counterpart of
+	// ExpectedObligations: the legacy path fills one, the llm path the
+	// other, and neither fills both. Without it an llm-path pack searched on
+	// TargetSymbols plus the fixed terms below only.
+	searchTerms = append(searchTerms, pack.RequiredEvidence...)
 	searchTerms = append(searchTerms, pack.TargetSymbols...)
 	searchTerms = append(searchTerms, "caller", "bind", "verify", "authorize", "wrapper")
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)

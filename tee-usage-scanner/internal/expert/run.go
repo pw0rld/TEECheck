@@ -98,7 +98,20 @@ func emitClaimEvents(rec events.Recorder, runID, agentID string, h artifacts.Hyp
 // can use the same primitives without code duplication.
 
 func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.Hypothesis, error) {
-	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, append(pack.ExpectedObligations, pack.TargetSymbols...), 8)
+	// Search terms come from the pack only. RequiredEvidence is included
+	// alongside ExpectedObligations because the two play the same role from
+	// opposite ends of the pipeline: the legacy path (internal/cases) fills
+	// expected_obligations and leaves required_evidence empty, while an
+	// investigation-derived pack fills required_evidence and leaves
+	// expected_obligations empty. Taking only the former left every llm-path
+	// pack searching on TargetSymbols alone.
+	//
+	// The slice is copied rather than appended onto pack.ExpectedObligations,
+	// whose backing array belongs to the caller's pack.
+	searchTerms := append([]string{}, pack.ExpectedObligations...)
+	searchTerms = append(searchTerms, pack.RequiredEvidence...)
+	searchTerms = append(searchTerms, pack.TargetSymbols...)
+	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)
 	if err != nil {
 		return artifacts.Hypothesis{}, err
 	}
@@ -167,6 +180,7 @@ Case:
 - target_files: %s
 - target_symbols: %s
 - expected_obligations: %s
+- required_evidence: %s
 - why_selected: %s
 - graph_facts: %s
 - open_questions: %s
@@ -197,7 +211,7 @@ Tool hits:
 
 Snippets:
 %s
-`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
+`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.RequiredEvidence, " | "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
 		strings.Join(pack.RelatedTWEs, ", "), strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants), renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))

@@ -110,16 +110,24 @@ type RunResult struct {
 	Bundle *artifacts.EvidenceBundle
 	Err    error
 
-	// Investigations and CasePacks are the §7.5/§24 output of any
-	// `investigations` entries the LLM's `done` payload declared: each
-	// raw entry was built (internal/investigations.Build), grounded
-	// against Architecture/Invariants/the repository
-	// (internal/investigations.Validate), persisted under
-	// runfs.InvestigationPath, and rendered into a bounded Case Pack
-	// (internal/investigations.BuildCasePack). Empty when the LLM
-	// declared none this run — that is a normal outcome, not an error.
+	// Investigations is the §7.5/§24 output of any `investigations`
+	// entries the LLM's `done` payload declared: each raw entry was built
+	// (internal/investigations.Build), grounded against
+	// Architecture/Invariants/the repository
+	// (internal/investigations.Validate) and persisted under
+	// runfs.InvestigationPath. Empty when the LLM declared none this run —
+	// that is a normal outcome, not an error.
 	Investigations []artifacts.TWEInvestigation
-	CasePacks      []artifacts.CasePack
+
+	// CasePacks is the merged list from BOTH halves of the done payload,
+	// not just `investigations`: the rich packs rendered from the entries
+	// above (internal/investigations.BuildCasePack) plus one thin pack per
+	// surviving candidate (BuildFromCandidate), combined by Merge — which
+	// drops empty-target packs and folds a thin pack into the rich pack
+	// naming the same file set. Nothing here has been written to
+	// 03_cases/; the caller accumulates these across --samples passes and
+	// persists them once (see the comment at the Merge call site).
+	CasePacks []artifacts.CasePack
 }
 
 // Run drives the L3 LLM planner loop until done, budget exhaustion,

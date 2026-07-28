@@ -214,9 +214,27 @@ func TestValidate_KeepsRealRoleSymbol(t *testing.T) {
 	}
 }
 
-// An empty Symbol must behave exactly as before this change: the file
+// TestValidate_EmptyRoleSymbolSkipsSymbolCheck is the sole guard on
+// validate.go's `if loc.Symbol != ""`: an empty Symbol means the file
 // existence check alone decides.
-func TestValidate_EmptyRoleSymbolUnchanged(t *testing.T) {
+//
+// It replaces a pair of tests, one of which could not fail. The deleted
+// TestValidate_EmptyRoleSymbolUnchanged pointed an empty-symbol role at a
+// readable file and asserted the role stayed filled — but with the guard
+// deleted that case still passes, because symbolcheck.FileContainsSymbol
+// reduces to strings.Contains(body, "") and "" is a substring of everything.
+// It was green with the guard, green without it, and therefore covered
+// nothing.
+//
+// Role "readable" below preserves that (weak but documented) case. Role
+// "unreadable" is the one that actually holds the guard in place: os.Stat
+// succeeding does not mean os.ReadFile will, and a directory is the portable
+// way to force that split (permission bits are unreliable when the suite runs
+// as root). With the guard removed, FileContainsSymbol(root, dir, "") returns
+// (false, error) and the `err != nil || !ok` branch demotes the role with the
+// nonsense reason that it "declares symbol \"\" which does not appear in" its
+// own path.
+func TestValidate_EmptyRoleSymbolSkipsSymbolCheck(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
 		t.Fatal(err)
@@ -224,48 +242,23 @@ func TestValidate_EmptyRoleSymbolUnchanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "src", "a.c"), []byte("nothing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	inv := artifacts.TWEInvestigation{
-		InvestigationID: "inv-test-003",
-		FilledRoles: map[string]artifacts.ToolLocation{
-			"r": {Path: "src/a.c", StartLine: 1},
-		},
-	}
-	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
-	if _, ok := got.FilledRoles["r"]; !ok {
-		t.Fatal("a role with no declared symbol must be unaffected by the symbol check")
-	}
-	if len(adjustments) != 0 {
-		t.Fatalf("want no adjustments, got %+v", adjustments)
-	}
-}
-
-// TestValidate_EmptyRoleSymbolUnaffectedByUnreadablePath guards the same
-// "empty Symbol means skip the symbol check entirely" contract as
-// TestValidate_EmptyRoleSymbolUnchanged, but for the error path the naive
-// fix of just deleting `if loc.Symbol != ""` gets wrong: os.Stat succeeding
-// does not mean os.ReadFile will. A directory is the portable way to force
-// that split (permission bits are unreliable when the suite runs as root).
-// With the guard removed, symbolcheck.FileContainsSymbol(root, path, "")
-// returns (false, error) for a directory, and the `err != nil || !ok` check
-// would demote the role with the nonsense reason that it "declares symbol
-// \"\" which does not appear in" its own path. File existence alone must
-// keep deciding when no symbol was declared.
-func TestValidate_EmptyRoleSymbolUnaffectedByUnreadablePath(t *testing.T) {
-	root := t.TempDir()
 	dirPath := filepath.Join("src", "adir")
 	if err := os.MkdirAll(filepath.Join(root, dirPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	inv := artifacts.TWEInvestigation{
-		InvestigationID: "inv-test-004",
+		InvestigationID: "inv-test-003",
 		FilledRoles: map[string]artifacts.ToolLocation{
-			"r": {Path: dirPath, StartLine: 1},
+			"readable":   {Path: "src/a.c", StartLine: 1},
+			"unreadable": {Path: dirPath, StartLine: 1},
 		},
 	}
 	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
-	if _, ok := got.FilledRoles["r"]; !ok {
-		t.Fatal("a role with no declared symbol must stay filled even when its path is unreadable, as long as it exists")
+	for _, role := range []string{"readable", "unreadable"} {
+		if _, ok := got.FilledRoles[role]; !ok {
+			t.Errorf("role %q declares no symbol, so file existence alone must decide — it must stay filled", role)
+		}
 	}
 	if len(adjustments) != 0 {
 		t.Fatalf("want no adjustments, got %+v", adjustments)

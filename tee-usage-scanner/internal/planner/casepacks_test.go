@@ -3,6 +3,7 @@ package planner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -228,18 +229,152 @@ func TestDedupePacks_SameTargetSetAcrossPassesCollapses(t *testing.T) {
 	}
 }
 
-// Two rich packs sharing a target set survive Merge on purpose (distinct
-// investigations within one pass) but must NOT survive DedupePacks.
+// fullyLoaded builds a rich pack with EVERY investigation-derived field
+// populated, each value prefixed with the pack's id so a collapse that keeps
+// only one side's values is visible field by field.
+func fullyLoaded(id, twe string, files ...string) artifacts.CasePack {
+	return artifacts.CasePack{
+		SchemaVersion:        "teecheck.case_pack.v1",
+		CaseID:               id,
+		Category:             "standard",
+		Priority:             "medium",
+		TargetFiles:          files,
+		TargetSymbols:        []string{id + "-sym"},
+		WhySelected:          []string{id + "-why"},
+		RelatedTWEs:          []string{twe},
+		RelatedInvariants:    []string{id + "-inv"},
+		ArchitectureRefs:     []string{id + "-arch"},
+		ToolFactRefs:         []string{id + "-fact"},
+		RequiredEvidence:     []string{id + "-ev"},
+		MissingLinks:         []string{id + "-link"},
+		CommonDefenses:       []string{id + "-def"},
+		CommonFalsePositives: []string{id + "-fp"},
+		CoverageGaps:         []string{id + "-gap"},
+	}
+}
+
+// knowledgeFields is the set a collapse must never shrink, keyed for
+// error messages. Keep in sync with absorb's union list in casepacks.go.
+// RelatedTWEs is excluded only because its values are real playbook IDs
+// rather than id-prefixed fixtures; every test below asserts it directly.
+func knowledgeFields(p artifacts.CasePack) map[string][]string {
+	return map[string][]string{
+		"target_symbols":         p.TargetSymbols,
+		"why_selected":           p.WhySelected,
+		"related_invariants":     p.RelatedInvariants,
+		"architecture_refs":      p.ArchitectureRefs,
+		"tool_fact_refs":         p.ToolFactRefs,
+		"required_evidence":      p.RequiredEvidence,
+		"missing_links":          p.MissingLinks,
+		"common_defenses":        p.CommonDefenses,
+		"common_false_positives": p.CommonFalsePositives,
+		"coverage_gaps":          p.CoverageGaps,
+	}
+}
+
+func assertContainsAll(t *testing.T, got artifacts.CasePack, wantSubstrings ...string) {
+	t.Helper()
+	for name, values := range knowledgeFields(got) {
+		for _, want := range wantSubstrings {
+			if !containsAny(values, want) {
+				t.Errorf("%s = %v: nothing from %q survived the collapse — this is the PR-06 data loss again",
+					name, values, want)
+			}
+		}
+	}
+}
+
+func containsAny(values []string, prefix string) bool {
+	for _, v := range values {
+		if strings.HasPrefix(v, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Two rich packs sharing a target set survive Merge (it only folds thin into
+// rich) but must collapse in DedupePacks — and the collapse must be
+// LOSSLESS. These are two different TWE scenarios about the same file: with
+// absorb taking every field but WhySelected/Priority from its base, the
+// second investigation's entire playbook payload — its common_defenses, its
+// common_false_positives, its required_evidence — vanished before any agent
+// could read it, which is the exact bug this branch exists to fix.
+//
+// Reachable with --samples 1: two done.investigations entries whose
+// filled_roles resolve to the same file collide inside a single pass.
 func TestDedupePacks_TwoRichPacksWithSameTargetSetCollapse(t *testing.T) {
 	got := DedupePacks([]artifacts.CasePack{
-		withTWEs(rich("inv-1", "a.c"), "TWE-STATE-001"),
-		withTWEs(rich("inv-2", "a.c"), "TWE-STATE-001"),
+		fullyLoaded("inv-1", "TWE-FLOW-001", "a.c"),
+		fullyLoaded("inv-2", "TWE-GUARD-004", "a.c"),
 	})
 	if len(got) != 1 {
 		t.Fatalf("want 1 pack, got %d", len(got))
 	}
 	if got[0].CaseID != "inv-1" {
-		t.Errorf("first occurrence must win, got %q", got[0].CaseID)
+		t.Errorf("with both sides rich, the first occurrence keeps the identity, got %q", got[0].CaseID)
+	}
+	if got[0].Category != "standard" {
+		t.Errorf("Category must come from the same pack as CaseID, got %q", got[0].Category)
+	}
+	// Both sides' knowledge, not just the survivor's identity.
+	assertContainsAll(t, got[0], "inv-1", "inv-2")
+	if len(got[0].RelatedTWEs) != 2 ||
+		!containsAny(got[0].RelatedTWEs, "TWE-FLOW-001") ||
+		!containsAny(got[0].RelatedTWEs, "TWE-GUARD-004") {
+		t.Errorf("related_twes = %v, want both playbooks", got[0].RelatedTWEs)
+	}
+}
+
+// The --samples > 1 ordering the measurement runs actually produce:
+// allPacks arrives as pass1-rich, pass1-thin, pass2-rich, pass2-thin, so a
+// pass-1 THIN pack reaches DedupePacks before a pass-2 RICH pack with the
+// same target set and takes the first-occurrence slot. absorb must be
+// richness-aware, not position-aware: if the thin pack won by virtue of
+// arriving first, every playbook field would be empty on disk.
+func TestDedupePacks_ThinFirstThenRichKeepsTheRichPacksKnowledge(t *testing.T) {
+	got := DedupePacks([]artifacts.CasePack{
+		thin("cand-1", "high", "a.c"),
+		fullyLoaded("inv-1", "TWE-FLOW-001", "a.c"),
+	})
+	if len(got) != 1 {
+		t.Fatalf("want 1 pack, got %d", len(got))
+	}
+	if got[0].CaseID != "inv-1" {
+		t.Errorf("the knowledge-bearing pack must supply the identity (its CaseID is the "+
+			"InvestigationID that ties the pack to 03_investigations/), got %q", got[0].CaseID)
+	}
+	if got[0].Category != "standard" {
+		t.Errorf("Category must come from the same pack as CaseID, got %q", got[0].Category)
+	}
+	assertContainsAll(t, got[0], "inv-1")
+	if !containsAny(got[0].RelatedTWEs, "TWE-FLOW-001") {
+		t.Errorf("related_twes = %v, want the rich pack's playbook", got[0].RelatedTWEs)
+	}
+	if !containsAny(got[0].WhySelected, "why-cand-1") {
+		t.Errorf("the thin pack's why_selected must still be absorbed, got %v", got[0].WhySelected)
+	}
+	if got[0].Priority != "high" {
+		t.Errorf("the higher priority must still win regardless of which side is rich, got %q", got[0].Priority)
+	}
+}
+
+// A pack from an investigation with no twe_ids still carries real evidence.
+// If richness were keyed on RelatedTWEs alone it would sort into the thin
+// group and be truncated first by --max-cases.
+func TestDedupePacks_RichWithoutTWEsStillSortsFirst(t *testing.T) {
+	noTWEs := fullyLoaded("inv-1", "", "b.c")
+	noTWEs.RelatedTWEs = nil
+	got := DedupePacks([]artifacts.CasePack{
+		thin("cand-1", "low", "a.c"),
+		noTWEs,
+	})
+	if len(got) != 2 {
+		t.Fatalf("want 2 packs, got %d", len(got))
+	}
+	if got[0].CaseID != "inv-1" {
+		t.Errorf("a pack with required_evidence/coverage_gaps but no related_twes is still the "+
+			"most informative thing in the run and must not be truncated first, order = %v", caseIDs(got))
 	}
 }
 
