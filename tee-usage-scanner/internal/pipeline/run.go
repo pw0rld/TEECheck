@@ -123,6 +123,29 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		_ = rec.Close()
 	}()
 
+	// forAgent wraps the injected client so every Generate call a stage
+	// makes leaves an llm_call_started / llm_call_completed pair in
+	// events.jsonl, with the full prompt and response bodies in blobs/.
+	//
+	// This is the wiring seam: agents receive their llm.Client by
+	// injection and llm.Client has a single method, so decorating the
+	// client here instruments all of them without touching a single
+	// Generate call site. Before this, only the planner recorded
+	// anything, and a stage that died on a malformed reply left nothing
+	// but a truncated excerpt inside an error string.
+	//
+	// The planner is deliberately NOT wrapped below — see runL3Planner's
+	// call site.
+	forAgent := func(agentID string) llm.Client {
+		return llm.NewRecordingClient(client, llm.RecordingOptions{
+			RunID:   runID,
+			AgentID: agentID,
+			Model:   cfg.LLMModel,
+			Blobs:   blobs,
+			Events:  rec,
+		})
+	}
+
 	if err := preprocessor.Run(stageCfg); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
@@ -137,10 +160,10 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// (architecture/invariants/expert/... ) rather than each stage
 	// constructing its own. Run() supplies the production client via
 	// RunWithClient; tests inject a fake.
-	if err := architecture.Run(stageCfg, client); err != nil {
+	if err := architecture.Run(stageCfg, forAgent("architecture-001")); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
-	if err := invariants.Run(stageCfg, client); err != nil {
+	if err := invariants.Run(stageCfg, forAgent("invariants-001")); err != nil {
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
@@ -153,6 +176,11 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		// events, so all subprocess tool_call_* events land in the
 		// same events.jsonl with the same correlation ids.
 		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
+		// The planner gets the RAW client, not forAgent(...): it already
+		// emits its own llm_call_started/completed pair and writes its
+		// own prompt/response blobs, and its events carry a real Round
+		// number the decorator cannot know. Wrapping it would duplicate
+		// every planner event and every planner blob reference.
 		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
@@ -197,14 +225,14 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// carry the correct semantic label, which downstream consumers
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
-	if err := expert.RunWithEvents(stageCfg, client, rec, blobs); err != nil {
+	if err := expert.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec, blobs); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
 
 	// === Agent 2: Reviewer ===
 	fmt.Println("\n=== Reviewer Agent ===")
 
-	bus := buildPipelineBus(cfg, client)
+	bus := buildPipelineBus(cfg, forAgent)
 
 	// Bus tool registrations stay under TOOL identities; they
 	// represent capability endpoints (a static-check tool, a
@@ -233,18 +261,18 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	}))
 
 	stageCfg.AgentID = "challenger-001"
-	if err := challenger.Run(stageCfg, client); err != nil {
+	if err := challenger.Run(stageCfg, forAgent(stageCfg.AgentID)); err != nil {
 		return runDir, fmt.Errorf("challenger: %w", err)
 	}
 	stageCfg.AgentID = "verifier-001"
-	if err := verifier.RunWithBusAndEvents(stageCfg, client, bus, rec); err != nil {
+	if err := verifier.RunWithBusAndEvents(stageCfg, forAgent(stageCfg.AgentID), bus, rec); err != nil {
 		return runDir, fmt.Errorf("verifier: %w", err)
 	}
 
 	// === Agent 3: Auditor ===
 	fmt.Println("\n=== Auditor Agent ===")
 	stageCfg.AgentID = "arbiter-001"
-	if err := arbiter.RunWithBus(stageCfg, client, bus); err != nil {
+	if err := arbiter.RunWithBus(stageCfg, forAgent(stageCfg.AgentID), bus); err != nil {
 		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
 
@@ -260,20 +288,24 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	return runDir, nil
 }
 
-func buildPipelineBus(cfg config.Config, client llm.Client) *agentbus.Bus {
+// buildPipelineBus registers the bus-facing LLM handlers. forAgent yields
+// the client each handler should use: a bus handler answering as
+// expert-001 must record its calls under expert-001, not under whichever
+// stage happened to send the query.
+func buildPipelineBus(cfg config.Config, forAgent func(agentID string) llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
 
-	bus.Register("expert-001", agentbus.NewLLMHandler(client,
+	bus.Register("expert-001", agentbus.NewLLMHandler(forAgent("expert-001"),
 		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
-	bus.Register("challenger-001", agentbus.NewLLMHandler(client,
+	bus.Register("challenger-001", agentbus.NewLLMHandler(forAgent("challenger-001"),
 		"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
-	bus.Register("reviewer-001", agentbus.NewLLMHandler(client,
+	bus.Register("reviewer-001", agentbus.NewLLMHandler(forAgent("reviewer-001"),
 		"You are the Reviewer Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
 
