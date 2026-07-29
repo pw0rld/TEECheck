@@ -4,6 +4,22 @@ A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
 security research. TEECheck uses an L3 LLM planner plus a 4-agent adversarial
 review chain to find real attestation and key-lifecycle issues in trusted code.
 
+## Optional: CodeQL
+
+The scanner runs without CodeQL, but the deterministic fact layer — the
+bottom, non-challengeable tier of the three-tier evidence model — stays
+empty: `fact_layer_query` returns `status: unsupported` and every finding
+rests on LLM judgement alone.
+
+Installing it is ~551 MB to download, 1.7 GB on disk, and about two minutes
+to verify end to end. See **[docs/SETUP_CODEQL.zh-CN.md](../docs/SETUP_CODEQL.zh-CN.md)**
+for the measured numbers, the install steps, an end-to-end verification, and
+the five known limitations (chief among them: only one of the nineteen TWE
+entries currently has an executable query).
+
+The bundle must never be committed — it exceeds GitHub's 100 MB per-file
+limit. `/tools/` is gitignored for that reason.
+
 ## Quick Start
 
 ```bash
