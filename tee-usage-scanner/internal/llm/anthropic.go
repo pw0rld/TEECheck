@@ -20,6 +20,7 @@ type AnthropicClient struct {
 	model       string
 	httpClient  *http.Client
 	temperature float64
+	maxTokens   int
 }
 
 func NewAnthropicClient(cfg config.Config) *AnthropicClient {
@@ -30,6 +31,7 @@ func NewAnthropicClient(cfg config.Config) *AnthropicClient {
 		model:       cfg.LLMModel,
 		httpClient:  newHTTPClient(cfg.LLMTimeoutSec),
 		temperature: cfg.LLMTemp,
+		maxTokens:   maxTokensOrDefault(cfg.LLMMaxTokens),
 	}
 }
 
@@ -38,7 +40,7 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		Model:       c.model,
 		System:      strings.TrimSpace(req.SystemPrompt),
 		Messages:    buildAnthropicMessages(req.Messages),
-		MaxTokens:   16384,
+		MaxTokens:   c.maxTokens,
 		Temperature: req.Temperature,
 	}
 	if body.Temperature == 0.0 {

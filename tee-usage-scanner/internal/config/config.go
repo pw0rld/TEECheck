@@ -29,6 +29,7 @@ type Config struct {
 	LLMAPIKey       string
 	LLMModel        string
 	LLMTimeoutSec   int
+	LLMMaxTokens    int
 	LLMTemp         float64
 	StaticTools     string
 	MaxDialogRounds int
@@ -105,6 +106,7 @@ func parseCollabRun(args []string) (Config, error) {
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:    envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		StaticTools:     "auto",
 	}
@@ -124,6 +126,7 @@ func parseCollabRun(args []string) (Config, error) {
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for LLM-backed agents")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for LLM-backed agents")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call; reasoning models spend it on thinking before any answer")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for LLM-backed agents")
 	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools to enable: auto, none, or comma-separated names (grep,semgrep)")
 	if err := fs.Parse(args); err != nil {
@@ -288,6 +291,7 @@ func parseExpert(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
@@ -297,6 +301,7 @@ func parseExpert(args []string) (Config, error) {
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the expert agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the expert agent")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the expert agent")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -318,6 +323,7 @@ func parseChallenge(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
@@ -327,6 +333,7 @@ func parseChallenge(args []string) (Config, error) {
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the challenger agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the challenger agent")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the challenger agent")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -348,6 +355,7 @@ func parseVerifier(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		StaticTools:   "auto",
 	}
@@ -358,6 +366,7 @@ func parseVerifier(args []string) (Config, error) {
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the verifier agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the verifier agent")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the verifier agent")
 	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools to enable: auto, none, or comma-separated names")
 	if err := fs.Parse(args); err != nil {
@@ -381,6 +390,7 @@ func parseArbiter(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
@@ -391,6 +401,7 @@ func parseArbiter(args []string) (Config, error) {
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the arbiter agent")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -414,6 +425,7 @@ func parseCurator(args []string) (Config, error) {
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:    envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
@@ -446,6 +458,7 @@ func parseReport(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
@@ -516,6 +529,7 @@ func parseRun(args []string) (Config, error) {
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:    envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:         1,
 	}
@@ -629,6 +643,15 @@ func validateProviderConfig(cfg Config, context string) error {
 	}
 	return nil
 }
+
+// defaultLLMMaxTokens is the per-call completion budget. On a reasoning
+// model this budget covers the model's own thinking as well as the answer:
+// glm-5.2 spends reasoning_content first, so a budget consumed entirely by
+// reasoning returns finish_reason "length" with empty content and kills the
+// stage. 16384 was demonstrably too small — the expert stage exhausted it on
+// a single case pack on 2026-07-29. Raised, and made configurable, because
+// no fixed number is right for every model and prompt size.
+const DefaultLLMMaxTokens = 32768
 
 func firstNonEmptyEnv(keys ...string) string {
 	for _, key := range keys {
