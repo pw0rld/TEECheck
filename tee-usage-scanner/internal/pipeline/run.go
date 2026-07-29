@@ -184,6 +184,20 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		return runStage(rec, runID, name, fn)
 	}
 
+	// The recording executor is constructed once and shared by every
+	// subprocess-class tool in the run: the planner's own actions, the
+	// semgrep adapter behind the scanner bus tool, the CodeQL fact
+	// engine, the git clone the fact layer does to build a database, and
+	// the repomix enrichment pass. Recorder + blob store are the same
+	// instances every other emitter uses, so all tool_call_* events land
+	// in the same events.jsonl under the same correlation ids.
+	//
+	// executor.Bind attaches the agent identity at each wiring site,
+	// because the packages themselves know which command they run but not
+	// which stage is running it — and a tool_call_completed that cannot
+	// be traced to a stage is noise.
+	exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
+
 	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
@@ -212,12 +226,6 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	if strings.EqualFold(cfg.Mode, "llm") {
 		// === Agent 1: L3 Planner ===
 		fmt.Println("\n=== Planner Agent (L3) ===")
-		// LocalExecutor is constructed once and shared with the
-		// planner via runL3Planner. Recorder + blob store are the
-		// same instances the planner uses for its in-process
-		// events, so all subprocess tool_call_* events land in the
-		// same events.jsonl with the same correlation ids.
-		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
 		// The planner gets the RAW client, not forAgent(...): it already
 		// emits its own llm_call_started/completed pair and writes its
 		// own prompt/response blobs, and its events carry a real Round
@@ -265,7 +273,11 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		}
 		if repomix.Available() {
 			_ = stage("repomix_enrich", func() error {
-				enrichCasesWithRepomix(runDir, fetch.LocalPath)
+				// No agent owns this deterministic enrichment pass, so
+				// the binding names the stage it runs as — which is what
+				// makes the resulting tool_call_* attributable at all.
+				enrichCasesWithRepomix(runDir, fetch.LocalPath, executor.Bind(exec,
+					executor.Binding{RunID: runID, Agent: "repomix-enrich"}))
 				return nil
 			})
 		}
@@ -294,7 +306,12 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// represent capability endpoints (a static-check tool, a
 	// reviewer tool, an auditor tool), not agent roles. Other
 	// agents call into these tools via the bus by name.
-	scReg := scall.NewDefaultRegistry()
+	// The semgrep adapter inside this registry shells out. Binding it to
+	// scanner-001 matches the bus identity the handler is registered
+	// under directly below, so a semgrep tool_call lands under the same
+	// agent as the query that provoked it.
+	scReg := scall.NewDefaultRegistryWithExecutor(executor.Bind(exec,
+		executor.Binding{RunID: runID, Agent: "scanner-001"}))
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
 		req := staticcheck.CheckRequest{
 			RepoRoot: fetch.LocalPath,
@@ -410,7 +427,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// is only consumed once a database is actually built (PR-09); until
 	// then no query runs, so a wrong guess degrades to unresolved, not a
 	// crash.
-	eng := codeql.New()
+	eng := newFactEngine(exec, manifest.RunID)
 	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
 
 	// The playbook catalog backs the twe_playbook_detail action. A knowledge
@@ -602,6 +619,29 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	return nil
 }
 
+// newFactEngine builds the CodeQL engine the fact-layer action uses, with
+// both of its subprocesses (database create, database analyze) routed
+// through the run's recording executor.
+//
+// It is a named function rather than two inline lines so the wiring has
+// something a test can hold: neither codeql nor semgrep is installed in
+// this project's CI image, so an end-to-end assertion on a real CodeQL
+// event is not available, and the wiring would otherwise be checked by
+// nothing but the compiler.
+//
+// The Engine outlives any single planner round, so the binding carries the
+// run and the planner's agent id; per-round identity travels separately on
+// the git calls the fact layer makes, which are bound from the
+// ActionRequest that asked for them.
+func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
+	eng := codeql.New()
+	eng.Exec = executor.Bind(exec, executor.Binding{
+		RunID: runID,
+		Agent: planner.DefaultPlannerAgentID,
+	})
+	return eng
+}
+
 // accumulatedLen returns how many unique candidates the dedupe
 // result would have had at a given list of prior bundles. Used to
 // detect "this pass added nothing new so stop".
@@ -609,7 +649,7 @@ func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
 	return len(DedupeCandidates(bundles))
 }
 
-func enrichCasesWithRepomix(runDir, repoRoot string) {
+func enrichCasesWithRepomix(runDir, repoRoot string, exec executor.Executor) {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
 	if err != nil || len(casePaths) == 0 {
 		return
@@ -628,6 +668,7 @@ func enrichCasesWithRepomix(runDir, repoRoot string) {
 			RepoRoot:    repoRoot,
 			TargetFiles: pack.TargetFiles,
 			Compress:    true,
+			Exec:        exec,
 		})
 		if err != nil {
 			fmt.Printf("Warning: repomix failed for %s: %v\n", pack.CaseID, err)

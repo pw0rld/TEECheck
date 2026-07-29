@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
 // Operation identifies one fact-layer query this package knows how to run.
@@ -53,6 +55,22 @@ type Request struct {
 	// normally unnecessary — it exists for forward compatibility with a
 	// future build mode that does need a compiler on PATH.
 	ExtraPATH string
+
+	// Exec routes this package's own subprocesses — the git clone and
+	// checkout that build the database's source tree — through the
+	// recording chokepoint. The CodeQL subprocesses are recorded by the
+	// Engine, which carries its own executor.
+	//
+	// Request is the seam because it is already this package's single
+	// input object and already carries per-call wiring that is not part
+	// of the request's identity (ExtraPATH is the precedent). Like
+	// ExtraPATH, Exec is deliberately absent from argumentsSHA256 and
+	// factID: whether a run recorded its subprocesses says nothing about
+	// what the query found, so wiring it in must not invalidate a fact or
+	// miss a database cache hit.
+	//
+	// Nil means "clone, record nothing".
+	Exec executor.Executor
 }
 
 func (r Request) validate() error {

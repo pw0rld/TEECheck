@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
@@ -77,6 +78,22 @@ func (h *FactLayerQueryHandler) Run(ctx context.Context, req ActionRequest) Acti
 		Commit:       req.Commit,
 		Operation:    trustirfacts.Operation(args.Operation),
 		QueryPackDir: h.QueryPackDir,
+		// The fact layer shells out to git to build the database's source
+		// tree. Executor comes from the ActionRequest the planner already
+		// populates, so the handler needs no field of its own; Bind stamps
+		// this round's correlation ids on so a git-clone event deep inside
+		// the fact layer is still attributable to the round that asked for
+		// it. The CodeQL subprocesses are recorded by h.Engine, which
+		// carries its own executor from the pipeline.
+		//
+		// Deliberately not marked ExecutorBacked: one fact_layer_query
+		// action fans out to several subprocesses (git clone, git
+		// checkout, codeql create, codeql analyze), so the action-level
+		// event and the executor-level events are different granularities,
+		// not duplicates.
+		Exec: executor.Bind(req.Executor, executor.Binding{
+			RunID: req.RunID, Agent: req.Agent, Round: req.Round,
+		}),
 	})
 	if err != nil {
 		return fail("fact_layer_query", fmt.Sprintf("fact layer call failed: %v", err))

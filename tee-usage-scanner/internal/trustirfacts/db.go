@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -42,7 +43,7 @@ func databaseDir(runDir, repository, commit string) string {
 // persistent artifact), then CreateDatabase with BuildMode "none" (§23.3 —
 // the only build mode the spike proved works for C without a project build
 // system).
-func ensureDatabase(ctx context.Context, eng Engine, dbPath, repository, commit, extraPATH string) (reused bool, err error) {
+func ensureDatabase(ctx context.Context, eng Engine, ex executor.Executor, dbPath, repository, commit, extraPATH string) (reused bool, err error) {
 	marker := filepath.Join(dbPath, dbBuiltMarker)
 	if _, statErr := os.Stat(marker); statErr == nil {
 		return true, nil
@@ -55,7 +56,7 @@ func ensureDatabase(ctx context.Context, eng Engine, dbPath, repository, commit,
 	defer os.RemoveAll(work)
 
 	tree := filepath.Join(work, "tree")
-	if err := cloneAtRevision(ctx, repository, commit, tree); err != nil {
+	if err := cloneAtRevision(ctx, ex, repository, commit, tree); err != nil {
 		return false, fmt.Errorf("clone %s@%s: %w", repository, commit, err)
 	}
 

@@ -40,7 +40,7 @@ func TestEnsureDatabase_CacheHitSkipsBuild(t *testing.T) {
 	}
 
 	eng := &fakeEngine{available: true}
-	reused, err := ensureDatabase(context.Background(), eng, dbPath, "this-repo-is-never-cloned", "commit", "")
+	reused, err := ensureDatabase(context.Background(), eng, nil, dbPath, "this-repo-is-never-cloned", "commit", "")
 	if err != nil {
 		t.Fatalf("ensureDatabase: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestEnsureDatabase_MissBuildsOnceThenCaches(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "db")
 	eng := &fakeEngine{available: true}
 
-	reused, err := ensureDatabase(context.Background(), eng, dbPath, origin, commit, "")
+	reused, err := ensureDatabase(context.Background(), eng, nil, dbPath, origin, commit, "")
 	if err != nil {
 		t.Fatalf("first ensureDatabase: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestEnsureDatabase_MissBuildsOnceThenCaches(t *testing.T) {
 		t.Errorf("expected a built marker under dbPath after a successful build: %v", err)
 	}
 
-	reused, err = ensureDatabase(context.Background(), eng, dbPath, origin, commit, "")
+	reused, err = ensureDatabase(context.Background(), eng, nil, dbPath, origin, commit, "")
 	if err != nil {
 		t.Fatalf("second ensureDatabase: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestEnsureDatabase_CreateDatabaseFailureIsNotCached(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "db")
 	eng := &fakeEngine{available: true, createDBErr: errBoom}
 
-	_, err := ensureDatabase(context.Background(), eng, dbPath, origin, commit, "")
+	_, err := ensureDatabase(context.Background(), eng, nil, dbPath, origin, commit, "")
 	if err == nil {
 		t.Fatal("expected an error when CreateDatabase fails")
 	}
