@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
@@ -98,19 +97,26 @@ func generateWithRatingRetry[T any](
 ) (T, []artifacts.NormalizationAdjustment, error) {
 	var zero T
 
+	// Each ask goes through llm.GenerateJSON, which re-asks once when the
+	// reply is not a JSON object at all. That is a DIFFERENT failure from the
+	// rating check below: the envelope was unusable, so there is no rating to
+	// look at. Nesting them this way (shape first, then vocabulary) is what
+	// lets a reply like [["hash_idx"], {...}] — which killed a live run — be
+	// recovered and then rating-checked normally.
+	//
+	// Call bound for one phase: at most 2 rating attempts x at most 2 shape
+	// attempts each = 4 calls, and only when BOTH checks fail on both
+	// attempts. The common path is 1.
 	ask := func(userMsg string) (T, error) {
 		var parsed T
-		resp, err := client.Generate(ctx, llm.GenerateRequest{
+		_, err := llm.GenerateJSON(ctx, client, parseLabel, llm.GenerateRequest{
 			SystemPrompt: system,
 			Messages:     []llm.Message{{Role: "user", Content: userMsg}},
 			Temperature:  temperature,
 			JSONMode:     true,
-		})
+		}, &parsed)
 		if err != nil {
 			return parsed, err
-		}
-		if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-			return parsed, fmt.Errorf("parse %s json: %w | raw=%s", parseLabel, err, truncate(resp.Text, 400))
 		}
 		return parsed, nil
 	}

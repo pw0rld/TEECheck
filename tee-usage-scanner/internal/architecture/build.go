@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
@@ -50,20 +49,19 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 	if client == nil {
 		return artifacts.ArchitectureModel{}, fmt.Errorf("architecture: llm mode requires a client")
 	}
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
+	// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+	// single format wobble no longer costs the whole run. See its doc comment
+	// for the bound.
+	var wire wireModel
+	if _, err := llm.GenerateJSON(ctx, client, "architecture model", llm.GenerateRequest{
 		SystemPrompt: architectureSystemPrompt,
 		Messages: []llm.Message{
 			{Role: "user", Content: buildUserPrompt(in)},
 		},
 		Temperature: temperature,
 		JSONMode:    true,
-	})
-	if err != nil {
-		return artifacts.ArchitectureModel{}, fmt.Errorf("architecture llm generate: %w", err)
-	}
-	var wire wireModel
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &wire); err != nil {
-		return artifacts.ArchitectureModel{}, fmt.Errorf("parse architecture model json: %w | raw=%s", err, truncateForError(resp.Text, 400))
+	}, &wire); err != nil {
+		return artifacts.ArchitectureModel{}, err
 	}
 	return artifacts.ArchitectureModel{
 		Parties:               wire.Parties,
@@ -79,13 +77,6 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 		DeploymentAssumptions: wire.DeploymentAssumptions,
 		Unknowns:              wire.Unknowns,
 	}, nil
-}
-
-func truncateForError(value string, n int) string {
-	if len(value) <= n {
-		return value
-	}
-	return value[:n] + "..."
 }
 
 // marshalCondensed renders v as indented JSON, truncated to maxChars so a

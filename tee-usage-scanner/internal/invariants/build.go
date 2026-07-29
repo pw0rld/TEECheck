@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
@@ -54,20 +53,19 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 	if client == nil {
 		return nil, fmt.Errorf("invariants: llm mode requires a client")
 	}
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
+	// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+	// single format wobble no longer costs the whole run. See its doc comment
+	// for the bound.
+	var wire wireResponse
+	if _, err := llm.GenerateJSON(ctx, client, "invariants", llm.GenerateRequest{
 		SystemPrompt: invariantSystemPrompt,
 		Messages: []llm.Message{
 			{Role: "user", Content: buildUserPrompt(in)},
 		},
 		Temperature: temperature,
 		JSONMode:    true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("invariants llm generate: %w", err)
-	}
-	var wire wireResponse
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &wire); err != nil {
-		return nil, fmt.Errorf("parse invariants json: %w | raw=%s", err, truncateForError(resp.Text, 400))
+	}, &wire); err != nil {
+		return nil, err
 	}
 	out := make([]artifacts.ProjectInvariant, 0, len(wire.Invariants))
 	for _, w := range wire.Invariants {
@@ -91,13 +89,6 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 		})
 	}
 	return out, nil
-}
-
-func truncateForError(value string, n int) string {
-	if len(value) <= n {
-		return value
-	}
-	return value[:n] + "..."
 }
 
 func marshalCondensed(v any, maxChars int) string {

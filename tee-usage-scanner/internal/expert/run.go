@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -223,18 +222,6 @@ Snippets:
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants), renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
 
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: system,
-		Messages: []llm.Message{
-			{Role: "user", Content: user},
-		},
-		Temperature: temperature,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return artifacts.Hypothesis{}, err
-	}
-
 	var parsed struct {
 		Title              string   `json:"title"`
 		Summary            string   `json:"summary"`
@@ -249,13 +236,23 @@ Snippets:
 		// is accepted as a transitional fallback for prompt
 		// versions that don't ask for cited_facts (e.g. the
 		// legacy prompt versions or a model that ignores instructions).
-		CitedFacts      []citations.CitedFact `json:"cited_facts"`
-		SupportingFacts []string              `json:"supporting_facts"`
-		Confidence      string                `json:"confidence"`
-		NeedsVerification bool                `json:"needs_verification"`
+		CitedFacts        []citations.CitedFact `json:"cited_facts"`
+		SupportingFacts   []string              `json:"supporting_facts"`
+		Confidence        string                `json:"confidence"`
+		NeedsVerification bool                  `json:"needs_verification"`
 	}
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-		return artifacts.Hypothesis{}, fmt.Errorf("parse expert json: %w | raw=%s", err, truncate(resp.Text, 400))
+	// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+	// single format wobble no longer costs the whole case. See its doc
+	// comment for the bound.
+	if _, err := llm.GenerateJSON(ctx, client, "expert", llm.GenerateRequest{
+		SystemPrompt: system,
+		Messages: []llm.Message{
+			{Role: "user", Content: user},
+		},
+		Temperature: temperature,
+		JSONMode:    true,
+	}, &parsed); err != nil {
+		return artifacts.Hypothesis{}, err
 	}
 
 	// Resolve every citation against the repo: drop ones that fail,
@@ -398,11 +395,4 @@ func uniq(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func truncate(value string, n int) string {
-	if len(value) <= n {
-		return value
-	}
-	return value[:n] + "..."
 }
