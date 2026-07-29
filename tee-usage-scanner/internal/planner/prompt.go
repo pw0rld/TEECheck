@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"sort"
 	"strings"
 
@@ -65,7 +66,6 @@ var actionArgSchemas = map[string]string{
 	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"legacy_keyword_scan": `{"run_dir": string (absolute), "max_hotspots": int (optional)}`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
-	"fact_layer_query":    `{"operation": string (e.g. "cpp.state.rollback_version_propagation")} — calls the structured CodeQL/TrustIR fact layer for one operation against the pinned repository+commit; returns a compact observation (tool_fact_ref, status, locations, coverage_gaps) — status "unresolved" or "unsupported" is a real answer, not a Go error, and must never be read as "no vulnerability" (§6.5)`,
 	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
 	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
@@ -118,6 +118,10 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {
 		schema, ok := actionArgSchemas[name]
+		if name == "fact_layer_query" {
+			schema = factLayerQuerySchema()
+			ok = true
+		}
 		if !ok {
 			schema = "{...}"
 		}
@@ -359,4 +363,30 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	b.WriteString("=== NEXT ===\n")
 	b.WriteString("What is your next action? Reply with strict JSON in the format from the system prompt.\n")
 	return b.String()
+}
+
+// factLayerQuerySchema renders fact_layer_query's arg schema with the
+// operations the fact layer can actually execute, enumerated.
+//
+// The static schema this replaced carried one "e.g." value and no list. A
+// model had no way to learn the closed vocabulary, and it failed in both
+// available directions: on 2026-07-27 it invented an operation that does
+// not exist, and across three runs on 2026-07-29 — including one whose
+// repository DID have a fact table, with CodeQL installed and the action
+// registered — it never called the action at all, never once mentioning
+// the fact layer in eight rounds of reasoning. Every other action takes
+// arguments a model can derive from the code in front of it; this one
+// alone required a value only the source knew.
+func factLayerQuerySchema() string {
+	ops := trustirfacts.SupportedOperationStrings()
+	list := "(none — the fact layer has no executable operations in this build)"
+	if len(ops) > 0 {
+		list = strings.Join(ops, " | ")
+	}
+	return fmt.Sprintf(
+		`{"operation": string, one of: %s} — calls the structured CodeQL/TrustIR `+
+			`fact layer for one operation against the pinned repository+commit; returns a `+
+			`compact observation (tool_fact_ref, status, locations, coverage_gaps). Any other `+
+			`value is rejected. Status "unresolved" or "unsupported" is a real answer, not a `+
+			`Go error, and must never be read as "no vulnerability" (§6.5)`, list)
 }

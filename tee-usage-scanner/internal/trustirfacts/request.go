@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
@@ -127,4 +128,45 @@ func (r Request) argumentsSHA256() string {
 // file per repeated call.
 func (r Request) factID() string {
 	return fmt.Sprintf("trustir-cpp-%s-%s", r.Operation, r.argumentsSHA256()[:16])
+}
+
+// SupportedOperations returns the operations this fact layer can actually
+// execute, sorted for a stable prompt and a stable error message.
+//
+// It exists because the closed vocabulary was previously unknowable from
+// outside: the planner's prompt carried one "e.g." value and nothing else,
+// and neither the action handler nor Request.validate rejected anything
+// else. A model therefore had two ways to fail — invent an operation that
+// does not exist (observed 2026-07-27: "cpp.flow.bounds_check_consistency",
+// which produced a persisted ToolFact for a query that was never run), or,
+// having no idea what was legal, never call the action at all (observed
+// 2026-07-29 across three runs, including one whose repository DID have a
+// fact table). Publishing the list closes both.
+func SupportedOperations() []Operation {
+	out := make([]Operation, 0, len(operationQueries))
+	for op := range operationQueries {
+		out = append(out, op)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// SupportedOperationStrings is SupportedOperations as plain strings, for
+// callers that render the vocabulary into prompts or error text.
+func SupportedOperationStrings() []string {
+	ops := SupportedOperations()
+	out := make([]string, len(ops))
+	for i, op := range ops {
+		out[i] = string(op)
+	}
+	return out
+}
+
+// IsSupportedOperation reports whether name is an operation this fact layer
+// can execute. Callers should check before dispatching so an unknown value
+// fails where the caller can still correct it, rather than becoming a
+// persisted "unsupported" ToolFact for a query that never ran.
+func IsSupportedOperation(name string) bool {
+	_, ok := operationQueries[Operation(strings.TrimSpace(name))]
+	return ok
 }

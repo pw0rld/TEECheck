@@ -63,7 +63,21 @@ func (h *FactLayerQueryHandler) Run(ctx context.Context, req ActionRequest) Acti
 		return fail("fact_layer_query", fmt.Sprintf("invalid args: %v", err))
 	}
 	if strings.TrimSpace(args.Operation) == "" {
-		return fail("fact_layer_query", "operation is required")
+		return fail("fact_layer_query", fmt.Sprintf(
+			"operation is required; supported operations are: %s",
+			strings.Join(trustirfacts.SupportedOperationStrings(), ", ")))
+	}
+	// Reject an operation outside the closed vocabulary here, naming the
+	// legal values. Previously nothing checked: an invented operation
+	// travelled all the way into trustirfacts.Run, which returned an
+	// "unsupported" ToolFact — a persisted artifact for a query that was
+	// never executed, whose error text blamed the repository rather than
+	// the operation. Failing at the edge with the vocabulary attached lets
+	// the model correct itself on the next round.
+	if !trustirfacts.IsSupportedOperation(args.Operation) {
+		return fail("fact_layer_query", fmt.Sprintf(
+			"unknown operation %q; supported operations are: %s",
+			args.Operation, strings.Join(trustirfacts.SupportedOperationStrings(), ", ")))
 	}
 	if h.Engine == nil {
 		return fail("fact_layer_query", "fact layer engine not configured for this run")

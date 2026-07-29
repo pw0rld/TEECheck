@@ -1,6 +1,7 @@
 package planner_test
 
 import (
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"strings"
 	"testing"
 
@@ -355,5 +356,35 @@ func TestBuildSystemPrompt_Deanchored(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("system prompt missing guidance token %q", want)
 		}
+	}
+}
+
+// Every other planner action takes arguments a model can derive from the
+// code in front of it. fact_layer_query alone requires a value from a
+// closed vocabulary only the source knew, and the schema carried one "e.g."
+// and no list. The model failed in both available directions: it invented
+// an operation that does not exist (2026-07-27), and across three runs on
+// 2026-07-29 — one of them against a repository that DID have a fact table,
+// with CodeQL installed and the action registered — it never called the
+// action at all, never mentioning the fact layer in eight rounds.
+func TestBuildSystemPrompt_EnumeratesFactLayerOperations(t *testing.T) {
+	prompt := planner.BuildSystemPrompt(
+		[]string{"fact_layer_query", "read_file"}, "", planner.PriorKnowledge{})
+
+	ops := trustirfacts.SupportedOperationStrings()
+	if len(ops) == 0 {
+		t.Skip("no executable operations in this build")
+	}
+	for _, op := range ops {
+		if !strings.Contains(prompt, op) {
+			t.Errorf("operation %q is executable but absent from the prompt — the model cannot ask for what it cannot see", op)
+		}
+	}
+	if !strings.Contains(prompt, "one of:") {
+		t.Error("the schema must present the operations as a closed list, not as an example")
+	}
+	// The old shape said "e.g." — a single sample the model had to guess from.
+	if strings.Contains(prompt, `(e.g. "cpp.state.rollback_version_propagation")`) {
+		t.Error("the example-only schema is back; a lone e.g. is what made the vocabulary unknowable")
 	}
 }
