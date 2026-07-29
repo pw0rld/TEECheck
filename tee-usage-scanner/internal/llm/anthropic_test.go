@@ -78,8 +78,11 @@ func TestAnthropicClientGenerateGLM(t *testing.T) {
 	if got.System != "system" {
 		t.Fatalf("unexpected system prompt: %q", got.System)
 	}
-	if got.MaxTokens != 16384 {
-		t.Fatalf("unexpected max_tokens: %d", got.MaxTokens)
+	// The budget is no longer hardcoded: a Config with no LLMMaxTokens
+	// falls back to the package default rather than to a literal that only
+	// this assertion knew about.
+	if got.MaxTokens != config.DefaultLLMMaxTokens {
+		t.Fatalf("max_tokens = %d, want the default %d", got.MaxTokens, config.DefaultLLMMaxTokens)
 	}
 	// JSONMode must reach the wire. The Messages API has no response_format,
 	// so it arrives as a trailing assistant prefill — without it, "JSON
