@@ -20,8 +20,8 @@ The event stream is the answer: an append-only sequence of typed
 facts emitted by agents during a run. Downstream consumers fold over
 the stream to derive metrics, reconstruct timelines, or replay
 decisions. Events are facts, not transcripts — large bodies (prompts,
-responses, tool args) live in a separate content-addressed blob store
-referenced from the event.
+responses, tool arguments, tool output) live in a separate
+content-addressed blob store referenced from the event.
 
 ## On-disk layout
 
@@ -40,7 +40,7 @@ runs/<run-id>/
 ├── 07_arbiter/
 ├── events.jsonl                  ← **this document's subject**
 └── blobs/
-    └── <sha256>.txt              ← prompt / response / tool-args bodies
+    └── <sha256>.txt              ← prompt / response / tool args / tool output bodies
 ```
 
 `events.jsonl` is at the run root, not under any stage subdirectory,
@@ -175,6 +175,8 @@ the executor leave them at zero/empty.
 | `tool_name`        | both       | logical tool name                                                 |
 | `tool_ok`          | both       | true iff the call produced a usable result                        |
 | `tool_duration_ms` | both       | wall clock                                                        |
+| `tool_output_blob` | both       | `sha256:<hex>` ref to the tool's output — stdout for the executor, the single output stream for in-process actions |
+| `tool_stderr_blob` | executor   | `sha256:<hex>` ref to stderr                                      |
 | `tool_exit_code`   | executor   | process exit code (0 on success; non-zero is *not* a failure on its own) |
 | `truncated`        | executor   | true if `max_output_bytes` was reached on stdout or stderr        |
 | `error`            | both       | populated only on true execution failures (timeout, binary not found, etc.) |
@@ -188,9 +190,74 @@ said no" from "execution broke" by checking `error`, then
 `tool_exit_code`. `tool_ok` is the convenience boolean for the
 "everything went fine" case.
 
-Tool stdout and stderr are not blobbed in v1. They live in the
-existing `04_planner/rounds.jsonl` observation records (truncated
-to ~4000 chars). Future commits may move full outputs into blobs.
+**Tool bodies.** Arguments and output are blobbed, not inlined, in the
+same style as `llm_call_completed`'s prompt and response. Stdout and
+stderr get **separate** refs rather than one concatenated body: merging
+them would need framing bytes (so the ref would no longer resolve to
+what the tool actually wrote) or would lose which stream said what —
+and stderr is usually the only place a failing tool explains itself.
+An empty stream produces no ref; `omitempty` drops the field.
+
+Bodies are recorded on the **failure path too**. A tool that errored is
+exactly the call someone will be diagnosing, and a stream that goes
+quiet when things break is worse than no stream at all.
+
+No cap is applied when writing these blobs. Everything reaching the
+emitters is already bounded by the layer that produced it — the
+executor's `capBuffer` enforces `max_output_bytes` and sets `truncated`
+on this same event when it bites; in-process actions bound themselves
+(`read_file` at 500 lines, `list_dir` at depth 3). A second cap here
+would add a truncation point that announces nothing, which is the
+defect class this instrumentation exists to close. The blob store is
+content-addressed, so a file read twice across a run costs one blob.
+
+`04_planner/rounds.jsonl` still keeps a ~4000-char observation excerpt
+per action, because that excerpt is what feeds the next planner prompt.
+The blob is the authoritative full copy; the round record is a budgeted
+view of it. When the two disagree in length, the blob is right.
+
+### `stage_started` / `stage_completed`
+
+Bracket every stage `internal/pipeline` runs, emitted by the pipeline
+itself rather than by the stage packages. Deterministic stages — the
+ones that make no LLM call and therefore used to leave *no* trace —
+are covered exactly like the LLM-backed ones.
+
+| field         | on            | meaning                                                       |
+|---------------|---------------|---------------------------------------------------------------|
+| `stage`       | both          | stage name (see the list below)                               |
+| `reason`      | completed     | `completed` or `error` — same vocabulary as `run_completed`    |
+| `duration_ms` | completed     | wall clock for the stage                                      |
+| `error`       | completed     | populated when `reason == "error"`                            |
+
+Stage names, in the order the pipeline drives them:
+
+- always: `preprocess`, `architecture`, `invariants`, then …
+- `--mode llm`: `l3_planner`, `cases_enrich`
+- legacy mode: `scan`, `mapper`, `cases`, `repomix_enrich` (only when
+  repomix is on PATH — a stage that did not run emits nothing)
+- always: `expert`, `challenger`, `verifier`, `arbiter`
+
+A failing stage still emits `stage_completed`, carrying the error. All
+events a stage produces (its `llm_call_*`, `tool_call_*`,
+`planner_round_*`, `claim_emitted`) fall between its two brackets, so
+`seq` alone attributes every event to a stage.
+
+```json
+{"seq":12,"time":"2026-07-28T14:33:56.86Z","type":"stage_started",
+ "run_id":"oasis-core-l3","stage":"l3_planner"}
+{"seq":27,"time":"2026-07-28T14:33:56.87Z","type":"stage_completed",
+ "run_id":"oasis-core-l3","stage":"l3_planner","reason":"completed","duration_ms":4}
+```
+
+**Why this event type exists.** `grep stage_ events.jsonl` used to
+return nothing. Only stages that happened to make an LLM call left any
+trace, so from the stream alone you could not tell that the profile,
+TWE-context or cases stages had run at all, how long they took, or
+which stage a failed run died in.
+
+Stages that run *before* the recorder exists (repo fetch, run-dir init)
+are necessarily unrecorded: there is nowhere to write yet.
 
 ## Blob store
 
@@ -361,6 +428,15 @@ jq -r 'select(.type == "llm_call_completed")
 jq -r 'select(.type == "tool_call_completed")
        | .tool_duration_ms' events.jsonl | sort -n | awk '
        {a[NR]=$1} END {print a[int(NR*0.95)]}'
+
+# Where did the time go, and did anything fail?
+jq -r 'select(.type == "stage_completed")
+       | "\(.stage)\t\(.reason)\t\(.duration_ms)ms"' events.jsonl
+
+# What did a tool actually return?
+jq -r 'select(.type == "tool_call_completed" and .tool_name == "ripgrep")
+       | .tool_output_blob' events.jsonl \
+  | sed 's/^sha256://' | while read h; do cat "blobs/$h.txt"; done
 ```
 
 Resolving blobs:

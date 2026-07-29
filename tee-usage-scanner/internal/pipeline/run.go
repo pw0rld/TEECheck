@@ -65,6 +65,38 @@ func Run(cfg config.Config) (string, error) {
 	return RunWithClient(cfg, llm.NewClient(cfg))
 }
 
+// runStage brackets one pipeline stage with a stage_started /
+// stage_completed pair and returns the stage's error untouched.
+//
+// This is the wiring seam for stage-level instrumentation, chosen for
+// the same reason the LLM recording decorator wraps llm.Client: the
+// pipeline already calls every stage, so wrapping the calls here
+// instruments all of them — including the deterministic ones that make
+// no LLM call and therefore used to leave no trace whatsoever — without
+// editing a single stage package.
+//
+// The completed event fires on every path, failure included. A stream
+// that goes silent when a stage dies is the case where the record
+// matters most: it is the only thing that says which stage killed the
+// run and what it said on the way out.
+//
+// Emission is best-effort; a recorder that cannot write must not be the
+// reason a stage does not run, so a nil recorder is tolerated.
+func runStage(rec events.Recorder, runID, stage string, fn func() error) error {
+	if rec == nil {
+		return fn()
+	}
+	_ = rec.Emit(events.StageStarted(runID, stage))
+	start := time.Now()
+	err := fn()
+	reason, errMsg := "completed", ""
+	if err != nil {
+		reason, errMsg = "error", err.Error()
+	}
+	_ = rec.Emit(events.StageCompleted(runID, stage, reason, time.Since(start).Milliseconds(), errMsg))
+	return err
+}
+
 func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err error) {
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
@@ -146,7 +178,13 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		})
 	}
 
-	if err := preprocessor.Run(stageCfg); err != nil {
+	// stage brackets a pipeline stage with stage_started /
+	// stage_completed. See runStage for why the seam lives here.
+	stage := func(name string, fn func() error) error {
+		return runStage(rec, runID, name, fn)
+	}
+
+	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
 
@@ -160,10 +198,14 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// (architecture/invariants/expert/... ) rather than each stage
 	// constructing its own. Run() supplies the production client via
 	// RunWithClient; tests inject a fake.
-	if err := architecture.Run(stageCfg, forAgent("architecture-001")); err != nil {
+	if err := stage("architecture", func() error {
+		return architecture.Run(stageCfg, forAgent("architecture-001"))
+	}); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
-	if err := invariants.Run(stageCfg, forAgent("invariants-001")); err != nil {
+	if err := stage("invariants", func() error {
+		return invariants.Run(stageCfg, forAgent("invariants-001"))
+	}); err != nil {
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
@@ -181,22 +223,31 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		// own prompt/response blobs, and its events carry a real Round
 		// number the decorator cannot know. Wrapping it would duplicate
 		// every planner event and every planner blob reference.
-		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
+		if err := stage("l3_planner", func() error {
+			return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
+		}); err != nil {
 			return runDir, fmt.Errorf("L3 planner: %w", err)
 		}
-		if err := cases.Enrich(stageCfg); err != nil {
+		if err := stage("cases_enrich", func() error { return cases.Enrich(stageCfg) }); err != nil {
 			return runDir, fmt.Errorf("cases enrich: %w", err)
 		}
 	} else {
 		// === Agent 1: Legacy Scanner ===
+		// A legacy run gets the same stage record as an llm run: these
+		// stages are all deterministic, i.e. exactly the class that
+		// left no trace at all before stage events existed.
 		fmt.Println("\n=== Scanner Agent ===")
-		graphReg := scanall.NewDefaultGraphRegistry()
-		graphResult, err := scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
-			RepoRoot: fetch.LocalPath,
-			Focus:    cfg.Focus,
-			Mode:     cfg.Mode,
-		})
-		if err != nil {
+		var graphResult scanner.GraphResult
+		if err := stage("scan", func() error {
+			graphReg := scanall.NewDefaultGraphRegistry()
+			var scanErr error
+			graphResult, scanErr = scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
+				RepoRoot: fetch.LocalPath,
+				Focus:    cfg.Focus,
+				Mode:     cfg.Mode,
+			})
+			return scanErr
+		}); err != nil {
 			return "", fmt.Errorf("scan: %w", err)
 		}
 		graphPath := runfs.GraphPath(runDir)
@@ -206,14 +257,17 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
 		stageCfg.GraphJSONPath = graphPath
 
-		if err := mapper.Run(stageCfg); err != nil {
+		if err := stage("mapper", func() error { return mapper.Run(stageCfg) }); err != nil {
 			return "", fmt.Errorf("mapper: %w", err)
 		}
-		if err := cases.Run(stageCfg); err != nil {
+		if err := stage("cases", func() error { return cases.Run(stageCfg) }); err != nil {
 			return "", fmt.Errorf("cases: %w", err)
 		}
 		if repomix.Available() {
-			enrichCasesWithRepomix(runDir, fetch.LocalPath)
+			_ = stage("repomix_enrich", func() error {
+				enrichCasesWithRepomix(runDir, fetch.LocalPath)
+				return nil
+			})
 		}
 	}
 
@@ -225,7 +279,9 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// carry the correct semantic label, which downstream consumers
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
-	if err := expert.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec, blobs); err != nil {
+	if err := stage("expert", func() error {
+		return expert.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec, blobs)
+	}); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
 
@@ -261,18 +317,24 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	}))
 
 	stageCfg.AgentID = "challenger-001"
-	if err := challenger.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec); err != nil {
+	if err := stage("challenger", func() error {
+		return challenger.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec)
+	}); err != nil {
 		return runDir, fmt.Errorf("challenger: %w", err)
 	}
 	stageCfg.AgentID = "verifier-001"
-	if err := verifier.RunWithBusAndEvents(stageCfg, forAgent(stageCfg.AgentID), bus, rec); err != nil {
+	if err := stage("verifier", func() error {
+		return verifier.RunWithBusAndEvents(stageCfg, forAgent(stageCfg.AgentID), bus, rec)
+	}); err != nil {
 		return runDir, fmt.Errorf("verifier: %w", err)
 	}
 
 	// === Agent 3: Auditor ===
 	fmt.Println("\n=== Auditor Agent ===")
 	stageCfg.AgentID = "arbiter-001"
-	if err := arbiter.RunWithBus(stageCfg, forAgent(stageCfg.AgentID), bus); err != nil {
+	if err := stage("arbiter", func() error {
+		return arbiter.RunWithBus(stageCfg, forAgent(stageCfg.AgentID), bus)
+	}); err != nil {
 		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
 

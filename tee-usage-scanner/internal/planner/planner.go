@@ -382,12 +382,7 @@ loop:
 			executorBacked := cfg.Registry.IsExecutorBacked(act.Name)
 
 			if !executorBacked {
-				var toolArgsBlob string
-				if cfg.Blobs != nil && len(act.Args) > 0 {
-					if ref, err := cfg.Blobs.Write([]byte(act.Args)); err == nil {
-						toolArgsBlob = ref
-					}
-				}
+				toolArgsBlob := events.BestEffortRef(cfg.Blobs, act.Args)
 				_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
 			}
 
@@ -406,7 +401,16 @@ loop:
 			loopDet.Record(act.Name, argsStr)
 
 			if !executorBacked {
-				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, result.Error))
+				// The blob carries the UNTRUNCATED output. The round
+				// observation below keeps a 4000-char excerpt so the
+				// next prompt stays affordable; that excerpt is what
+				// used to be the only surviving copy, which is how
+				// "the truncated read from round 5 didn't show lines
+				// 35-80" became an unanswerable question. Output is
+				// blobbed on the failure path too — a tool that
+				// errored is the one someone will be diagnosing.
+				outputBlob := events.BestEffortRef(cfg.Blobs, []byte(result.Output))
+				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, outputBlob, result.Error))
 			}
 
 			roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{

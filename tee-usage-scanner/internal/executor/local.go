@@ -131,15 +131,9 @@ func (e *LocalExecutor) emitStarted(req Request) {
 	if e.Recorder == nil {
 		return
 	}
-	var argsBlob string
-	if e.Blobs != nil && len(req.Args) > 0 {
-		// Args list is plain text — render as one-per-line so blob
-		// content is grep-friendly when inspected manually.
-		body := strings.Join(req.Args, "\n")
-		if ref, err := e.Blobs.WriteString(body); err == nil {
-			argsBlob = ref
-		}
-	}
+	// Args list is plain text — render as one-per-line so blob
+	// content is grep-friendly when inspected manually.
+	argsBlob := events.BestEffortRef(e.Blobs, []byte(strings.Join(req.Args, "\n")))
 	timeout := req.Profile.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -162,9 +156,19 @@ func (e *LocalExecutor) emitCompleted(req Request, res Result) {
 	if e.Recorder == nil {
 		return
 	}
+	// Both streams are blobbed unconditionally, failures included. No
+	// extra cap is applied here: Stdout/Stderr already arrive bounded
+	// by Profile.MaxOutputBytes (capBuffer), and when that bound bit,
+	// res.Truncated is true and travels on this very event — so a
+	// shortened blob is never silent. A second cap at this layer would
+	// add a truncation point that says nothing, which is the exact
+	// defect this instrumentation exists to close.
 	_ = e.Recorder.Emit(events.ToolCallExecutorCompleted(
 		req.RunID, req.Agent, toolNameOrCommand(req), req.Round,
-		res.OK, res.ExitCode, res.DurationMs, res.Truncated, res.Error,
+		res.OK, res.ExitCode, res.DurationMs, res.Truncated,
+		events.BestEffortRef(e.Blobs, res.Stdout),
+		events.BestEffortRef(e.Blobs, res.Stderr),
+		res.Error,
 	))
 }
 

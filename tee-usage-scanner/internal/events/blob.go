@@ -54,3 +54,21 @@ func (b *BlobStore) WriteString(body string) (string, error) {
 
 // Dir returns the directory blobs are written to.
 func (b *BlobStore) Dir() string { return b.dir }
+
+// BestEffortRef stores body and returns its reference, or "" when there
+// is no store, nothing to store, or the store rejected the write.
+//
+// Instrumentation must never fail the thing it is describing: a blob we
+// could not write yields an empty ref, exactly as the LLM recording
+// decorator does. Emitters call this instead of handling the error
+// themselves so the policy stays in one place.
+func BestEffortRef(store *BlobStore, body []byte) string {
+	if store == nil || len(body) == 0 {
+		return ""
+	}
+	ref, err := store.Write(body)
+	if err != nil {
+		return ""
+	}
+	return ref
+}
