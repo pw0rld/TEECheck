@@ -185,6 +185,17 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	var terminationReason string
 	var runErr error
 
+	// executedToolFactRefs collects the ToolFact path every successful
+	// fact_layer_query returned. prompt.go's `done` schema also asks the
+	// model to echo tool_fact_refs back per investigation, and on
+	// 2026-07-30 the CVE-2026-44362 fixed-side run did call the query, was
+	// shown the path, and then reported `"tool_fact_refs": []` — so the one
+	// immutable-tier artifact it produced reached none of the downstream
+	// agents, all of which read CasePack.ToolFactRefs. The reference is
+	// deterministic output of an action this loop executed; it does not
+	// depend on the model remembering to copy a string.
+	var executedToolFactRefs []string
+
 loop:
 	for !cfg.Budget.Exhausted() {
 		cfg.Budget.ConsumeRound()
@@ -435,6 +446,12 @@ loop:
 			// comment on PlannerState). Recording it here means the sticky
 			// "TWE PLAYBOOK DETAIL" section renders it in full every round
 			// from here on.
+			if result.Name == "fact_layer_query" && result.OK {
+				if ref := toolFactRefFrom(result.Output); ref != "" {
+					executedToolFactRefs = append(executedToolFactRefs, ref)
+				}
+			}
+
 			if result.Name == "twe_playbook_detail" && result.OK {
 				var detailArgs struct {
 					TWEID string `json:"twe_id"`
@@ -503,7 +520,7 @@ loop:
 		fmt.Fprintf(os.Stdout, "[planner] evidence bundle written to %s\n", bundlePath)
 	}
 
-	invs, packs, invErrors := processInvestigations(donePayload.Investigations, cfg, state)
+	invs, packs, invErrors := processInvestigations(donePayload.Investigations, cfg, state, executedToolFactRefs)
 	if len(invErrors) > 0 {
 		bundle.Errors = append(bundle.Errors, invErrors...)
 	}
@@ -551,7 +568,13 @@ loop:
 // also appended to state.Investigations so a later planner pass in the same
 // audit session (see internal/pipeline's --samples loop) sees it via
 // BuildRoundPrompt's "ACTIVE TWE INVESTIGATIONS" section.
-func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerState) ([]artifacts.TWEInvestigation, []artifacts.CasePack, []artifacts.RoundError) {
+// executedToolFactRefs are the ToolFact paths this planner loop actually
+// obtained from fact_layer_query. They are unioned into every investigation
+// the same loop reported: the loop is shared, so the observation was in
+// context for each one, and the done payload carries no per-investigation
+// attribution that could narrow it. Once a TWE→operation mapping exists the
+// union can be narrowed to the family the operation belongs to.
+func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerState, executedToolFactRefs []string) ([]artifacts.TWEInvestigation, []artifacts.CasePack, []artifacts.RoundError) {
 	if len(raw) == 0 {
 		return nil, nil, nil
 	}
@@ -582,6 +605,9 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		}
 
 		inv := investigations.Build(wire)
+		// Union before Validate so an executed ref is subject to the same
+		// on-disk resolution check as a model-reported one.
+		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
 		inv, _ = investigations.Validate(inv, validationIn)
 
 		if cfg.RunDir != "" {
@@ -610,6 +636,21 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		packs = append(packs, pack)
 	}
 	return invs, packs, errs
+}
+
+// toolFactRefFrom pulls the tool_fact_ref out of a fact_layer_query
+// observation (actions.factLayerQueryOutput). An unparseable or ref-less
+// observation yields "" — the handler only omits the field on a path that
+// already reported OK=false, so there is nothing to record and nothing to
+// report twice.
+func toolFactRefFrom(output string) string {
+	var obs struct {
+		ToolFactRef string `json:"tool_fact_ref"`
+	}
+	if err := json.Unmarshal([]byte(output), &obs); err != nil {
+		return ""
+	}
+	return obs.ToolFactRef
 }
 
 func firstOrEmpty(values []string) string {
