@@ -27,11 +27,24 @@
 import cpp
 import common.GeneratedTrustFacts
 
-/** Holds if `producer` writes struct field `field` through its output params. */
+/**
+ * Holds if `producer` writes struct field `field` on the produced struct
+ * through its output params.
+ *
+ * The struct constraint is not cosmetic. Matching on field NAME alone made
+ * any assignment to any field called `field`, on any type, anywhere in the
+ * producer suppress the finding — a false negative reachable by an unrelated
+ * local. `producedStruct` is materialized into every run's
+ * GeneratedTrustFacts.qll (ProducedStructs in internal/trustirfacts/
+ * facttable.go, "shdr_pub_key" for the OP-TEE entry) and was referenced by
+ * nothing, so the whole differential rested on one unqualified string
+ * comparison.
+ */
 predicate writesOutputField(Function producer, string field) {
   exists(Assignment a, FieldAccess fa |
     a.getLValue() = fa and
     fa.getTarget().getName() = field and
+    GeneratedTrustFacts::producedStruct(fa.getTarget().getDeclaringType().getName()) and
     fa.getEnclosingFunction() = producer
   )
 }
