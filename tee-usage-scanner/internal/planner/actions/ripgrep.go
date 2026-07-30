@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,18 @@ import (
 )
 
 const ripgrepMaxMatchLines = 200
+
+// RipgrepNoMatchOutput is what a successful search with zero matches
+// reports. An empty Output is dropped from the round observation by
+// omitempty, leaving the model an ok=true with no output field — which reads
+// the same as a tool that ran and produced nothing for an unrelated reason.
+// "I searched and found nothing" is a real answer and has to be stated.
+const RipgrepNoMatchOutput = "(no matches)"
+
+// ripgrepLegalArgs is quoted back when an unknown argument arrives, so the
+// model can correct itself on the next round the same way an unknown
+// fact_layer_query operation is handled.
+const ripgrepLegalArgs = `"pattern" (required), "globs"`
 
 type ripgrepArgs struct {
 	Pattern string   `json:"pattern"`
@@ -37,8 +50,10 @@ func (RipgrepHandler) IsExecutorBacked() bool { return true }
 
 func (RipgrepHandler) Run(ctx context.Context, req ActionRequest) ActionResult {
 	var args ripgrepArgs
-	if err := json.Unmarshal(req.Args, &args); err != nil {
-		return fail("ripgrep", fmt.Sprintf("invalid args: %v", err))
+	dec := json.NewDecoder(bytes.NewReader(req.Args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&args); err != nil {
+		return fail("ripgrep", fmt.Sprintf("invalid args: %v; legal args are %s", err, ripgrepLegalArgs))
 	}
 	if strings.TrimSpace(args.Pattern) == "" {
 		return fail("ripgrep", "pattern is required")
@@ -61,6 +76,16 @@ func (RipgrepHandler) Run(ctx context.Context, req ActionRequest) ActionResult {
 		Name:    "ripgrep",
 		Command: "rg",
 		Args:    cmdArgs,
+		// ripgrep matches --glob patterns against paths relative to the
+		// working directory. RepoRoot is passed as an absolute search path,
+		// so without this every glob containing a separator was matched
+		// against an absolute candidate path and could never hold —
+		// "core/crypto/*.c" silently selected nothing while a bare "*.c"
+		// kept working (those match the basename). Anchoring the working
+		// directory at the repo root makes path-qualified globs mean what
+		// they say; the search path stays absolute so match lines remain
+		// absolute for planner.trackObservedPaths.
+		WorkDir: req.RepoRoot,
 		Profile: executor.Profile{
 			Network:        executor.NetworkNone,
 			Write:          executor.WriteNone,
@@ -77,7 +102,7 @@ func (RipgrepHandler) Run(ctx context.Context, req ActionRequest) ActionResult {
 	//                          missing, ctx cancelled, ...)
 	//   - res.ExitCode == 0  : matches found
 	//   - res.ExitCode == 1  : no matches — normal, OK=true with
-	//                          empty Output
+	//                          RipgrepNoMatchOutput as the Output
 	//   - res.ExitCode other : abnormal rg failure (syntax error in
 	//                          pattern, glob parse, etc.) — surface
 	//                          as action failure with stderr context
@@ -94,7 +119,7 @@ func (RipgrepHandler) Run(ctx context.Context, req ActionRequest) ActionResult {
 	case 0:
 		// matches; fall through
 	case 1:
-		return ActionResult{Name: "ripgrep", OK: true, Output: "", DurationMs: res.DurationMs}
+		return ActionResult{Name: "ripgrep", OK: true, Output: RipgrepNoMatchOutput, DurationMs: res.DurationMs}
 	default:
 		stderr := strings.TrimSpace(string(res.Stderr))
 		msg := fmt.Sprintf("ripgrep exit %d", res.ExitCode)
@@ -111,7 +136,7 @@ func (RipgrepHandler) Run(ctx context.Context, req ActionRequest) ActionResult {
 
 	text := strings.TrimRight(string(res.Stdout), "\n")
 	if text == "" {
-		return ActionResult{Name: "ripgrep", OK: true, Output: "", DurationMs: res.DurationMs}
+		return ActionResult{Name: "ripgrep", OK: true, Output: RipgrepNoMatchOutput, DurationMs: res.DurationMs}
 	}
 	lines := strings.Split(text, "\n")
 	truncated := res.Truncated
