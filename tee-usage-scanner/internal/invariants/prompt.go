@@ -44,9 +44,12 @@ Rules:
     if you have not seen the actual enforcement code, say so in
     unresolved_assumptions and verification_plan rather than asserting
     the property holds.
-  - verification_plan must name concrete, checkable steps (e.g. "trace
-    subkey_version from shdr_load_pub_key into check_update_version"),
-    not vague reassurance ("ensure proper validation").
+  - verification_plan must name concrete, checkable steps — name the
+    actual function, field and call site you want traced, in this
+    project's own vocabulary — not vague reassurance ("ensure proper
+    validation"). No example is given here on purpose: the previous one
+    spelled out a benchmark case's answer, so any run on that case was
+    reading the solution out of its own system prompt.
 
 Respond with a single JSON object: { "invariants": [ ... ] }. Each entry:
   { "invariant_id": "INV-<TOPIC>-NNN", "statement": "...",

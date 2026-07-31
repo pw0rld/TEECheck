@@ -61,7 +61,7 @@ type PriorKnowledge struct {
 var actionArgSchemas = map[string]string{
 	"list_dir":            `{"path": string (repo-relative), "depth": int (0-3)}`,
 	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
-	"ripgrep":             `{"pattern": string (regex), "globs": [string]} — these are the ONLY two arguments and any other is rejected. globs may be path-qualified relative to the repo root ("core/crypto/*.c") or bare ("*.c","*.h"). For a case-insensitive search put the flag in the pattern itself: "(?i)subkey_version". Zero matches is reported as "(no matches)", which means the search ran and found nothing — it is not evidence that the thing does not exist elsewhere`,
+	"ripgrep":             `{"pattern": string (regex), "globs": [string]} — these are the ONLY two arguments and any other is rejected. globs may be path-qualified relative to the repo root ("core/crypto/*.c") or bare ("*.c","*.h"). For a case-insensitive search put the flag in the pattern itself, e.g. "(?i)<pattern>". Zero matches is reported as "(no matches)", which means the search ran and found nothing — it is not evidence that the thing does not exist elsewhere`,
 	"tree_sitter_outline": `{"path": string (a source file: .c/.h/.rs/...)}`,
 	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
