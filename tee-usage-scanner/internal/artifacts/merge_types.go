@@ -239,22 +239,44 @@ type ToolPathStep struct {
 // back to. It stays required here only to satisfy the schema as it exists
 // today — see the PR-01 handoff notes for the full field-by-field list.
 type ToolFact struct {
-	SchemaVersion   string           `json:"schema_version"`
-	RequestID       string           `json:"request_id"`
-	FactID          string           `json:"fact_id"`
-	Tool            string           `json:"tool"`
-	ToolVersion     string           `json:"tool_version,omitempty"`
-	Operation       string           `json:"operation"`
-	RepoCommit      string           `json:"repo_commit"`
-	ArgumentsSHA256 string           `json:"arguments_sha256,omitempty"`
-	Status          string           `json:"status"`
-	Locations       []ToolLocation   `json:"locations,omitempty"`
-	Paths           [][]ToolPathStep `json:"paths,omitempty"`
-	Result          json.RawMessage  `json:"result,omitempty"`
-	ArtifactRef     string           `json:"artifact_ref,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	CoverageGaps    []string         `json:"coverage_gaps,omitempty"`
-	Truncated       bool             `json:"truncated,omitempty"`
+	SchemaVersion   string `json:"schema_version"`
+	RequestID       string `json:"request_id"`
+	FactID          string `json:"fact_id"`
+	Tool            string `json:"tool"`
+	ToolVersion     string `json:"tool_version,omitempty"`
+	Operation       string `json:"operation"`
+	RepoCommit      string `json:"repo_commit"`
+	ArgumentsSHA256 string `json:"arguments_sha256,omitempty"`
+	Status          string `json:"status"`
+	// Locations is deliberately NOT omitempty. A successful query that
+	// matched nothing used to serialise with no locations key at all,
+	// leaving "we looked and found nothing" indistinguishable on disk from
+	// "this field was never populated" — and the fixed half of a
+	// vulnerable/fixed differential is read entirely on the strength of that
+	// first reading. Producers initialise it (see trustirfacts.newFact) so
+	// every status emits an array and stays valid against
+	// trustir-tool.v1.json, which types locations as an array.
+	Locations    []ToolLocation   `json:"locations"`
+	Paths        [][]ToolPathStep `json:"paths,omitempty"`
+	Result       json.RawMessage  `json:"result,omitempty"`
+	ArtifactRef  string           `json:"artifact_ref,omitempty"`
+	Error        string           `json:"error,omitempty"`
+	CoverageGaps []string         `json:"coverage_gaps,omitempty"`
+	Truncated    bool             `json:"truncated,omitempty"`
+}
+
+// MarshalJSON renders a nil Locations as [] so that "the query ran and
+// matched nothing" is always stated rather than omitted, without every
+// producer having to remember to initialise the slice — and without emitting
+// null, which trustir-tool.v1.json (locations: {"type": "array"}) rejects.
+// Status still says whether the query ran at all; this only removes the
+// ambiguity within a success.
+func (f ToolFact) MarshalJSON() ([]byte, error) {
+	type alias ToolFact
+	if f.Locations == nil {
+		f.Locations = []ToolLocation{}
+	}
+	return json.Marshal(alias(f))
 }
 
 // TWEInvestigation is the Planner's structured, still-reviewable application
