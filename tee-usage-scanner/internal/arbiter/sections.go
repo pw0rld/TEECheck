@@ -36,7 +36,7 @@ func buildSections(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, cha
 func renderAnchoredToolFacts(caseCtx caseContext) []string {
 	var out []string
 	for _, f := range caseCtx.toolFacts {
-		out = append(out, fmt.Sprintf("[%s] %s/%s status=%s locations=%s", f.FactID, f.Tool, f.Operation, f.Status, formatToolLocations(f.Locations)))
+		out = append(out, artifacts.FormatToolFact(f))
 	}
 	for _, ref := range caseCtx.missingToolFacts {
 		out = append(out, fmt.Sprintf("(unavailable) %s", ref))

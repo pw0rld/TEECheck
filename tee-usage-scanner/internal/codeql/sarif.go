@@ -12,15 +12,27 @@ import (
 
 // Result is one SARIF finding, flattened to the fields the pipeline needs: a
 // rule id, a human message, a severity level, and a precise source location.
+// RelatedLocation is a secondary site the result's message refers to. A
+// thin-shell query names its entities through $@ placeholders, so the
+// producer, the field and the authority call each arrive here with the
+// symbol name as the location's message — which is the only place the
+// symbol appears at all.
+type RelatedLocation struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	Symbol    string `json:"symbol,omitempty"`
+}
+
 type Result struct {
-	RuleID      string `json:"rule_id"`
-	Message     string `json:"message"`
-	Level       string `json:"level,omitempty"`
-	Path        string `json:"path"`
-	StartLine   int    `json:"start_line"`
-	StartColumn int    `json:"start_column,omitempty"`
-	EndLine     int    `json:"end_line,omitempty"`
-	EndColumn   int    `json:"end_column,omitempty"`
+	RuleID      string            `json:"rule_id"`
+	Message     string            `json:"message"`
+	Related     []RelatedLocation `json:"related,omitempty"`
+	Level       string            `json:"level,omitempty"`
+	Path        string            `json:"path"`
+	StartLine   int               `json:"start_line"`
+	StartColumn int               `json:"start_column,omitempty"`
+	EndLine     int               `json:"end_line,omitempty"`
+	EndColumn   int               `json:"end_column,omitempty"`
 }
 
 // sarifLog is the subset of the SARIF 2.1.0 schema we read. Everything else is
@@ -46,6 +58,19 @@ type sarifLog struct {
 					} `json:"region"`
 				} `json:"physicalLocation"`
 			} `json:"locations"`
+			RelatedLocations []struct {
+				Message struct {
+					Text string `json:"text"`
+				} `json:"message"`
+				PhysicalLocation struct {
+					ArtifactLocation struct {
+						URI string `json:"uri"`
+					} `json:"artifactLocation"`
+					Region struct {
+						StartLine int `json:"startLine"`
+					} `json:"region"`
+				} `json:"physicalLocation"`
+			} `json:"relatedLocations"`
 		} `json:"results"`
 	} `json:"runs"`
 }
@@ -73,6 +98,13 @@ func ParseSARIF(data []byte) ([]Result, error) {
 				res.StartColumn = phys.Region.StartColumn
 				res.EndLine = phys.Region.EndLine
 				res.EndColumn = phys.Region.EndColumn
+			}
+			for _, rl := range r.RelatedLocations {
+				res.Related = append(res.Related, RelatedLocation{
+					Path:      rl.PhysicalLocation.ArtifactLocation.URI,
+					StartLine: rl.PhysicalLocation.Region.StartLine,
+					Symbol:    rl.Message.Text,
+				})
 			}
 			out = append(out, res)
 		}

@@ -172,7 +172,16 @@ func TestRun_Success_VulnerableFindsLocations(t *testing.T) {
 	eng := &fakeEngine{
 		available: true,
 		analyzeResults: []codeql.Result{
-			{RuleID: "teecheck/trustir-cpp/twe-state-001", Path: "core/crypto/signed_hdr.c", StartLine: 262, EndLine: 262},
+			{
+				RuleID:    "teecheck/trustir-cpp/twe-state-001",
+				Message:   "TWE-STATE-001: producer never propagates rollback field 'version'; authority therefore checks a default version.",
+				Path:      "core/crypto/signed_hdr.c",
+				StartLine: 262, EndLine: 262,
+				Related: []codeql.RelatedLocation{
+					{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+					{Path: "core/kernel/ree_fs_ta.c", StartLine: 639, Symbol: "check_update_version"},
+				},
+			},
 		},
 	}
 	req := Request{
@@ -188,6 +197,20 @@ func TestRun_Success_VulnerableFindsLocations(t *testing.T) {
 	}
 	if len(fact.Locations) != 1 || fact.Locations[0].Path != "core/crypto/signed_hdr.c" {
 		t.Errorf("Locations = %+v, want the flagged producer's location", fact.Locations)
+	}
+	// The query's conclusion and the sites it names must land on the fact.
+	// Keeping only Locations is what left five agent prompts with a line
+	// number and no mention of check_update_version at all.
+	if len(fact.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want the analyze result's message carried through", fact.Findings)
+	}
+	if fact.Findings[0].Message == "" {
+		t.Error("the message is the query's answer; it must reach the fact")
+	}
+	if len(fact.Findings[0].Related) != 2 {
+		t.Errorf("Related = %+v, want both named sites", fact.Findings[0].Related)
+	} else if fact.Findings[0].Related[1].Symbol != "check_update_version" {
+		t.Errorf("Related[1] = %+v, want the authority call site", fact.Findings[0].Related[1])
 	}
 	if fact.ArtifactRef == "" {
 		t.Error("expected ArtifactRef to point at the built database (§23.3: visible run-directory artifact)")

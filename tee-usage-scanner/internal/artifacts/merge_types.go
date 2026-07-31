@@ -256,13 +256,17 @@ type ToolFact struct {
 	// first reading. Producers initialise it (see trustirfacts.newFact) so
 	// every status emits an array and stays valid against
 	// trustir-tool.v1.json, which types locations as an array.
-	Locations    []ToolLocation   `json:"locations"`
-	Paths        [][]ToolPathStep `json:"paths,omitempty"`
-	Result       json.RawMessage  `json:"result,omitempty"`
-	ArtifactRef  string           `json:"artifact_ref,omitempty"`
-	Error        string           `json:"error,omitempty"`
-	CoverageGaps []string         `json:"coverage_gaps,omitempty"`
-	Truncated    bool             `json:"truncated,omitempty"`
+	Locations []ToolLocation   `json:"locations"`
+	Paths     [][]ToolPathStep `json:"paths,omitempty"`
+	// Findings carries each result's message and the sites it names. See
+	// ToolFinding: the query's conclusion is in the message, and keeping
+	// only Locations discarded it along with every secondary site.
+	Findings     []ToolFinding   `json:"findings,omitempty"`
+	Result       json.RawMessage `json:"result,omitempty"`
+	ArtifactRef  string          `json:"artifact_ref,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	CoverageGaps []string        `json:"coverage_gaps,omitempty"`
+	Truncated    bool            `json:"truncated,omitempty"`
 }
 
 // MarshalJSON renders a nil Locations as [] so that "the query ran and

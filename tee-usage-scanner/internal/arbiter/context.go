@@ -1,9 +1,6 @@
 package arbiter
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
@@ -127,15 +124,4 @@ func sliceInvariants(all []artifacts.ProjectInvariant, ids []string) []artifacts
 		}
 	}
 	return out
-}
-
-func formatToolLocations(locs []artifacts.ToolLocation) string {
-	if len(locs) == 0 {
-		return "(none)"
-	}
-	var parts []string
-	for _, l := range locs {
-		parts = append(parts, l.Path+":"+strconv.Itoa(l.StartLine))
-	}
-	return strings.Join(parts, ", ")
 }

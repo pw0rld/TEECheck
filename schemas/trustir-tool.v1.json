@@ -3,60 +3,205 @@
   "$id": "https://teecheck.dev/schemas/trustir-tool.v1.json",
   "title": "TEECheck TrustIR Tool Protocol v1",
   "oneOf": [
-    {"$ref": "#/$defs/request"},
-    {"$ref": "#/$defs/result"}
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/result"
+    }
   ],
   "$defs": {
     "request": {
       "type": "object",
-      "required": ["schema_version", "request_id", "operation", "repo_root", "repo_commit"],
+      "required": [
+        "schema_version",
+        "request_id",
+        "operation",
+        "repo_root",
+        "repo_commit"
+      ],
       "properties": {
-        "schema_version": {"const": "teecheck.trustir_request.v1"},
-        "request_id": {"type": "string"},
-        "operation": {"type": "string"},
-        "repo_root": {"type": "string"},
-        "repo_commit": {"type": "string"},
-        "language": {"type": "string"},
-        "twe_ids": {"type": "array", "items": {"type": "string"}},
-        "scope": {"type": "object"},
-        "arguments": {"type": "object"},
-        "budget": {"type": "object"}
+        "schema_version": {
+          "const": "teecheck.trustir_request.v1"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "repo_root": {
+          "type": "string"
+        },
+        "repo_commit": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "twe_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "object"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "budget": {
+          "type": "object"
+        }
       },
       "additionalProperties": false
     },
     "location": {
       "type": "object",
-      "required": ["path", "start_line"],
+      "required": [
+        "path",
+        "start_line"
+      ],
       "properties": {
-        "path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1},
-        "end_line": {"type": "integer", "minimum": 1}, "symbol": {"type": "string"}
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "symbol": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "path_step": {
       "type": "object",
-      "required": ["location"],
+      "required": [
+        "location"
+      ],
       "properties": {
-        "location": {"$ref": "#/$defs/location"},
-        "kind": {"type": "string"}, "message": {"type": "string"}
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "result": {
       "type": "object",
-      "required": ["schema_version", "request_id", "fact_id", "tool", "operation", "repo_commit", "status"],
+      "required": [
+        "schema_version",
+        "request_id",
+        "fact_id",
+        "tool",
+        "operation",
+        "repo_commit",
+        "status"
+      ],
       "properties": {
-        "schema_version": {"const": "teecheck.trustir_result.v1"},
-        "request_id": {"type": "string"}, "fact_id": {"type": "string"},
-        "tool": {"type": "string"}, "tool_version": {"type": "string"},
-        "operation": {"type": "string"}, "repo_commit": {"type": "string"},
-        "arguments_sha256": {"type": "string"},
-        "status": {"enum": ["success", "error", "unsupported", "unresolved"]},
-        "locations": {"type": "array", "items": {"$ref": "#/$defs/location"}},
-        "paths": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/path_step"}}},
-        "result": {}, "artifact_ref": {"type": "string"}, "error": {"type": "string"},
-        "coverage_gaps": {"type": "array", "items": {"type": "string"}},
-        "truncated": {"type": "boolean"}
+        "schema_version": {
+          "const": "teecheck.trustir_result.v1"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "fact_id": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "repo_commit": {
+          "type": "string"
+        },
+        "arguments_sha256": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "error",
+            "unsupported",
+            "unresolved"
+          ]
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/path_step"
+            }
+          }
+        },
+        "result": {},
+        "artifact_ref": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "coverage_gaps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "message",
+        "location"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        }
       },
       "additionalProperties": false
     }

@@ -108,6 +108,7 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 	fact := base
 	fact.Status = StatusSuccess
 	fact.Locations = toolLocations(results)
+	fact.Findings = toolFindings(results)
 	fact.ArtifactRef = filepath.ToSlash(relDB)
 	fact.CoverageGaps = coverageGaps(reused, isLLMFactTable(req.Repository))
 	return fact, nil
@@ -185,6 +186,29 @@ func analyzeOptions(dbPath, queryFile, extraPATH string) codeql.AnalyzeOptions {
 // embeds — recovering the symbol would mean parsing the message text, which
 // is fragile. This is a real, disclosed limitation, not silently dropped:
 // see coverageGaps.
+// toolFindings carries each result's message and the sites it names. The
+// message is the query's actual conclusion — without it a caller sees a line
+// number and has to guess what was concluded about it.
+func toolFindings(results []codeql.Result) []artifacts.ToolFinding {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]artifacts.ToolFinding, 0, len(results))
+	for _, r := range results {
+		fi := artifacts.ToolFinding{
+			Message:  r.Message,
+			Location: artifacts.ToolLocation{Path: r.Path, StartLine: r.StartLine, EndLine: r.EndLine},
+		}
+		for _, rel := range r.Related {
+			fi.Related = append(fi.Related, artifacts.ToolLocation{
+				Path: rel.Path, StartLine: rel.StartLine, Symbol: rel.Symbol,
+			})
+		}
+		out = append(out, fi)
+	}
+	return out
+}
+
 func toolLocations(results []codeql.Result) []artifacts.ToolLocation {
 	if len(results) == 0 {
 		return nil
