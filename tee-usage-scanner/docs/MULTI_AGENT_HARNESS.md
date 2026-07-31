@@ -37,7 +37,7 @@ Agents still have specialized roles, but they collaborate around the same case.
 
 This means:
 
-- the `Mapper` (heuristic mode) or the `L3 Planner` (LLM mode) prepares the case
+- the `L3 Planner` prepares the case
 - the `Expert` proposes the main security hypothesis
 - the `Challenger` attacks or questions that hypothesis
 - the `Verifier` strengthens or weakens the evidence

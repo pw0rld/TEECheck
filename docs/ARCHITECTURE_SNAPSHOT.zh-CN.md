@@ -1,7 +1,7 @@
 # TEECheck × tee-audit 融合架构快照
 
-> 快照日期：2026-07-23
-> 分支：`merge/tee-audit-integration`（领先 main 84 提交，596 测试 / 57 包全绿）
+> 快照日期：2026-07-31（前一版 2026-07-23）
+> 分支：`merge/tee-audit-integration`（领先 main 193 提交，41 个包全绿）
 > 用途：汇报当前架构与进度。数据取自代码库实测，进度如实标注。
 
 ---
@@ -36,7 +36,7 @@ Finding + 人工复核 ───── SARIF / Review / Benchmark 门禁
 ```
 
 贯穿全流程的两条：
-- **全部 16 个 TWE** 编译成前置知识，注入各 Agent——不用 RAG / embedding。
+- **全部 19 个 TWE** 编译成前置知识，注入各 Agent——不用 RAG / embedding。
 - **ToolFact** 绑定真实代码位置，写入后不可改写。
 
 **状态**：前四段（Fingerprint / Architecture / Invariant / Planner+事实层）已接入主编排并跑通；多 Agent 复核层已实现；输出层（Finding/SARIF）未接，端到端真跑待建库阶段。
@@ -142,12 +142,11 @@ cmd/teecheck run
 │ ⑥ 输出·闭环     report · review · stats · feedback                        │ → 报告；HumanVerdict/SARIF 待 PR-08
 └──────────────────────────────────────────────────────────────────────┘
 贯穿全程   artifacts（契约类型）· schema（运行时校验）· runfs（路径/JSON）· llm（GLM）· config
-旧旁路     scanner · hotspots · solver · cmd/twescan  ── 与新 Planner 路径二选一，PR-10 退役
+旧旁路     solver · twepipeline · twexpert · cmd/twescan  ── 仅 twescan 可达，PR-10 待退役
 ```
 
-> 注：`profile.Languages` 已传入 Planner，但 `planner` 目前仍硬编码 `knowledge/sinks/rust.json`
-> 且 `planner/actions` 的 `tree_sitter_outline`/`reverse_trace` 只接受 `.rs`——C/OP-TEE 源码探索
-> 尚未接通（见 §6）。
+> 注：语言限制已解除——`planner/actions/langtext.go` 接受 `.rs .c .h .cc .cpp`，
+> `knowledge/sinks/` 已随旧路径移除。
 
 ### 3.1 目录树
 
@@ -157,7 +156,7 @@ tee-usage-scanner/
 │   ├── teecheck/          主 CLI：run 一把梭，也可单跑各阶段子命令
 │   └── twescan/           旧扫描旁路（PR-10 待退役）
 │
-├── internal/             业务逻辑（~43 个包）
+├── internal/             业务逻辑（39 个包）
 │   │                     ——编排——
 │   ├── pipeline/         run 总编排，串起下列所有阶段
 │   ├── runinit/ runfs/   运行目录初始化、路径与 JSON 读写（ReadProjectInvariants 在此）
@@ -165,13 +164,13 @@ tee-usage-scanner/
 │   │                     ——① 预处理·画像——
 │   ├── preprocessor/     拉仓库、产 ProjectProfile
 │   ├── repofetch/ repomap/ repomix/ mapper/   仓库获取与代码地图
-│   ├── scanner/ hotspots/ solver/             旧旁路：确定性扫描 + 热点
+│   ├── solver/                                旧旁路（仅 twescan 可达）
 │   │                     ——② 项目理解——
 │   ├── architecture/     ArchitectureModel + Dossier
 │   ├── invariants/       ProjectInvariant
 │   ├── citations/        引用/证据校验（SHA256 绑定源码）
 │   │                     ——③ TWE 前置知识——
-│   ├── twe/ twecontext/  16 个 TWE 定义、编译成 agent 上下文
+│   ├── twe/ twecontext/  19 个 TWE 定义、编译成 agent 上下文
 │   ├── twepipeline/ twexpert/                 TWE 相关流水线/专家
 │   │                     ——④ 调查·事实层——
 │   ├── planner/          L3 Planner（含 actions/ 动作）；硬编码 rust.json / .rs
@@ -193,9 +192,8 @@ tee-usage-scanner/
 │
 ├── knowledge/            知识库（数据，非代码）
 │   ├── twe/
-│   │   ├── definitions/  taxonomy / catalog / exclusion / enum_registry（16 个 TWE）
-│   │   └── playbooks/    rollback.yml（目前仅 1 个 playbook，其余 15 待补）
-│   ├── sinks/rust.json   旧 sink catalog（唯一一份，无 c.json）
+│   │   ├── definitions/  taxonomy / catalog / exclusion / enum_registry（19 个 TWE）
+│   │   └── playbooks/    rollback.yml · flow.yml（2 个，其余 17 待补）
 │   ├── wiki/             obligations / patterns / apis / projects（领域文档）
 │   ├── learned/          true-positive / false-positive / review-memory（反馈闭环）
 │   └── raw/              cve / papers / sdk / prior-reviews（原始素材）
@@ -217,7 +215,7 @@ tee-usage-scanner/
 |---|---|---|
 | PR-00 | 仓库导入 · 资产三分 · Apache-2.0 许可 | ✅ 完成 |
 | PR-01 | 8 份契约 schema 绑定 Go + 校验 | ✅ 完成 |
-| PR-02 | 16 个 TWE 定义 + 事实词表搬迁 · token 预算硬上限 | ✅ 完成 |
+| PR-02 | 19 个 TWE 定义 + 事实词表搬迁 · token 预算硬上限 | ✅ 完成 |
 | PR-03 | ProjectProfile v2 · 加 OP-TEE / TF-M 指纹 | ✅ 完成 |
 | PR-04 | Architecture + Invariant Agent · citation 校验器 | ✅ 完成 |
 | spike | §23.7 C 事实表架构可行性 · CVE-2026-44362 differential | ✅ 通过 |
@@ -227,7 +225,7 @@ tee-usage-scanner/
 | PR-07 | 多 Agent 独立复核 · Challenger 两阶段隔离 | ✅ 完成 |
 | PR-08 | Finding v3 · SARIF · Review · Stats | ⬜ 未开始 |
 | PR-09 | Benchmark 门禁 · 需建 CodeQL DB · 首次真端到端 | ⬜ 未开始 |
-| PR-10 | 扩展其余 15 个 TWE + 退役旧旁路 | ⬜ 未开始 |
+| PR-10 | 扩展其余 TWE + 退役旧旁路 | 🟡 进行中：collab-run 与 legacy 分支已退役（2026-07-31），剩 `cmd/twescan` 一支 |
 
 **11 段里 8 段完成。** 地基与项目理解层完整，事实层与调查/复核层已实现并接入主流程。
 
@@ -248,11 +246,11 @@ tee-usage-scanner/
 
 主线骨架接通了，但离「一条完整可评测闭环」还有明确差距：
 
-- **只有 rollback 一个 TWE 切片贯通。** 七族里只有 STATE 有 CodeQL 查询，其余六族（Flow/Guard/Binding/Config/Design/Leakage）返回 unsupported；16 个 TWE 只有 1 个有 playbook。
-- **没建真 CodeQL DB、没端到端真跑过。** Heuristic 路径证明了主编排接通、理解层产出正常；LLM 全路径 + benchmark 门禁待 PR-09 建库才验。
+- **只有 rollback 一个 TWE 切片贯通。** 七族里只有 STATE 有 CodeQL 查询，其余六族（Flow/Guard/Binding/Config/Design/Leakage）返回 unsupported；19 个 TWE 只有 2 个有 playbook。
+- **已建真 CodeQL DB，LLM 全路径已端到端跑过。** 2026-07-29 装好 CodeQL，事实层实测 108 秒完成 clone→建库→查询→ToolFact；CVE-2026-44362 上漏洞版命中 1 条、修复版 0 条，差分成立。但 benchmark 门禁（PR-09）仍未建。
 - **LLM 标注质量未验。** 标注端代码写了、逻辑用 fake 测过，但「能不能在真代码上标对」要真模型 + 真代码树才知道。
 - **输出层未接。** Finding v3 / SARIF / Review / Stats（PR-08）还没接到用户可见输出。
-- **旧旁路仍在。** `twescan` / `querygen` 是「两套语义」里的旧那套，退役排在 PR-10。
+- **旧旁路只剩 `twescan`。** `collab-run`、legacy pipeline 分支与 `internal/{scanner,mapper,hotspots,repomap}` 已于 2026-07-31 退役；`cmd/twescan` 及其独占的 solver/twepipeline/twexpert 仍在。
 
 ---
 

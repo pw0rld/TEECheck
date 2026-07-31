@@ -90,7 +90,7 @@ directory and recorder are ready.
 | field    | meaning                              |
 |----------|--------------------------------------|
 | `target` | input target (URL or local path)     |
-| `mode`   | `llm` or `heuristic`                 |
+| `mode`   | always `llm`; the heuristic branch was removed 2026-07-24 |
 | `focus`  | focus area (`tee`, `auth`, ...)      |
 
 Example:
@@ -232,11 +232,11 @@ are covered exactly like the LLM-backed ones.
 
 Stage names, in the order the pipeline drives them:
 
-- always: `preprocess`, `architecture`, `invariants`, then …
-- `--mode llm`: `l3_planner`, `cases_enrich`
-- legacy mode: `scan`, `mapper`, `cases`, `repomix_enrich` (only when
-  repomix is on PATH — a stage that did not run emits nothing)
-- always: `expert`, `challenger`, `verifier`, `arbiter`
+- `preprocess`, `architecture`, `invariants`, `l3_planner`, `cases_enrich`,
+  `expert`, `challenger`, `verifier`, `arbiter`
+
+There is one path. The legacy branch (`scan`, `mapper`, `cases`,
+`repomix_enrich`) was removed on 2026-07-31 along with `--mode`.
 
 A failing stage still emits `stage_completed`, carrying the error. All
 events a stage produces (its `llm_call_*`, `tool_call_*`,

@@ -114,10 +114,9 @@ Kept here for context; each has its own code pointers.
 - **Dedupe is formatting-based, not semantic** — `isDuplicate` in `pipeline/dedupe.go`. `auth.rs::verify` and `auth.rs::init` count as different targets; a whole-file candidate (no symbols) is dropped by the `len==0` short-circuit.
 - **Snippet truncation has no downstream signal** — `formatSnippets` in `verifier/run.go`. 20k chars/snippet + 60k total cap; omitted snippets produce a text note but the memo has no `truncated` flag, so arbiter cannot tell partial-evidence memos from full-evidence memos.
 - **Bus construction duplicated in three places** — `buildStandaloneBus` and `buildCuratorBus` in `cmd/teecheck/main.go`, `buildPipelineBus` in `pipeline/run.go`. Silent divergence risk.
-- ~~**`collab-run` / `mapper` / `repomap` are dead code in L3 mode**~~ — `collab-run` was removed on 2026-07-31 (the April orchestrator, superseded by `pipeline.Run`; the non-LLM branch that made it reachable went with heuristic mode). `mapper` is NOT dead — `pipeline/run.go:268` calls it. `repomap` is still unreferenced by the pipeline and remains a candidate.
+- ~~**`collab-run` / `mapper` / `repomap` are dead code in L3 mode**~~ — resolved 2026-07-31. `collab-run` (the April orchestrator, superseded by `pipeline.Run`), the legacy pipeline branch, and `internal/{scanner,mapper,hotspots,repomap}` were all removed once the non-LLM branch that made them reachable went with heuristic mode.
 - **Provider abstraction is thinner than it looks** — `NewClient` / `NewAnthropicClient` in `internal/llm`. The Anthropic client actually targets GLM's Anthropic-compatible endpoint with `MaxTokens` hard-coded and the `anthropic-version` header pinned. Adding real Claude/GPT requires reworking this, not just flipping a config value.
 - **Obligations wiki has no size governance** — `LoadObligations` in `planner/obligations.go` concatenates all `.md` files verbatim into every planner round. 3 files today is fine; 50 entries × 300 bytes would add ~3.75k tokens per call with no cap, no pagination, no relevance filtering.
-- **Heuristic verifier corroborates by keyword** — `buildMemo` in `verifier/run.go` (non-LLM mode). Marks findings `corroborated` when any grep hit contains `todo`/`fixme`/`missing`. This is the default path unless `--mode llm` is set explicitly.
 
 ## Scope of this document
 
