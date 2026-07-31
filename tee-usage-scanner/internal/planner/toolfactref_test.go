@@ -176,3 +176,56 @@ func TestPlannerRun_ModelReportedToolFactRefIsNotDuplicated(t *testing.T) {
 		t.Fatalf("ToolFactRefs = %v, want exactly one entry (no duplicate)", refs)
 	}
 }
+
+// A ToolFact the pipeline collected before the loop started must reach the
+// investigation too. It is no less real for having been obtained without the
+// model asking — that is the entire point of collecting it deterministically.
+func TestPlannerRun_PrefetchedToolFactReachesTheInvestigation(t *testing.T) {
+	repoRoot, runDir := setupRollbackFixtureRepo(t)
+
+	factPath := filepath.Join(runDir, "02_tool_facts", "trustir", "prefetched.json")
+	if err := os.MkdirAll(filepath.Dir(factPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(factPath, []byte(`{"status":"success"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The model never calls fact_layer_query and reports no refs — the run
+	// that produced BUG-001 on the vulnerable side, exactly.
+	done := roundResponseWithDone(t, map[string]any{
+		"summary":    "no fact layer call this round",
+		"candidates": []map[string]any{},
+		"investigations": []map[string]any{{
+			"twe_ids": []string{"TWE-STATE-001"},
+			"filled_roles": map[string]any{
+				"claim_producer": map[string]any{"path": "core/crypto/signed_hdr.c", "start_line": 1, "symbol": "shdr_load_pub_key"},
+			},
+			"tool_fact_refs": []string{},
+		}},
+	})
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:                  "test-prefetch",
+		RepoRoot:               repoRoot,
+		RunDir:                 runDir,
+		Profile:                planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf"},
+		Client:                 &mockLLM{scripts: []string{done}},
+		Registry:               actions.NewDefaultRegistryWithNav(),
+		Budget:                 defaultTestBudget(),
+		PrefetchedToolFactRefs: []string{factPath},
+	})
+	if result.Err != nil {
+		t.Fatalf("unexpected error: %v", result.Err)
+	}
+	if len(result.Investigations) != 1 {
+		t.Fatalf("Investigations len = %d", len(result.Investigations))
+	}
+	refs := result.Investigations[0].ToolFactRefs
+	if len(refs) != 1 || refs[0] != factPath {
+		t.Fatalf("ToolFactRefs = %v, want [%s]", refs, factPath)
+	}
+	if len(result.CasePacks) != 1 || len(result.CasePacks[0].ToolFactRefs) != 1 {
+		t.Fatalf("the prefetched fact must reach the Case Pack the agents read: %+v", result.CasePacks)
+	}
+}

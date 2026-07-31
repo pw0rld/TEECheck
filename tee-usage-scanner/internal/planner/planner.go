@@ -88,6 +88,15 @@ type RunConfig struct {
 	Architecture *artifacts.ArchitectureModel
 	Invariants   []artifacts.ProjectInvariant
 
+	// PrefetchedToolFactRefs are ToolFacts the pipeline collected before this
+	// loop started, because the run's invariants called for them (see
+	// internal/pipeline's prefetchFactLayer). They are unioned into every
+	// investigation the loop reports, exactly like the refs the loop obtains
+	// itself: a fact is no less real for having been collected without the
+	// model asking. Whether an immutable fact exists must not depend on the
+	// model's choice.
+	PrefetchedToolFactRefs []string
+
 	// TWEPlaybooks maps a TWE ID to the playbook-derived context a Case
 	// Pack built for that TWE should carry (§24 "Case Pack 修改": common
 	// defenses / common false positives). A TWE ID with no entry here
@@ -607,7 +616,8 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		inv := investigations.Build(wire)
 		// Union before Validate so an executed ref is subject to the same
 		// on-disk resolution check as a model-reported one.
-		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
+		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs,
+			unionStrings(cfg.PrefetchedToolFactRefs, executedToolFactRefs))
 		inv, _ = investigations.Validate(inv, validationIn)
 
 		if cfg.RunDir != "" {

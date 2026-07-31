@@ -30,6 +30,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
 	scall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck/all"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twecontext"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
@@ -421,6 +422,13 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 
+	// Collect the deterministic evidence these invariants call for before the
+	// planner starts, rather than hoping it asks. See prefetch.go.
+	prefetched := prefetchFactLayer(context.Background(), eng, queryPackDir, runDir,
+		manifest.RepoURL, manifest.Commit, invs,
+		executor.Bind(exec, executor.Binding{RunID: manifest.RunID, Agent: "fact-prefetch"}),
+		trustirfacts.RunAndPersist)
+
 	samples := cfg.Samples
 	if samples <= 0 {
 		samples = 1
@@ -460,9 +468,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			// Project Understanding prior knowledge (§7.5): the planner
 			// investigates against these, and reaches the fact layer via
 			// the fact_layer_query action registered above.
-			TWEContext:   string(tweText),
-			Architecture: archPtr,
-			Invariants:   invs,
+			TWEContext:             string(tweText),
+			Architecture:           archPtr,
+			Invariants:             invs,
+			PrefetchedToolFactRefs: prefetched,
 			// §24 Case Pack: common_defenses / common_false_positives per
 			// TWE, consumed when a done.investigations entry builds a Case
 			// Pack for the Challenger (internal/challenger/phase1.go).
