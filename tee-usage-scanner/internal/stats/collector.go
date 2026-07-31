@@ -56,14 +56,14 @@ func Collect(runDir, repoRoot string) (*RunStats, error) {
 //
 // As of v1 infrastructure complete, the typical observed values are:
 //   - "events"    : a run where the planner is the only populated
-//                   stage (e.g. an interrupted run, or a unit-test
-//                   fixture) and that planner folded from events.jsonl
+//     stage (e.g. an interrupted run, or a unit-test
+//     fixture) and that planner folded from events.jsonl
 //   - "mixed"     : events.jsonl present, planner folded from it,
-//                   downstream stages (expert/challenger/verifier/
-//                   arbiter) still come from stage JSON. This is
-//                   the common case for end-to-end runs today.
+//     downstream stages (expert/challenger/verifier/
+//     arbiter) still come from stage JSON. This is
+//     the common case for end-to-end runs today.
 //   - "artifacts" : no events.jsonl available — legacy run from
-//                   before the events stream existed.
+//     before the events stream existed.
 //
 // "events" becomes the common case once the four audit agents are
 // also event-instrumented. Until then, the stage JSON path is

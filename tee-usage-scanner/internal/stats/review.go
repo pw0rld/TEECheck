@@ -145,12 +145,12 @@ func collectReview(runDir string) ReviewStats {
 
 // classifyCitationValidity determines the 5-bucket discriminator:
 //
-//   no_citations    — hypothesis carried no CitedFacts
-//   all_valid       — every validation entry is StatusValid
-//   partially_valid — at least one valid + at least one not
-//   unanchored      — none valid; all entries are StatusUnanchored
-//   unresolved      — none valid; mixed unresolved/stale or all
-//                     unresolved/stale (the worst-case bucket)
+//	no_citations    — hypothesis carried no CitedFacts
+//	all_valid       — every validation entry is StatusValid
+//	partially_valid — at least one valid + at least one not
+//	unanchored      — none valid; all entries are StatusUnanchored
+//	unresolved      — none valid; mixed unresolved/stale or all
+//	                  unresolved/stale (the worst-case bucket)
 //
 // The bucket is computed from VerificationMemo.ExpertCitationValidation
 // when present (V1.1.2+ memos). For pre-V1.1.2 memos that carry no

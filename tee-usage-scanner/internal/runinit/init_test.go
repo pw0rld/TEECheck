@@ -33,8 +33,6 @@ func TestRunCreatesManifestAndStageDirs(t *testing.T) {
 
 	for _, rel := range []string{
 		"01_profile",
-		"01_repo_map",
-		"02_hotspots",
 		"03_cases",
 		"04_expert",
 		"05_challenger",
@@ -44,6 +42,16 @@ func TestRunCreatesManifestAndStageDirs(t *testing.T) {
 	} {
 		if _, err := os.Stat(filepath.Join(runRoot, rel)); err != nil {
 			t.Fatalf("expected stage dir %s: %v", rel, err)
+		}
+	}
+
+	// 01_repo_map and 02_hotspots belong to the legacy scanner path, which
+	// only runs when --mode is not llm. Every run on disk has been llm mode
+	// and left both empty, so creating them unconditionally advertised two
+	// stages that never ran.
+	for _, rel := range []string{"01_repo_map", "02_hotspots"} {
+		if _, err := os.Stat(filepath.Join(runRoot, rel)); err == nil {
+			t.Errorf("%s must not be created: nothing in the llm path writes it", rel)
 		}
 	}
 

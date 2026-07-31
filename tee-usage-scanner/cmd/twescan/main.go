@@ -306,4 +306,3 @@ func readTWEFamily(oracleYaml string) (twe.Family, error) {
 	}
 	return twe.Family(o.TWEFamily), nil
 }
-

@@ -13,7 +13,7 @@ type fakeAdapter struct {
 	findings  []staticcheck.CheckFinding
 }
 
-func (f *fakeAdapter) Name() string   { return f.name }
+func (f *fakeAdapter) Name() string    { return f.name }
 func (f *fakeAdapter) Available() bool { return f.available }
 func (f *fakeAdapter) Run(_ context.Context, _ staticcheck.CheckRequest) ([]staticcheck.CheckFinding, error) {
 	return f.findings, nil

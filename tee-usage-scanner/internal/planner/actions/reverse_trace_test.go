@@ -37,11 +37,11 @@ func writeSourceFile(t *testing.T, dir, rel, content string) {
 
 // Helper: returns (repoRoot) with a known 3-level call chain:
 //
-//   attest.rs::target_fn     — the symbol being traced
-//     ↓ called by
-//   caller_a.rs::caller_a    — first-level caller
-//     ↓ called by
-//   caller_b.rs::caller_b    — second-level caller
+//	attest.rs::target_fn     — the symbol being traced
+//	  ↓ called by
+//	caller_a.rs::caller_a    — first-level caller
+//	  ↓ called by
+//	caller_b.rs::caller_b    — second-level caller
 //
 // Plus an unrelated.rs file to verify filtering.
 func setupCallChainFixture(t *testing.T) string {

@@ -43,7 +43,7 @@ func TestLocalExecutor_RecordsArgsAndOutputBlobs(t *testing.T) {
 
 	args := []string{"-c", "echo out-line; echo err-line >&2"}
 	res := exec.Run(context.Background(), Request{
-		RunID:   "r", Agent: "planner-001", Round: 1,
+		RunID: "r", Agent: "planner-001", Round: 1,
 		Name: "ripgrep", Command: "/bin/sh", Args: args,
 	})
 	if !res.OK {

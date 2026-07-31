@@ -21,18 +21,18 @@ import (
 // Event types. Stable strings — schema-breaking changes require a
 // schema version bump in docs/EVENT_SCHEMA.md.
 const (
-	TypeRunStarted             = "run_started"
-	TypeRunCompleted           = "run_completed"
-	TypePlannerRoundStarted    = "planner_round_started"
-	TypePlannerRoundCompleted  = "planner_round_completed"
-	TypeLLMCallStarted         = "llm_call_started"
-	TypeLLMCallCompleted       = "llm_call_completed"
-	TypeToolCallStarted        = "tool_call_started"
-	TypeToolCallCompleted      = "tool_call_completed"
-	TypeStageStarted           = "stage_started"
-	TypeStageCompleted         = "stage_completed"
-	TypeClaimEmitted           = "claim_emitted"
-	TypeValueNormalized        = "value_normalized"
+	TypeRunStarted            = "run_started"
+	TypeRunCompleted          = "run_completed"
+	TypePlannerRoundStarted   = "planner_round_started"
+	TypePlannerRoundCompleted = "planner_round_completed"
+	TypeLLMCallStarted        = "llm_call_started"
+	TypeLLMCallCompleted      = "llm_call_completed"
+	TypeToolCallStarted       = "tool_call_started"
+	TypeToolCallCompleted     = "tool_call_completed"
+	TypeStageStarted          = "stage_started"
+	TypeStageCompleted        = "stage_completed"
+	TypeClaimEmitted          = "claim_emitted"
+	TypeValueNormalized       = "value_normalized"
 )
 
 // Event is the single shape written to events.jsonl. Only fields

@@ -12,12 +12,12 @@ package artifacts
 //     NormalizeVerdict
 //   - new writes use the long names below
 const (
-	VerdictTruePositive     = "true_positive"
-	VerdictFalsePositive    = "false_positive"
-	VerdictNeedsContext     = "needs_context"
-	VerdictDesignRisk       = "design_risk"
-	VerdictNoIssueObserved  = "no_issue_observed"
-	VerdictSkip             = "skip"
+	VerdictTruePositive    = "true_positive"
+	VerdictFalsePositive   = "false_positive"
+	VerdictNeedsContext    = "needs_context"
+	VerdictDesignRisk      = "design_risk"
+	VerdictNoIssueObserved = "no_issue_observed"
+	VerdictSkip            = "skip"
 )
 
 // ReasonCode is a closed taxonomy explaining *why* a finding got the

@@ -202,42 +202,6 @@ func TestPipeline_FailingStageStillEmitsCompleted(t *testing.T) {
 	}
 }
 
-// TestPipeline_LegacyModeStagesRecorded: a legacy (non-llm) run deserves
-// the same record. Its stage set differs — scan/mapper/cases instead of
-// the planner — and every one of them is deterministic, i.e. exactly the
-// class that used to be invisible.
-func TestPipeline_LegacyModeStagesRecorded(t *testing.T) {
-	cfg := probeConfig(t, "heuristic")
-	fake := &llmtest.FakeClient{
-		Responses: []string{archWireJSON, invariantWireJSON},
-		Default:   invariantWireJSON,
-	}
-
-	runDir, err := pipeline.RunWithClient(cfg, fake)
-	if err != nil {
-		t.Fatalf("legacy pipeline run failed: %v", err)
-	}
-
-	byStage := stageIndex(readEvents(t, runDir))
-	for _, stage := range []string{"preprocess", "architecture", "invariants", "scan", "mapper", "cases", "expert", "challenger", "verifier", "arbiter"} {
-		evs := byStage[stage]
-		if len(evs) != 2 {
-			t.Errorf("legacy stage %q: %d stage_* events, want 2; saw %v",
-				stage, len(evs), stageNames(byStage))
-			continue
-		}
-		if evs[1].Reason != "completed" {
-			t.Errorf("legacy stage %q: Reason=%q want completed (error=%q)", stage, evs[1].Reason, evs[1].Error)
-		}
-	}
-	// The llm-only stages must not appear in a legacy run.
-	for _, stage := range []string{"l3_planner", "cases_enrich"} {
-		if len(byStage[stage]) != 0 {
-			t.Errorf("legacy run emitted %q stage events", stage)
-		}
-	}
-}
-
 func stageNames(m map[string][]events.Event) []string {
 	var out []string
 	for k := range m {

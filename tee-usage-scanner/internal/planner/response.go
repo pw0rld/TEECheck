@@ -11,8 +11,8 @@ import (
 // LLM each round. The system prompt (BuildSystemPrompt) instructs the
 // LLM to return exactly this shape.
 type LLMResponse struct {
-	Thought string                `json:"thought"`
-	Actions []LLMRequestedAction  `json:"actions"`
+	Thought string               `json:"thought"`
+	Actions []LLMRequestedAction `json:"actions"`
 }
 
 // LLMRequestedAction is one action the LLM wants to execute. Args is

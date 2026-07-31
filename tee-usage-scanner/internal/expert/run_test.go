@@ -88,9 +88,9 @@ func TestFlattenFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
 func TestFlattenFacts_SkipsUnresolvedEntriesInPool(t *testing.T) {
 	in := []citations.CitedFact{
 		{Text: "mixed", Cited: []citations.CitedBytes{
-			{File: "x.rs", StartLine: 1, EndLine: 1},                 // not resolved
+			{File: "x.rs", StartLine: 1, EndLine: 1}, // not resolved
 			{File: "x.rs", StartLine: 2, EndLine: 2, SHA256: "xyz",
-				StartByte: 0, EndByte: 1},                            // resolved
+				StartByte: 0, EndByte: 1}, // resolved
 		}},
 	}
 	_, pool := citations.FlattenFacts(in)

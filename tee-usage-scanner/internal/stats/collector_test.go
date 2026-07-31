@@ -491,11 +491,12 @@ func TestCollect_TypedCitationsWithoutRepoIsZero(t *testing.T) {
 // across two categories, three verdicts, two citation buckets.
 //
 // Expected:
-//   verdict_counts = {TP:1, FP:1, NC:1}
-//   total_labeled=3, candidate_labeled=3
-//   fp_rate_definitive = 1/(1+1) = 0.5
-//   fp_rate_reviewed   = 1/3 ≈ 0.333
-//   non_tp_rate_reviewed = (1+1)/3 ≈ 0.667
+//
+//	verdict_counts = {TP:1, FP:1, NC:1}
+//	total_labeled=3, candidate_labeled=3
+//	fp_rate_definitive = 1/(1+1) = 0.5
+//	fp_rate_reviewed   = 1/3 ≈ 0.333
+//	non_tp_rate_reviewed = (1+1)/3 ≈ 0.667
 func TestCollect_ReviewLabels(t *testing.T) {
 	dir := t.TempDir()
 	repo := t.TempDir()
@@ -743,12 +744,12 @@ func TestCollect_Review_OasisCoreFixture_JSONSnapshot(t *testing.T) {
 	memoStatuses := []struct {
 		statuses []string
 	}{
-		{[]string{citations.StatusValid}},                            // oc-ias       all_valid
-		{[]string{citations.StatusUnanchored}},                       // oc-policy    unanchored
-		{[]string{citations.StatusValid}},                            // oc-attest    all_valid
+		{[]string{citations.StatusValid}},                             // oc-ias       all_valid
+		{[]string{citations.StatusUnanchored}},                        // oc-policy    unanchored
+		{[]string{citations.StatusValid}},                             // oc-attest    all_valid
 		{[]string{citations.StatusValid, citations.StatusUnresolved}}, // oc-qbundle  partially_valid
-		{[]string{citations.StatusUnanchored}},                       // oc-dispatch  unanchored
-		{[]string{citations.StatusValid}},                            // oc-identity  all_valid
+		{[]string{citations.StatusUnanchored}},                        // oc-dispatch  unanchored
+		{[]string{citations.StatusValid}},                             // oc-identity  all_valid
 	}
 	for i, m := range memoStatuses {
 		var validations []citations.CitationValidation

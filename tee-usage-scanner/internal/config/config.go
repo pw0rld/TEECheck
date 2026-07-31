@@ -400,7 +400,6 @@ func parseReport(args []string) (Config, error) {
 		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
-	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Report mode (synthesized via LLM)")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
@@ -471,7 +470,6 @@ func parseRun(args []string) (Config, error) {
 		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:         1,
 	}
-	fs.StringVar(&cfg.Mode, "mode", cfg.Mode, "Pipeline mode: llm / L3 planner (default) or legacy scanner")
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
@@ -565,7 +563,7 @@ func parsePlan(args []string) (Config, error) {
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--mode llm|legacy] [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateProviderConfig(cfg Config, context string) error {

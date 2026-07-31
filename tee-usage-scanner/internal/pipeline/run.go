@@ -22,16 +22,12 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/invariants"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner"
-	scanall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner/all"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
 	scall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck/all"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twecontext"
@@ -223,64 +219,20 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
-	if strings.EqualFold(cfg.Mode, "llm") {
-		// === Agent 1: L3 Planner ===
-		fmt.Println("\n=== Planner Agent (L3) ===")
-		// The planner gets the RAW client, not forAgent(...): it already
-		// emits its own llm_call_started/completed pair and writes its
-		// own prompt/response blobs, and its events carry a real Round
-		// number the decorator cannot know. Wrapping it would duplicate
-		// every planner event and every planner blob reference.
-		if err := stage("l3_planner", func() error {
-			return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
-		}); err != nil {
-			return runDir, fmt.Errorf("L3 planner: %w", err)
-		}
-		if err := stage("cases_enrich", func() error { return cases.Enrich(stageCfg) }); err != nil {
-			return runDir, fmt.Errorf("cases enrich: %w", err)
-		}
-	} else {
-		// === Agent 1: Legacy Scanner ===
-		// A legacy run gets the same stage record as an llm run: these
-		// stages are all deterministic, i.e. exactly the class that
-		// left no trace at all before stage events existed.
-		fmt.Println("\n=== Scanner Agent ===")
-		var graphResult scanner.GraphResult
-		if err := stage("scan", func() error {
-			graphReg := scanall.NewDefaultGraphRegistry()
-			var scanErr error
-			graphResult, scanErr = scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
-				RepoRoot: fetch.LocalPath,
-				Focus:    cfg.Focus,
-				Mode:     cfg.Mode,
-			})
-			return scanErr
-		}); err != nil {
-			return "", fmt.Errorf("scan: %w", err)
-		}
-		graphPath := runfs.GraphPath(runDir)
-		if err := runfs.WriteJSON(graphPath, graphResult); err != nil {
-			return "", fmt.Errorf("write graph: %w", err)
-		}
-		fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
-		stageCfg.GraphJSONPath = graphPath
-
-		if err := stage("mapper", func() error { return mapper.Run(stageCfg) }); err != nil {
-			return "", fmt.Errorf("mapper: %w", err)
-		}
-		if err := stage("cases", func() error { return cases.Run(stageCfg) }); err != nil {
-			return "", fmt.Errorf("cases: %w", err)
-		}
-		if repomix.Available() {
-			_ = stage("repomix_enrich", func() error {
-				// No agent owns this deterministic enrichment pass, so
-				// the binding names the stage it runs as — which is what
-				// makes the resulting tool_call_* attributable at all.
-				enrichCasesWithRepomix(runDir, fetch.LocalPath, executor.Bind(exec,
-					executor.Binding{RunID: runID, Agent: "repomix-enrich"}))
-				return nil
-			})
-		}
+	// === Agent 1: L3 Planner ===
+	fmt.Println("\n=== Planner Agent (L3) ===")
+	// The planner gets the RAW client, not forAgent(...): it already
+	// emits its own llm_call_started/completed pair and writes its
+	// own prompt/response blobs, and its events carry a real Round
+	// number the decorator cannot know. Wrapping it would duplicate
+	// every planner event and every planner blob reference.
+	if err := stage("l3_planner", func() error {
+		return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
+	}); err != nil {
+		return runDir, fmt.Errorf("L3 planner: %w", err)
+	}
+	if err := stage("cases_enrich", func() error { return cases.Enrich(stageCfg) }); err != nil {
+		return runDir, fmt.Errorf("cases enrich: %w", err)
 	}
 
 	// Agent role identities (V1.1.2 polish C4): each stage's
@@ -404,7 +356,7 @@ func truncate(s string, n int) string {
 // downstream chain (cases.Enrich -> expert -> challenger -> verifier ->
 // arbiter) consumes the planner's output directly.
 //
-// Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
+// Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
 func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
@@ -647,50 +599,4 @@ func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
 // detect "this pass added nothing new so stop".
 func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
 	return len(DedupeCandidates(bundles))
-}
-
-func enrichCasesWithRepomix(runDir, repoRoot string, exec executor.Executor) {
-	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
-	if err != nil || len(casePaths) == 0 {
-		return
-	}
-
-	for _, casePath := range casePaths {
-		var pack artifacts.CasePack
-		if err := runfs.ReadJSON(casePath, &pack); err != nil {
-			continue
-		}
-		if len(pack.TargetFiles) == 0 {
-			continue
-		}
-
-		result, err := repomix.Pack(context.Background(), repomix.PackRequest{
-			RepoRoot:    repoRoot,
-			TargetFiles: pack.TargetFiles,
-			Compress:    true,
-			Exec:        exec,
-		})
-		if err != nil {
-			fmt.Printf("Warning: repomix failed for %s: %v\n", pack.CaseID, err)
-			continue
-		}
-
-		// Add repomix content as snippets
-		for path, content := range result.Files {
-			if content == "" {
-				continue
-			}
-			pack.Snippets = append(pack.Snippets, artifacts.PromptSnippet{
-				Path:      path,
-				StartLine: 1,
-				EndLine:   strings.Count(content, "\n") + 1,
-				Content:   content,
-			})
-		}
-
-		if err := runfs.WriteJSON(casePath, pack); err != nil {
-			fmt.Printf("Warning: failed to update case %s: %v\n", pack.CaseID, err)
-		}
-	}
-	fmt.Printf("Enriched %d case pack(s) with Repomix compressed code context\n", len(casePaths))
 }

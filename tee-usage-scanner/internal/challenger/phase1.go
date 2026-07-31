@@ -181,4 +181,3 @@ func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter
 // ChallengerIndependentView so it travels with the artifact rather
 // than living only in a doc comment.
 const knownIndependenceLimitation = "phase-1 ToolFacts were selected by the Expert/Planner's earlier investigation; this is independence of conclusion, not independence of evidence selection (§7.7)"
-
