@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
@@ -25,6 +26,10 @@ import (
 // collide.
 func Persist(runDir string, fact artifacts.ToolFact) (string, error) {
 	path := runfs.TrustIRToolFactPath(runDir, fact.FactID)
+	// Always absolute: see the note above on validateToolFactRefs.
+	if abs, aerr := filepath.Abs(path); aerr == nil {
+		path = abs
+	}
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}

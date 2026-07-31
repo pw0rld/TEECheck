@@ -108,3 +108,45 @@ func TestPersist_CreatesToolFactsDir(t *testing.T) {
 		t.Errorf("expected TrustIRToolFactsDir to exist: %v", err)
 	}
 }
+
+// Persist must return an absolute path even when RunDir is relative.
+//
+// internal/investigations' validateToolFactRefs resolves a relative ref
+// against the REPO root, not the run dir — its doc comment says refs "are
+// expected to be the absolute path RunAndPersist / Persist returned". When
+// the pipeline is invoked with the default --output-dir of "runs", RunDir is
+// relative, so the ref came back relative, was joined onto the scanned
+// repository's path, did not exist there, and was silently dropped. The
+// 2026-07-31 vulnerable-side run collected the correct ToolFact —
+// signed_hdr.c:262 — and delivered it to nobody.
+func TestPersist_ReturnsAbsolutePathForRelativeRunDir(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	fact := artifacts.ToolFact{
+		SchemaVersion: artifacts.SchemaVersionToolFactV1,
+		FactID:        "trustir-cpp-test-abs",
+		Tool:          "trustir-cpp",
+		Operation:     string(OperationRollbackVersionPropagation),
+		RepoCommit:    "deadbeef",
+		Status:        StatusSuccess,
+	}
+	path, err := Persist("runs/relative-run", fact)
+	if err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("Persist returned %q; a relative ref is resolved against the repo root by "+
+			"investigations.validateToolFactRefs and silently dropped", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("returned path must resolve: %v", err)
+	}
+}
