@@ -9,7 +9,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/arbiter"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/collabrun"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/feedback"
@@ -47,12 +46,6 @@ func main() {
 	switch cfg.Command {
 	case "knowledge-init":
 		err = knowledge.RunInit(cfg)
-	case "collab-run":
-		var runPath string
-		runPath, err = collabrun.Run(cfg, time.Now())
-		if err == nil {
-			fmt.Printf("Collaborative run completed at %s\n", runPath)
-		}
 	case "init-run":
 		var runPath string
 		runPath, err = runinit.Run(cfg, time.Now())

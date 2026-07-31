@@ -191,7 +191,6 @@ teecheck curator --run-dir runs/<run-id> --mode llm \
 The original fine-grained commands still work:
 
 ```bash
-teecheck collab-run ...    # 6-stage serial pipeline
 teecheck knowledge-init    # Initialize knowledge directories
 teecheck preprocess ...    # Project profiling only
 teecheck mapper ...        # Repo mapping only
