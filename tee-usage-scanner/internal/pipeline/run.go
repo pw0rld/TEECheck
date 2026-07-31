@@ -253,6 +253,11 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	fmt.Println("\n=== Reviewer Agent ===")
 
 	bus := buildPipelineBus(cfg, forAgent)
+	// Refused inter-agent queries become events. Without this the arbiter's
+	// own stated reason for capping a finding at needs_review — "follow-up
+	// queries failed (agents unavailable)" — appears nowhere in the run
+	// record; it survived only inside an LLM prompt blob.
+	bus.SetRecorder(rec, runID)
 
 	// Bus tool registrations stay under TOOL identities; they
 	// represent capability endpoints (a static-check tool, a

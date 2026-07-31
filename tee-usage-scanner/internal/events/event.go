@@ -33,6 +33,7 @@ const (
 	TypeStageCompleted        = "stage_completed"
 	TypeClaimEmitted          = "claim_emitted"
 	TypeValueNormalized       = "value_normalized"
+	TypeBusQueryFailed        = "bus_query_failed"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -109,6 +110,14 @@ type Event struct {
 	ClaimID string                 `json:"claim_id,omitempty"`
 	Claim   string                 `json:"claim,omitempty"`
 	Cited   []citations.CitedBytes `json:"cited,omitempty"`
+
+	// bus_query_failed. Agent (above) is the asking end; ToAgent is the
+	// name it asked for. A refused inter-agent query used to reach the
+	// model as one line of prose and leave no trace at all — across six
+	// runs 72 of them were refused, every one invisible here, while the
+	// arbiter cited exactly those failures as its reason for capping a
+	// finding at needs_review.
+	ToAgent string `json:"to_agent,omitempty"`
 
 	// value_normalized. Reason (above) carries the explanation; these
 	// three carry the part a reader cannot reconstruct from prose —
@@ -297,6 +306,21 @@ func ClaimEmitted(runID, agent, caseID, claimID, claim string, cited []citations
 // trace. The artifact said "theoretical" and nothing anywhere recorded
 // that the model had said "high". Any stage that rewrites model output
 // should emit this rather than rewriting silently.
+// BusQueryFailed records an inter-agent query that was not answered —
+// because the target is not registered, or because its handler errored.
+// Both are refusals from the asking agent's point of view, and a registered
+// but broken agent must not be more invisible than an unregistered one.
+func BusQueryFailed(runID, fromAgent, toAgent, caseID, reason string) Event {
+	return Event{
+		Type:    TypeBusQueryFailed,
+		RunID:   runID,
+		Agent:   fromAgent,
+		ToAgent: toAgent,
+		CaseID:  caseID,
+		Reason:  reason,
+	}
+}
+
 func ValueNormalized(runID, agent, caseID, field, from, to, reason string) Event {
 	return Event{
 		Type:      TypeValueNormalized,

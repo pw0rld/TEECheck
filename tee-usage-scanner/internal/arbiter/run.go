@@ -302,6 +302,18 @@ citation-validated. Validated items are the basis for any
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))
 	systemPrompt = fmt.Sprintf(systemPrompt, complete)
 
+	// to_agent is a closed vocabulary. The schema line above names the field
+	// but never the legal values, so the model could only guess — across six
+	// runs it guessed 72 times and was answered zero times, inventing
+	// "fact-layer", "Investigator" and "CryptoAnalyzer", and missing the
+	// registered expert-001 by writing "Expert". Appended after the Sprintf
+	// so the agent list needs no placeholder in the format string.
+	if names := bus.Names(); len(names) > 0 {
+		systemPrompt += "\n\nto_agent MUST be exactly one of: " + strings.Join(names, ", ") +
+			". Any other value is refused and the query is lost — there is no fact layer, " +
+			"investigator or shell tool reachable this way."
+	}
+
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
 	for round := 0; round < bus.MaxRounds()+1; round++ {
