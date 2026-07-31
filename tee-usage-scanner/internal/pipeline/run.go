@@ -22,18 +22,15 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/invariants"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner"
-	scanall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/scanner/all"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
 	scall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck/all"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twecontext"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
@@ -62,6 +59,38 @@ func resolveRepoIdentity(cfg config.Config, fetch repofetch.FetchResult) (repoUR
 
 func Run(cfg config.Config) (string, error) {
 	return RunWithClient(cfg, llm.NewClient(cfg))
+}
+
+// runStage brackets one pipeline stage with a stage_started /
+// stage_completed pair and returns the stage's error untouched.
+//
+// This is the wiring seam for stage-level instrumentation, chosen for
+// the same reason the LLM recording decorator wraps llm.Client: the
+// pipeline already calls every stage, so wrapping the calls here
+// instruments all of them — including the deterministic ones that make
+// no LLM call and therefore used to leave no trace whatsoever — without
+// editing a single stage package.
+//
+// The completed event fires on every path, failure included. A stream
+// that goes silent when a stage dies is the case where the record
+// matters most: it is the only thing that says which stage killed the
+// run and what it said on the way out.
+//
+// Emission is best-effort; a recorder that cannot write must not be the
+// reason a stage does not run, so a nil recorder is tolerated.
+func runStage(rec events.Recorder, runID, stage string, fn func() error) error {
+	if rec == nil {
+		return fn()
+	}
+	_ = rec.Emit(events.StageStarted(runID, stage))
+	start := time.Now()
+	err := fn()
+	reason, errMsg := "completed", ""
+	if err != nil {
+		reason, errMsg = "error", err.Error()
+	}
+	_ = rec.Emit(events.StageCompleted(runID, stage, reason, time.Since(start).Milliseconds(), errMsg))
+	return err
 }
 
 func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err error) {
@@ -122,7 +151,50 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		_ = rec.Close()
 	}()
 
-	if err := preprocessor.Run(stageCfg); err != nil {
+	// forAgent wraps the injected client so every Generate call a stage
+	// makes leaves an llm_call_started / llm_call_completed pair in
+	// events.jsonl, with the full prompt and response bodies in blobs/.
+	//
+	// This is the wiring seam: agents receive their llm.Client by
+	// injection and llm.Client has a single method, so decorating the
+	// client here instruments all of them without touching a single
+	// Generate call site. Before this, only the planner recorded
+	// anything, and a stage that died on a malformed reply left nothing
+	// but a truncated excerpt inside an error string.
+	//
+	// The planner is deliberately NOT wrapped below — see runL3Planner's
+	// call site.
+	forAgent := func(agentID string) llm.Client {
+		return llm.NewRecordingClient(client, llm.RecordingOptions{
+			RunID:   runID,
+			AgentID: agentID,
+			Model:   cfg.LLMModel,
+			Blobs:   blobs,
+			Events:  rec,
+		})
+	}
+
+	// stage brackets a pipeline stage with stage_started /
+	// stage_completed. See runStage for why the seam lives here.
+	stage := func(name string, fn func() error) error {
+		return runStage(rec, runID, name, fn)
+	}
+
+	// The recording executor is constructed once and shared by every
+	// subprocess-class tool in the run: the planner's own actions, the
+	// semgrep adapter behind the scanner bus tool, the CodeQL fact
+	// engine, the git clone the fact layer does to build a database, and
+	// the repomix enrichment pass. Recorder + blob store are the same
+	// instances every other emitter uses, so all tool_call_* events land
+	// in the same events.jsonl under the same correlation ids.
+	//
+	// executor.Bind attaches the agent identity at each wiring site,
+	// because the packages themselves know which command they run but not
+	// which stage is running it — and a tool_call_completed that cannot
+	// be traced to a stage is noise.
+	exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
+
+	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
 
@@ -136,56 +208,31 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// (architecture/invariants/expert/... ) rather than each stage
 	// constructing its own. Run() supplies the production client via
 	// RunWithClient; tests inject a fake.
-	if err := architecture.Run(stageCfg, client); err != nil {
+	if err := stage("architecture", func() error {
+		return architecture.Run(stageCfg, forAgent("architecture-001"))
+	}); err != nil {
 		return runDir, fmt.Errorf("architecture: %w", err)
 	}
-	if err := invariants.Run(stageCfg, client); err != nil {
+	if err := stage("invariants", func() error {
+		return invariants.Run(stageCfg, forAgent("invariants-001"))
+	}); err != nil {
 		return runDir, fmt.Errorf("invariants: %w", err)
 	}
 
-	if strings.EqualFold(cfg.Mode, "llm") {
-		// === Agent 1: L3 Planner ===
-		fmt.Println("\n=== Planner Agent (L3) ===")
-		// LocalExecutor is constructed once and shared with the
-		// planner via runL3Planner. Recorder + blob store are the
-		// same instances the planner uses for its in-process
-		// events, so all subprocess tool_call_* events land in the
-		// same events.jsonl with the same correlation ids.
-		exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
-		if err := runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec); err != nil {
-			return runDir, fmt.Errorf("L3 planner: %w", err)
-		}
-		if err := cases.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("cases: %w", err)
-		}
-	} else {
-		// === Agent 1: Legacy Scanner ===
-		fmt.Println("\n=== Scanner Agent ===")
-		graphReg := scanall.NewDefaultGraphRegistry()
-		graphResult, err := scanner.Scan(context.Background(), graphReg, scanner.ScanRequest{
-			RepoRoot: fetch.LocalPath,
-			Focus:    cfg.Focus,
-			Mode:     cfg.Mode,
-		})
-		if err != nil {
-			return "", fmt.Errorf("scan: %w", err)
-		}
-		graphPath := runfs.GraphPath(runDir)
-		if err := runfs.WriteJSON(graphPath, graphResult); err != nil {
-			return "", fmt.Errorf("write graph: %w", err)
-		}
-		fmt.Printf("Graph generated: %d nodes, %d edges\n", len(graphResult.Nodes), len(graphResult.Edges))
-		stageCfg.GraphJSONPath = graphPath
-
-		if err := mapper.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("mapper: %w", err)
-		}
-		if err := cases.Run(stageCfg); err != nil {
-			return "", fmt.Errorf("cases: %w", err)
-		}
-		if repomix.Available() {
-			enrichCasesWithRepomix(runDir, fetch.LocalPath)
-		}
+	// === Agent 1: L3 Planner ===
+	fmt.Println("\n=== Planner Agent (L3) ===")
+	// The planner gets the RAW client, not forAgent(...): it already
+	// emits its own llm_call_started/completed pair and writes its
+	// own prompt/response blobs, and its events carry a real Round
+	// number the decorator cannot know. Wrapping it would duplicate
+	// every planner event and every planner blob reference.
+	if err := stage("l3_planner", func() error {
+		return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
+	}); err != nil {
+		return runDir, fmt.Errorf("L3 planner: %w", err)
+	}
+	if err := stage("cases_enrich", func() error { return cases.Enrich(stageCfg) }); err != nil {
+		return runDir, fmt.Errorf("cases enrich: %w", err)
 	}
 
 	// Agent role identities (V1.1.2 polish C4): each stage's
@@ -196,20 +243,27 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// carry the correct semantic label, which downstream consumers
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
-	if err := expert.RunWithEvents(stageCfg, client, rec, blobs); err != nil {
+	if err := stage("expert", func() error {
+		return expert.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec, blobs)
+	}); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
 
 	// === Agent 2: Reviewer ===
 	fmt.Println("\n=== Reviewer Agent ===")
 
-	bus := buildPipelineBus(cfg, client)
+	bus := buildPipelineBus(cfg, forAgent)
 
 	// Bus tool registrations stay under TOOL identities; they
 	// represent capability endpoints (a static-check tool, a
 	// reviewer tool, an auditor tool), not agent roles. Other
 	// agents call into these tools via the bus by name.
-	scReg := scall.NewDefaultRegistry()
+	// The semgrep adapter inside this registry shells out. Binding it to
+	// scanner-001 matches the bus identity the handler is registered
+	// under directly below, so a semgrep tool_call lands under the same
+	// agent as the query that provoked it.
+	scReg := scall.NewDefaultRegistryWithExecutor(executor.Bind(exec,
+		executor.Binding{RunID: runID, Agent: "scanner-001"}))
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
 		req := staticcheck.CheckRequest{
 			RepoRoot: fetch.LocalPath,
@@ -232,18 +286,24 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	}))
 
 	stageCfg.AgentID = "challenger-001"
-	if err := challenger.Run(stageCfg, client); err != nil {
+	if err := stage("challenger", func() error {
+		return challenger.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec)
+	}); err != nil {
 		return runDir, fmt.Errorf("challenger: %w", err)
 	}
 	stageCfg.AgentID = "verifier-001"
-	if err := verifier.RunWithBusAndEvents(stageCfg, client, bus, rec); err != nil {
+	if err := stage("verifier", func() error {
+		return verifier.RunWithBusAndEvents(stageCfg, forAgent(stageCfg.AgentID), bus, rec)
+	}); err != nil {
 		return runDir, fmt.Errorf("verifier: %w", err)
 	}
 
 	// === Agent 3: Auditor ===
 	fmt.Println("\n=== Auditor Agent ===")
 	stageCfg.AgentID = "arbiter-001"
-	if err := arbiter.RunWithBus(stageCfg, client, bus); err != nil {
+	if err := stage("arbiter", func() error {
+		return arbiter.RunWithBus(stageCfg, forAgent(stageCfg.AgentID), bus)
+	}); err != nil {
 		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
 
@@ -259,20 +319,24 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	return runDir, nil
 }
 
-func buildPipelineBus(cfg config.Config, client llm.Client) *agentbus.Bus {
+// buildPipelineBus registers the bus-facing LLM handlers. forAgent yields
+// the client each handler should use: a bus handler answering as
+// expert-001 must record its calls under expert-001, not under whichever
+// stage happened to send the query.
+func buildPipelineBus(cfg config.Config, forAgent func(agentID string) llm.Client) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
 
-	bus.Register("expert-001", agentbus.NewLLMHandler(client,
+	bus.Register("expert-001", agentbus.NewLLMHandler(forAgent("expert-001"),
 		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
-	bus.Register("challenger-001", agentbus.NewLLMHandler(client,
+	bus.Register("challenger-001", agentbus.NewLLMHandler(forAgent("challenger-001"),
 		"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
-	bus.Register("reviewer-001", agentbus.NewLLMHandler(client,
+	bus.Register("reviewer-001", agentbus.NewLLMHandler(forAgent("reviewer-001"),
 		"You are the Reviewer Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
 		cfg.LLMTemp))
 
@@ -286,13 +350,13 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-// runL3Planner drives the L3 LLM planner against a cloned repo,
-// persists its evidence bundle + rounds log, and writes a hotspot /
-// repo_map shim so the downstream 4-agent chain (cases -> expert ->
-// challenger -> verifier -> arbiter) consumes the planner's candidates
-// unchanged.
+// runL3Planner drives the L3 LLM planner against a cloned repo (once per
+// --samples pass), persists its evidence bundle + rounds log, and writes
+// the deduped, --max-cases-capped Case Packs to 03_cases/case-*.json so the
+// downstream chain (cases.Enrich -> expert -> challenger -> verifier ->
+// arbiter) consumes the planner's output directly.
 //
-// Invoked by pipeline.Run when cfg.Mode == "llm" (M4: planner is the
+// Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
 func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
@@ -315,9 +379,28 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// is only consumed once a database is actually built (PR-09); until
 	// then no query runs, so a wrong guess degrades to unresolved, not a
 	// crash.
-	eng := codeql.New()
+	eng := newFactEngine(exec, manifest.RunID)
 	queryPackDir := filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
-	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir)
+
+	// The playbook catalog backs the twe_playbook_detail action. A knowledge
+	// root without a playbook directory is tolerated (preprocess applies the
+	// same policy): the action then fails per call instead of the run failing.
+	var playbooks actions.PlaybookDetailSource
+	var tweCatalog *twecontext.Catalog
+	if cat, cerr := twecontext.Load(filepath.Join(cfg.KnowledgeRoot, "twe", "playbooks")); cerr == nil {
+		playbooks = cat
+		tweCatalog = cat
+	} else {
+		fmt.Printf("Warning: TWE playbook catalog not loaded (%v); twe_playbook_detail will report no catalog\n", cerr)
+	}
+	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir, playbooks)
+
+	// Case Packs render a TWE's common_defenses / common_false_positives
+	// from this map (§24) — the Challenger's phase-1 instructions rely on
+	// those fields being sourced. See buildTWEPlaybookSummaries' doc
+	// comment for why this conversion lives here rather than in
+	// internal/planner.
+	twePlaybooks := buildTWEPlaybookSummaries(tweCatalog)
 
 	// Project Understanding artifacts produced earlier in the pipeline.
 	// Read tolerantly: a run whose architecture/invariant stage produced
@@ -347,6 +430,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	}
 
 	var bundles []*artifacts.EvidenceBundle
+	var allPacks []artifacts.CasePack
 	var avoid []string
 
 	for pass := 1; pass <= samples; pass++ {
@@ -374,6 +458,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			TWEContext:   string(tweText),
 			Architecture: archPtr,
 			Invariants:   invs,
+			// §24 Case Pack: common_defenses / common_false_positives per
+			// TWE, consumed when a done.investigations entry builds a Case
+			// Pack for the Challenger (internal/challenger/phase1.go).
+			TWEPlaybooks: twePlaybooks,
 		})
 
 		if result.Bundle != nil {
@@ -400,6 +488,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			break
 		}
 		bundles = append(bundles, result.Bundle)
+		// Case Packs accumulate across passes and are deduped, capped and
+		// written once after the loop. Writing per pass would renumber
+		// case-*.json from 001 each time and splice the passes together.
+		allPacks = append(allPacks, result.CasePacks...)
 
 		// Persist per-pass bundle when running multi-sample so the
 		// stats collector can later replay pass-by-pass metrics.
@@ -456,9 +548,50 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		return fmt.Errorf("write merged evidence bundle: %w", err)
 	}
 
-	// Convert merged evidence_bundle candidates into the legacy
-	// HotspotIndex + RepoMap shapes the downstream pipeline expects.
-	return planner.WriteHotspotShim(cfg, &merged)
+	// Case Packs are written exactly once, here, from the union of every
+	// pass. planner.Run deliberately writes nothing to 03_cases/ — it is
+	// called once per --samples pass, so a per-pass write would restart the
+	// case-%03d numbering each time and leave an earlier pass's
+	// higher-numbered files orphaned among the current pass's.
+	//
+	// Dedupe first, cap second: capping a list that still holds duplicates
+	// would let the same finding consume two of the --max-cases slots. The
+	// legacy HotspotIndex + RepoMap shim that used to run at this point is
+	// gone — downstream consumes these packs directly instead of
+	// re-deriving them from a synthesized 02_hotspots/01_repo_map pair.
+	final := planner.DedupePacks(allPacks)
+	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
+		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
+		final = final[:cfg.MaxCases]
+	}
+	if err := planner.Write(runDir, final); err != nil {
+		return fmt.Errorf("write case packs: %w", err)
+	}
+	fmt.Printf("Wrote %d case pack(s) to %s\n", len(final), runfs.CasePacksDir(runDir))
+	return nil
+}
+
+// newFactEngine builds the CodeQL engine the fact-layer action uses, with
+// both of its subprocesses (database create, database analyze) routed
+// through the run's recording executor.
+//
+// It is a named function rather than two inline lines so the wiring has
+// something a test can hold: neither codeql nor semgrep is installed in
+// this project's CI image, so an end-to-end assertion on a real CodeQL
+// event is not available, and the wiring would otherwise be checked by
+// nothing but the compiler.
+//
+// The Engine outlives any single planner round, so the binding carries the
+// run and the planner's agent id; per-round identity travels separately on
+// the git calls the fact layer makes, which are bound from the
+// ActionRequest that asked for them.
+func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
+	eng := codeql.New()
+	eng.Exec = executor.Bind(exec, executor.Binding{
+		RunID: runID,
+		Agent: planner.DefaultPlannerAgentID,
+	})
+	return eng
 }
 
 // accumulatedLen returns how many unique candidates the dedupe
@@ -466,49 +599,4 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 // detect "this pass added nothing new so stop".
 func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
 	return len(DedupeCandidates(bundles))
-}
-
-func enrichCasesWithRepomix(runDir, repoRoot string) {
-	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(runDir), "case-*.json"))
-	if err != nil || len(casePaths) == 0 {
-		return
-	}
-
-	for _, casePath := range casePaths {
-		var pack artifacts.CasePack
-		if err := runfs.ReadJSON(casePath, &pack); err != nil {
-			continue
-		}
-		if len(pack.TargetFiles) == 0 {
-			continue
-		}
-
-		result, err := repomix.Pack(context.Background(), repomix.PackRequest{
-			RepoRoot:    repoRoot,
-			TargetFiles: pack.TargetFiles,
-			Compress:    true,
-		})
-		if err != nil {
-			fmt.Printf("Warning: repomix failed for %s: %v\n", pack.CaseID, err)
-			continue
-		}
-
-		// Add repomix content as snippets
-		for path, content := range result.Files {
-			if content == "" {
-				continue
-			}
-			pack.Snippets = append(pack.Snippets, artifacts.PromptSnippet{
-				Path:      path,
-				StartLine: 1,
-				EndLine:   strings.Count(content, "\n") + 1,
-				Content:   content,
-			})
-		}
-
-		if err := runfs.WriteJSON(casePath, pack); err != nil {
-			fmt.Printf("Warning: failed to update case %s: %v\n", pack.CaseID, err)
-		}
-	}
-	fmt.Printf("Enriched %d case pack(s) with Repomix compressed code context\n", len(casePaths))
 }

@@ -24,8 +24,6 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 	runRoot := filepath.Join(cfg.OutputDir, runID)
 	stageDirs := []string{
 		filepath.Join(runRoot, "01_profile"),
-		filepath.Join(runRoot, "01_repo_map"),
-		filepath.Join(runRoot, "02_hotspots"),
 		filepath.Join(runRoot, "03_cases"),
 		filepath.Join(runRoot, "04_expert"),
 		filepath.Join(runRoot, "05_challenger"),

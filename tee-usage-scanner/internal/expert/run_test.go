@@ -88,9 +88,9 @@ func TestFlattenFacts_OnlyValidatedTextEntersSupporting(t *testing.T) {
 func TestFlattenFacts_SkipsUnresolvedEntriesInPool(t *testing.T) {
 	in := []citations.CitedFact{
 		{Text: "mixed", Cited: []citations.CitedBytes{
-			{File: "x.rs", StartLine: 1, EndLine: 1},                 // not resolved
+			{File: "x.rs", StartLine: 1, EndLine: 1}, // not resolved
 			{File: "x.rs", StartLine: 2, EndLine: 2, SHA256: "xyz",
-				StartByte: 0, EndByte: 1},                            // resolved
+				StartByte: 0, EndByte: 1}, // resolved
 		}},
 	}
 	_, pool := citations.FlattenFacts(in)
@@ -213,6 +213,102 @@ func TestBuildHypothesisLLM_PopulatesCitedFactsAndFlattens(t *testing.T) {
 	// Prompt actually instructed the model to produce cited_facts.
 	if !strings.Contains(stub.gotRequest.Messages[0].Content, "cited_facts") {
 		t.Error("user prompt did not request cited_facts")
+	}
+}
+
+// ─── Investigation knowledge reaches the prompt (2026-07-28) ────────
+
+// sectionBody returns the text under the prompt section whose header
+// starts with headerPrefix, up to the next blank line. Asserting on the
+// section BODY (rather than on "the prompt contains the string
+// somewhere") is what makes the empty case checkable: a header with
+// nothing under it fails here, a header with "(none)" passes.
+func sectionBody(t *testing.T, prompt, headerPrefix string) string {
+	t.Helper()
+	i := strings.Index(prompt, headerPrefix)
+	if i < 0 {
+		t.Fatalf("prompt has no section starting %q:\n%s", headerPrefix, prompt)
+	}
+	rest := prompt[i:]
+	nl := strings.Index(rest, "\n")
+	if nl < 0 {
+		t.Fatalf("section %q has no body at all:\n%s", headerPrefix, prompt)
+	}
+	body := rest[nl+1:]
+	if end := strings.Index(body, "\n\n"); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
+}
+
+const (
+	observedFlowHeader    = "Observed flow ("
+	counterEvidenceHeader = "Counter-evidence the Investigator already found ("
+)
+
+// TestBuildHypothesisLLM_PromptCarriesObservedFlowAndCounterEvidence is
+// the consumer-side half of the 2026-07-28 fix. Carrying ObservedFlow /
+// CounterEvidence onto the CasePack is not the fix — a pack field no
+// prompt renders is exactly as dead as one that never left
+// 03_investigations/. This asserts on the string the model is actually
+// handed.
+func TestBuildHypothesisLLM_PromptCarriesObservedFlowAndCounterEvidence(t *testing.T) {
+	repo := t.TempDir()
+	stub := &stubLLM{responseJSON: `{"title":"t","summary":"s","suspected_issue":"i","confidence":"low"}`}
+
+	pack := artifacts.CasePack{
+		CaseID: "case-001",
+		ObservedFlow: []artifacts.ToolPathStep{
+			{
+				Location: artifacts.ToolLocation{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+				Kind:     "source",
+				Message:  "OBSERVED-STEP-ONE-MARKER",
+			},
+			{
+				Location: artifacts.ToolLocation{Path: "core/tee/tee_rollback.c", StartLine: 91, Symbol: "rollback_check"},
+				Message:  "OBSERVED-STEP-TWO-MARKER",
+			},
+		},
+		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER-A", "COUNTER-EVIDENCE-MARKER-B"},
+	}
+
+	if _, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "expert-001", 0); err != nil {
+		t.Fatalf("buildHypothesisLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	flow := sectionBody(t, prompt, observedFlowHeader)
+	for _, want := range []string{
+		"core/crypto/signed_hdr.c:262", "shdr_load_pub_key", "OBSERVED-STEP-ONE-MARKER",
+		"core/tee/tee_rollback.c:91", "rollback_check", "OBSERVED-STEP-TWO-MARKER",
+	} {
+		if !strings.Contains(flow, want) {
+			t.Errorf("observed-flow section missing %q:\n%s", want, flow)
+		}
+	}
+
+	counter := sectionBody(t, prompt, counterEvidenceHeader)
+	for _, want := range []string{"COUNTER-EVIDENCE-MARKER-A", "COUNTER-EVIDENCE-MARKER-B"} {
+		if !strings.Contains(counter, want) {
+			t.Errorf("counter-evidence section missing %q:\n%s", want, counter)
+		}
+	}
+}
+
+func TestBuildHypothesisLLM_EmptyFlowAndCounterEvidenceRenderCleanly(t *testing.T) {
+	repo := t.TempDir()
+	stub := &stubLLM{responseJSON: `{"title":"t","summary":"s","suspected_issue":"i","confidence":"low"}`}
+
+	if _, err := buildHypothesisLLM(context.Background(), stub, stubToolAdapter{}, repo, artifacts.CasePack{CaseID: "case-001"}, caseContext{}, "expert-001", 0); err != nil {
+		t.Fatalf("buildHypothesisLLM: %v", err)
+	}
+	prompt := stub.gotRequest.Messages[0].Content
+
+	if got := sectionBody(t, prompt, observedFlowHeader); got != "(none)" {
+		t.Errorf("empty observed flow rendered as %q, want %q (a dangling header reads as a truncated path)", got, "(none)")
+	}
+	if got := sectionBody(t, prompt, counterEvidenceHeader); got != "(none)" {
+		t.Errorf("empty counter-evidence rendered as %q, want %q", got, "(none)")
 	}
 }
 

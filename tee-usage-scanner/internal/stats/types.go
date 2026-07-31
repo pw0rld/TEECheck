@@ -36,11 +36,11 @@ type RunStats struct {
 //
 // Source labels which on-disk input the metrics were folded from:
 //   - "events"    : events.jsonl supplied rounds_used, tokens_used,
-//                   tokens_by_round, action_mix; the rest came from
-//                   evidence_bundle.json (which still owns candidates,
-//                   path/symbol validity, diversity, termination reason)
+//     tokens_by_round, action_mix; the rest came from
+//     evidence_bundle.json (which still owns candidates,
+//     path/symbol validity, diversity, termination reason)
 //   - "artifacts" : no events.jsonl available (legacy run); folded
-//                   from rounds.jsonl + evidence_bundle.json
+//     from rounds.jsonl + evidence_bundle.json
 type PlannerStats struct {
 	Present             bool           `json:"present"`
 	Source              string         `json:"source,omitempty"`
@@ -95,11 +95,11 @@ type ExpertStats struct {
 
 // ChallengerStats aggregates signals from 05_challenger/.
 type ChallengerStats struct {
-	Present              bool    `json:"present"`
-	ChallengeCount       int     `json:"challenge_count"`
-	NonRubberStampRate   float64 `json:"non_rubber_stamp_rate"`
-	CounterArgsP50       int     `json:"counter_arguments_p50"`
-	RemainingQuestionsP50 int    `json:"remaining_questions_p50"`
+	Present               bool    `json:"present"`
+	ChallengeCount        int     `json:"challenge_count"`
+	NonRubberStampRate    float64 `json:"non_rubber_stamp_rate"`
+	CounterArgsP50        int     `json:"counter_arguments_p50"`
+	RemainingQuestionsP50 int     `json:"remaining_questions_p50"`
 }
 
 // VerifierStats aggregates signals from 06_verifier/.
@@ -114,13 +114,13 @@ type VerifierStats struct {
 
 // ArbiterStats aggregates signals from 07_arbiter/.
 type ArbiterStats struct {
-	Present               bool           `json:"present"`
-	FindingCount          int            `json:"finding_count"`
-	StatusDistribution    map[string]int `json:"status_distribution"`
+	Present                bool           `json:"present"`
+	FindingCount           int            `json:"finding_count"`
+	StatusDistribution     map[string]int `json:"status_distribution"`
 	ConfidenceDistribution map[string]int `json:"confidence_distribution"`
-	SeverityDistribution  map[string]int `json:"severity_distribution"`
-	VerifierAgreementRate float64        `json:"verifier_agreement_rate"`
-	PacketWordcountP50    int            `json:"packet_wordcount_p50"`
+	SeverityDistribution   map[string]int `json:"severity_distribution"`
+	VerifierAgreementRate  float64        `json:"verifier_agreement_rate"`
+	PacketWordcountP50     int            `json:"packet_wordcount_p50"`
 }
 
 // ReviewStats aggregates human ground-truth labels from
@@ -162,8 +162,8 @@ type ArbiterStats struct {
 //   - "partially_valid"  — at least one valid + at least one not
 //   - "unanchored"       — citations exist but none anchor to bytes
 //   - "unresolved"       — citations exist but failed to resolve
-//                          (file moved, hash mismatch, repo root
-//                          missing, or mixed-failure)
+//     (file moved, hash mismatch, repo root
+//     missing, or mixed-failure)
 //   - "no_citations"     — hypothesis carried no CitedFacts at all
 //
 // Each bucket carries the cross-tab VerdictCounts so the reviewer
@@ -219,11 +219,11 @@ type OverallStats struct {
 // Dropoff is the per-stage count of artifacts that made it through.
 // Useful for plotting a funnel.
 type Dropoff struct {
-	Candidates  int `json:"candidates"`
-	Cases       int `json:"cases"`
-	Hypotheses  int `json:"hypotheses"`
-	Challenges  int `json:"challenges"`
-	Verifies    int `json:"verifies"`
-	Findings    int `json:"findings"`
+	Candidates   int `json:"candidates"`
+	Cases        int `json:"cases"`
+	Hypotheses   int `json:"hypotheses"`
+	Challenges   int `json:"challenges"`
+	Verifies     int `json:"verifies"`
+	Findings     int `json:"findings"`
 	Corroborated int `json:"corroborated"`
 }

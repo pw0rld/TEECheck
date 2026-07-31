@@ -18,3 +18,8 @@ tee-usage-scanner/web/vite.config.d.ts
 
 # Run artifacts
 runs/
+
+# External analysis binaries. CodeQL's bundle is ~1.5 GB extracted and
+# contains individual files over GitHub's 100 MB limit — it is a tool each
+# developer installs, not project code. Never commit it.
+/tools/

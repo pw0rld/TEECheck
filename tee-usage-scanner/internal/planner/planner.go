@@ -110,16 +110,24 @@ type RunResult struct {
 	Bundle *artifacts.EvidenceBundle
 	Err    error
 
-	// Investigations and CasePacks are the §7.5/§24 output of any
-	// `investigations` entries the LLM's `done` payload declared: each
-	// raw entry was built (internal/investigations.Build), grounded
-	// against Architecture/Invariants/the repository
-	// (internal/investigations.Validate), persisted under
-	// runfs.InvestigationPath, and rendered into a bounded Case Pack
-	// (internal/investigations.BuildCasePack). Empty when the LLM
-	// declared none this run — that is a normal outcome, not an error.
+	// Investigations is the §7.5/§24 output of any `investigations`
+	// entries the LLM's `done` payload declared: each raw entry was built
+	// (internal/investigations.Build), grounded against
+	// Architecture/Invariants/the repository
+	// (internal/investigations.Validate) and persisted under
+	// runfs.InvestigationPath. Empty when the LLM declared none this run —
+	// that is a normal outcome, not an error.
 	Investigations []artifacts.TWEInvestigation
-	CasePacks      []artifacts.CasePack
+
+	// CasePacks is the merged list from BOTH halves of the done payload,
+	// not just `investigations`: the rich packs rendered from the entries
+	// above (internal/investigations.BuildCasePack) plus one thin pack per
+	// surviving candidate (BuildFromCandidate), combined by Merge — which
+	// drops empty-target packs and folds a thin pack into the rich pack
+	// naming the same file set. Nothing here has been written to
+	// 03_cases/; the caller accumulates these across --samples passes and
+	// persists them once (see the comment at the Merge call site).
+	CasePacks []artifacts.CasePack
 }
 
 // Run drives the L3 LLM planner loop until done, budget exhaustion,
@@ -176,6 +184,17 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	var donePayload actions.DonePayload
 	var terminationReason string
 	var runErr error
+
+	// executedToolFactRefs collects the ToolFact path every successful
+	// fact_layer_query returned. prompt.go's `done` schema also asks the
+	// model to echo tool_fact_refs back per investigation, and on
+	// 2026-07-30 the CVE-2026-44362 fixed-side run did call the query, was
+	// shown the path, and then reported `"tool_fact_refs": []` — so the one
+	// immutable-tier artifact it produced reached none of the downstream
+	// agents, all of which read CasePack.ToolFactRefs. The reference is
+	// deterministic output of an action this loop executed; it does not
+	// depend on the model remembering to copy a string.
+	var executedToolFactRefs []string
 
 loop:
 	for !cfg.Budget.Exhausted() {
@@ -234,54 +253,92 @@ loop:
 		}
 
 		fmt.Fprintf(os.Stdout, "[planner] round %d/%d — calling LLM...\n", roundNum, cfg.Budget.MaxRounds)
-		genReq := llm.GenerateRequest{
-			SystemPrompt: systemPrompt,
-			Messages:     []llm.Message{{Role: "user", Content: roundPrompt}},
-			Temperature:  cfg.Temperature,
-			JSONMode:     true,
+
+		// Token cost for this round. A corrective re-ask ACCUMULATES onto
+		// these rather than replacing them: the round really did cost two
+		// calls, and rounds.jsonl must not under-report it.
+		var tokensIn, tokensOut int
+
+		// askOnce performs one LLM call for this round, including token
+		// accounting, blob persistence and the started/completed event pair.
+		// It is a closure rather than a method so the corrective re-ask below
+		// reuses exactly the same accounting instead of a second copy of it.
+		askOnce := func(prompt string) (llm.GenerateResponse, error) {
+			genReq := llm.GenerateRequest{
+				SystemPrompt: systemPrompt,
+				Messages:     []llm.Message{{Role: "user", Content: prompt}},
+				Temperature:  cfg.Temperature,
+				JSONMode:     true,
+			}
+			_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
+			genResp, err := cfg.Client.Generate(ctx, genReq)
+			if err != nil {
+				// Emit a completion event with Error populated so
+				// downstream consumers can pair the started/completed
+				// events even on failure.
+				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
+				failed.Error = err.Error()
+				_ = cfg.Events.Emit(failed)
+				return llm.GenerateResponse{}, err
+			}
+
+			// Prefer provider-reported token usage. If the provider did
+			// not return it (older OpenAI-compatible endpoints, stream
+			// responses), fall back to a crude ~4 chars/token estimate so
+			// the budget still advances.
+			callIn := genResp.Usage.PromptTokens
+			callOut := genResp.Usage.CompletionTokens
+			if callIn == 0 && callOut == 0 {
+				callIn = len(systemPrompt)/4 + len(prompt)/4
+				callOut = len(genResp.Text) / 4
+			}
+			cfg.Budget.ConsumeTokens(callIn + callOut)
+			tokensIn += callIn
+			tokensOut += callOut
+
+			// Persist prompt + response bodies to the blob store (if
+			// configured) and emit llm_call_completed with refs only.
+			var promptBlob, responseBlob string
+			if cfg.Blobs != nil {
+				if ref, err := cfg.Blobs.WriteString(systemPrompt + "\n\n---\n\n" + prompt); err == nil {
+					promptBlob = ref
+				}
+				if ref, err := cfg.Blobs.WriteString(genResp.Text); err == nil {
+					responseBlob = ref
+				}
+			}
+			_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
+			return genResp, nil
 		}
-		_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
-		genResp, err := cfg.Client.Generate(ctx, genReq)
+
+		genResp, err := askOnce(roundPrompt)
 		if err != nil {
-			// Emit a completion event with Error populated so
-			// downstream consumers can pair the started/completed
-			// events even on failure.
-			failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
-			failed.Error = err.Error()
-			_ = cfg.Events.Emit(failed)
 			runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
 			terminationReason = "llm_error"
 			break
 		}
 
-		// Prefer provider-reported token usage. If the provider did
-		// not return it (older OpenAI-compatible endpoints, stream
-		// responses), fall back to a crude ~4 chars/token estimate so
-		// the budget still advances.
-		tokensIn := genResp.Usage.PromptTokens
-		tokensOut := genResp.Usage.CompletionTokens
-		if tokensIn == 0 && tokensOut == 0 {
-			tokensIn = len(systemPrompt)/4 + len(roundPrompt)/4
-			tokensOut = len(genResp.Text) / 4
-		}
-		cfg.Budget.ConsumeTokens(tokensIn + tokensOut)
-
-		// Persist prompt + response bodies to the blob store (if
-		// configured) and emit llm_call_completed with refs only.
-		var promptBlob, responseBlob string
-		if cfg.Blobs != nil {
-			if ref, err := cfg.Blobs.WriteString(systemPrompt + "\n\n---\n\n" + roundPrompt); err == nil {
-				promptBlob = ref
-			}
-			if ref, err := cfg.Blobs.WriteString(genResp.Text); err == nil {
-				responseBlob = ref
+		parsed, parseErr := ParseLLMResponse(genResp.Text)
+		if parseErr != nil {
+			// One corrective re-ask before giving up. response_format is not
+			// honoured on every round by every endpoint, and models that
+			// narrate before acting ("Let me continue reading.") produce a
+			// reply with no JSON object in it. Discarding seven good rounds
+			// because the eighth slipped is the wrong trade — the cost of
+			// re-asking is one extra call, the cost of not re-asking is the
+			// whole run.
+			fmt.Fprintf(os.Stdout, "[planner] round %d: reply was not a JSON object — re-asking once\n", roundNum)
+			retryPrompt := roundPrompt + "\n\n=== YOUR PREVIOUS REPLY WAS REJECTED ===\n" +
+				"It contained no JSON object. Do not narrate, explain, or announce what you are about to do.\n" +
+				"Reply with the JSON object described in the response format and NOTHING else — no prose before it, no prose after it, no markdown fence.\n" +
+				"Your rejected reply began: " + truncate(genResp.Text, 200) + "\n"
+			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {
+				genResp = retryResp
+				parsed, parseErr = ParseLLMResponse(genResp.Text)
 			}
 		}
-		_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
-
-		parsed, err := ParseLLMResponse(genResp.Text)
-		if err != nil {
-			runErr = fmt.Errorf("round %d: %w", roundNum, err)
+		if parseErr != nil {
+			runErr = fmt.Errorf("round %d: %w", roundNum, parseErr)
 			terminationReason = "llm_malformed"
 			state.AppendRoundAndPersist(artifacts.RoundRecord{
 				Round:   roundNum,
@@ -336,12 +393,7 @@ loop:
 			executorBacked := cfg.Registry.IsExecutorBacked(act.Name)
 
 			if !executorBacked {
-				var toolArgsBlob string
-				if cfg.Blobs != nil && len(act.Args) > 0 {
-					if ref, err := cfg.Blobs.Write([]byte(act.Args)); err == nil {
-						toolArgsBlob = ref
-					}
-				}
+				toolArgsBlob := events.BestEffortRef(cfg.Blobs, act.Args)
 				_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
 			}
 
@@ -360,7 +412,16 @@ loop:
 			loopDet.Record(act.Name, argsStr)
 
 			if !executorBacked {
-				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, result.Error))
+				// The blob carries the UNTRUNCATED output. The round
+				// observation below keeps a 4000-char excerpt so the
+				// next prompt stays affordable; that excerpt is what
+				// used to be the only surviving copy, which is how
+				// "the truncated read from round 5 didn't show lines
+				// 35-80" became an unanswerable question. Output is
+				// blobbed on the failure path too — a tool that
+				// errored is the one someone will be diagnosing.
+				outputBlob := events.BestEffortRef(cfg.Blobs, []byte(result.Output))
+				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, outputBlob, result.Error))
 			}
 
 			roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{
@@ -376,6 +437,28 @@ loop:
 			// the force-done prompt can constrain candidates[].paths.
 			if result.OK {
 				trackObservedPaths(act.Name, act.Args, result.Output, cfg.RepoRoot, observedPaths)
+			}
+
+			// Keep a pulled TWE playbook detail alive for the rest of the
+			// loop: BuildRoundPrompt's RECENT ROUNDS window truncates and
+			// scrolls out actions' Output far too aggressively for the
+			// detail tier's 3000-token budget (see PlaybookDetails' doc
+			// comment on PlannerState). Recording it here means the sticky
+			// "TWE PLAYBOOK DETAIL" section renders it in full every round
+			// from here on.
+			if result.Name == "fact_layer_query" && result.OK {
+				if ref := toolFactRefFrom(result.Output); ref != "" {
+					executedToolFactRefs = append(executedToolFactRefs, ref)
+				}
+			}
+
+			if result.Name == "twe_playbook_detail" && result.OK {
+				var detailArgs struct {
+					TWEID string `json:"twe_id"`
+				}
+				if err := json.Unmarshal(act.Args, &detailArgs); err == nil && detailArgs.TWEID != "" {
+					state.AddPlaybookDetail(detailArgs.TWEID, result.Output)
+				}
 			}
 
 			if result.Name == "done" && result.OK {
@@ -437,12 +520,43 @@ loop:
 		fmt.Fprintf(os.Stdout, "[planner] evidence bundle written to %s\n", bundlePath)
 	}
 
-	invs, packs, invErrors := processInvestigations(donePayload.Investigations, cfg, state)
+	invs, packs, invErrors := processInvestigations(donePayload.Investigations, cfg, state, executedToolFactRefs)
 	if len(invErrors) > 0 {
 		bundle.Errors = append(bundle.Errors, invErrors...)
 	}
 
-	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: packs}
+	// Both halves of the done payload become Case Packs. candidates and
+	// investigations are independent lists with no id linking them
+	// (prompt.go's done schema), and investigations is optional — so
+	// neither can be derived from the other, and dropping either loses runs.
+	//
+	// bundle.Candidates is used rather than donePayload.Candidates because
+	// convertCandidates (above) has already dropped hallucinated paths.
+	//
+	// invErrors has already been folded into bundle.Errors, so anything new
+	// must be appended to bundle.Errors directly — appending to invErrors
+	// here would silently discard it.
+	var thin []artifacts.CasePack
+	if manifest, err := runfs.LoadManifest(cfg.RunDir); err != nil {
+		// Deliberately no zero-value Manifest fallback: it would mint
+		// CaseIDs like "repo@:tee:candidate:001" that look normal but say
+		// nothing about their origin. Record the failure and skip the thin
+		// packs; the rich packs still reach the caller.
+		bundle.Errors = append(bundle.Errors, artifacts.RoundError{
+			Round: -1, Action: "case_pack.manifest", Error: err.Error()})
+	} else {
+		for i, cand := range bundle.Candidates {
+			thin = append(thin, BuildFromCandidate(cand, manifest, i))
+		}
+	}
+	// Nothing is written to 03_cases/ here. Run is invoked once per
+	// --samples pass, so a per-pass Write would renumber case-*.json from
+	// 001 on every pass and leave the higher-numbered files of an earlier
+	// pass orphaned in place. The caller accumulates CasePacks across
+	// passes, dedupes and caps them, and calls Write exactly once.
+	merged := Merge(packs, thin)
+
+	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
 }
 
 // processInvestigations converts the LLM's loosely-typed `done.investigations`
@@ -454,7 +568,13 @@ loop:
 // also appended to state.Investigations so a later planner pass in the same
 // audit session (see internal/pipeline's --samples loop) sees it via
 // BuildRoundPrompt's "ACTIVE TWE INVESTIGATIONS" section.
-func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerState) ([]artifacts.TWEInvestigation, []artifacts.CasePack, []artifacts.RoundError) {
+// executedToolFactRefs are the ToolFact paths this planner loop actually
+// obtained from fact_layer_query. They are unioned into every investigation
+// the same loop reported: the loop is shared, so the observation was in
+// context for each one, and the done payload carries no per-investigation
+// attribution that could narrow it. Once a TWE→operation mapping exists the
+// union can be narrowed to the family the operation belongs to.
+func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerState, executedToolFactRefs []string) ([]artifacts.TWEInvestigation, []artifacts.CasePack, []artifacts.RoundError) {
 	if len(raw) == 0 {
 		return nil, nil, nil
 	}
@@ -485,6 +605,9 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		}
 
 		inv := investigations.Build(wire)
+		// Union before Validate so an executed ref is subject to the same
+		// on-disk resolution check as a model-reported one.
+		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
 		inv, _ = investigations.Validate(inv, validationIn)
 
 		if cfg.RunDir != "" {
@@ -505,15 +628,29 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			CommonDefenses:       playbook.CommonDefenses,
 			CommonFalsePositives: playbook.CommonFalsePositives,
 		})
-		if cfg.RunDir != "" {
-			path := filepath.Join(runfs.CasePacksDir(cfg.RunDir), pack.CaseID+".json")
-			if err := runfs.WriteJSON(path, pack); err != nil {
-				errs = append(errs, artifacts.RoundError{Round: -1, Action: "case_pack.write:" + pack.CaseID, Error: err.Error()})
-			}
-		}
+		// Packs are NOT written here. Run merges them with the
+		// candidate-derived packs and returns the combined list; the
+		// pipeline writes it through planner.Write once per run, so
+		// numbering across both halves — and across --samples passes —
+		// stays consistent on the case-*.json glob consumers use.
 		packs = append(packs, pack)
 	}
 	return invs, packs, errs
+}
+
+// toolFactRefFrom pulls the tool_fact_ref out of a fact_layer_query
+// observation (actions.factLayerQueryOutput). An unparseable or ref-less
+// observation yields "" — the handler only omits the field on a path that
+// already reported OK=false, so there is nothing to record and nothing to
+// report twice.
+func toolFactRefFrom(output string) string {
+	var obs struct {
+		ToolFactRef string `json:"tool_fact_ref"`
+	}
+	if err := json.Unmarshal([]byte(output), &obs); err != nil {
+		return ""
+	}
+	return obs.ToolFactRef
 }
 
 func firstOrEmpty(values []string) string {

@@ -4,6 +4,22 @@ A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
 security research. TEECheck uses an L3 LLM planner plus a 4-agent adversarial
 review chain to find real attestation and key-lifecycle issues in trusted code.
 
+## Optional: CodeQL
+
+The scanner runs without CodeQL, but the deterministic fact layer — the
+bottom, non-challengeable tier of the three-tier evidence model — stays
+empty: `fact_layer_query` returns `status: unsupported` and every finding
+rests on LLM judgement alone.
+
+Installing it is ~551 MB to download, 1.7 GB on disk, and about two minutes
+to verify end to end. See **[docs/SETUP_CODEQL.zh-CN.md](../docs/SETUP_CODEQL.zh-CN.md)**
+for the measured numbers, the install steps, an end-to-end verification, and
+the five known limitations (chief among them: only one of the nineteen TWE
+entries currently has an executable query).
+
+The bundle must never be committed — it exceeds GitHub's 100 MB per-file
+limit. `/tools/` is gitignored for that reason.
+
 ## Quick Start
 
 ```bash
@@ -11,28 +27,22 @@ review chain to find real attestation and key-lifecycle issues in trusted code.
 cd tee-usage-scanner
 go build -o teecheck ./cmd/teecheck/
 
-# Scan a repository (heuristic mode - no LLM needed)
-./teecheck run https://github.com/oasisprotocol/oasis-sdk --focus tee
-
-# Scan a local path
-./teecheck run /path/to/repo --focus tee --max-cases 4
-
-# Scan with LLM mode — runs the L3 planner end-to-end through the
+# Scan a repository — the L3 planner runs end to end through the
 # 4-agent pipeline (expert → challenger → verifier → arbiter)
-./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+./teecheck run https://github.com/oasisprotocol/oasis-sdk \
   --llm-base-url http://your-api:8080/v1 \
   --llm-api-key sk-your-key \
   --llm-model your-model \
   --focus tee --max-cases 4
 
 # Scan with the built-in GLM preset (z.ai Anthropic-compatible endpoint)
-./teecheck run https://github.com/oasisprotocol/oasis-sdk --mode llm \
+./teecheck run https://github.com/oasisprotocol/oasis-sdk \
   --llm-provider glm \
   --llm-api-key your-zai-key \
   --llm-model glm-4.7 \
   --focus tee --max-cases 4
 
-# Equivalent shorthand (same pipeline, mode forced to llm)
+# Equivalent shorthand
 ./teecheck plan https://github.com/mobilecoinfoundation/mobilecoin \
   --llm-provider glm --llm-api-key your-zai-key --focus tee --max-cases 4
 ```
@@ -45,10 +55,10 @@ preserved under `examples/mobilecoin-l3-v1{3,4}-scan/`.
 
 ## How It Works
 
-In LLM mode the pipeline is **L3 planner → 4-agent adversarial review**:
+The pipeline is **L3 planner → 4-agent adversarial review**:
 
 ```
-teecheck run --mode llm <url-or-path>
+teecheck run <url-or-path>
     |
     v
 +-- Preprocessor ----+   project profile, languages, frameworks
@@ -63,7 +73,7 @@ teecheck run --mode llm <url-or-path>
 |  done              |   → 04_planner/evidence_bundle.json
 +--------+-----------+
          |
-         v   shim → 02_hotspots + 03_cases
+         v   → 03_cases
 +-- Expert ----------+   generates security hypotheses per case
 +-- Challenger ------+   adversarial objections to each hypothesis
 +-- Verifier --------+   re-grounds each claim against the source
@@ -81,14 +91,14 @@ backward — under a four-dimensional budget (rounds / tokens / wall-clock /
 per-action timeout). See [`docs/superpowers/specs/2026-04-11-llm-planner-design.md`](docs/superpowers/specs/2026-04-11-llm-planner-design.md)
 for the full design.
 
-### Two Modes
+### One Path
 
-**Heuristic mode** (default): Fast, no LLM needed. Keyword + pattern scoring
-picks hotspots, then the 4-agent chain runs in heuristic mode. Good for quick
-scans and CI smoke tests.
+There is a single pipeline: the L3 planner picks what to investigate and every
+agent is LLM-backed. The heuristic/keyword mode and the legacy scanner branch
+were retired on 2026-07-31 — every run on disk had been LLM mode for months,
+and keeping a second, untested semantics only hid defects.
 
-**LLM mode** (`--mode llm` or `teecheck plan`): The L3 planner replaces the
-keyword picker, and every agent runs in LLM mode. **v1 is validated on GLM
+**v1 is validated on GLM
 only** — use `--llm-provider glm` with a z.ai API key (defaults to `glm-4.7`
 via the Anthropic-compatible endpoint). An `openai` preset exists for any
 OpenAI-compatible endpoint, but it is unvalidated in v1 and deferred to v2.
@@ -100,14 +110,12 @@ planner replay.
 
 ### `teecheck run` (main command)
 
-Runs the full pipeline on a repository. With `--mode llm` this is L3 planner
-plus the 4-agent adversarial review chain; with `--mode heuristic` (default)
-it falls back to the keyword-based hotspot picker.
+Runs the full pipeline on a repository: L3 planner plus the 4-agent
+adversarial review chain.
 
-### `teecheck plan` (LLM-only shorthand)
+### `teecheck plan`
 
-Same as `teecheck run --mode llm`. Forces all agents to LLM mode and runs the
-L3 planner. Use this when you don't want to think about the `--mode` flag.
+An alias for `teecheck run`, kept because scripts use it.
 
 ```bash
 teecheck run <url-or-path> [flags]
@@ -119,7 +127,6 @@ teecheck run <url-or-path> [flags]
 **Flags:**
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode` | `heuristic` | Agent mode: `heuristic` or `llm` |
 | `--focus` | `tee` | Audit focus: `tee`, `runtime`, `attestation` |
 | `--max-cases` | `12` | Maximum case packs to generate |
 | `--max-hotspots` | `12` | Maximum hotspots to identify |
@@ -162,11 +169,7 @@ Walks through each finding interactively:
 Archives review outcomes and updates the knowledge wiki.
 
 ```bash
-# Heuristic
-teecheck curator --run-dir runs/<run-id> --knowledge-root knowledge
-
-# LLM (generates richer wiki content)
-teecheck curator --run-dir runs/<run-id> --mode llm \
+teecheck curator --run-dir runs/<run-id> --knowledge-root knowledge \
   --llm-base-url ... --llm-api-key ... --llm-model ...
 ```
 
@@ -175,10 +178,8 @@ teecheck curator --run-dir runs/<run-id> --mode llm \
 The original fine-grained commands still work:
 
 ```bash
-teecheck collab-run ...    # 6-stage serial pipeline
 teecheck knowledge-init    # Initialize knowledge directories
 teecheck preprocess ...    # Project profiling only
-teecheck mapper ...        # Repo mapping only
 teecheck expert ...        # Hypothesis generation only
 teecheck challenge ...     # Hypothesis challenging only
 teecheck verifier ...      # Evidence verification only
@@ -191,11 +192,9 @@ teecheck arbiter ...       # Final arbitration only
 runs/<run-id>/
 ├── 00_manifest.json                   # Run metadata
 ├── 01_profile/project_profile.json    # Languages, frameworks, paths
-├── 01_repo_map/repo_map.json          # Module boundaries, trust surfaces
-├── 02_hotspots/hotspot_index.json     # Ranked hotspots (heuristic mode or shim)
 ├── 03_cases/case-NNN.json             # Bounded review cases
 ├── 04_expert/hypothesis-NNN.json      # Security hypotheses
-├── 04_planner/                        # (LLM mode only)
+├── 04_planner/
 │   ├── evidence_bundle.json           # Planner candidates + sink hits
 │   ├── rounds.jsonl                   # Streaming per-round transcript
 │   └── sink_hits.json                 # Sink catalog hits

@@ -5,8 +5,9 @@
 //
 // Design choices captured in docs/EVENT_SCHEMA.md:
 //   - flat tagged-struct, not interface sum-type (jq/grep friendly)
-//   - prompt/response/tool-args bodies live in a content-addressed
-//     blob store; the event only carries the sha256 reference
+//   - prompt / response / tool-args / tool-output bodies live in a
+//     content-addressed blob store; the event only carries the
+//     sha256 reference
 //   - seq is monotonic per recorder, recovered from existing file on
 //     re-open so resumed runs continue numbering without gaps
 package events
@@ -20,15 +21,18 @@ import (
 // Event types. Stable strings — schema-breaking changes require a
 // schema version bump in docs/EVENT_SCHEMA.md.
 const (
-	TypeRunStarted             = "run_started"
-	TypeRunCompleted           = "run_completed"
-	TypePlannerRoundStarted    = "planner_round_started"
-	TypePlannerRoundCompleted  = "planner_round_completed"
-	TypeLLMCallStarted         = "llm_call_started"
-	TypeLLMCallCompleted       = "llm_call_completed"
-	TypeToolCallStarted        = "tool_call_started"
-	TypeToolCallCompleted      = "tool_call_completed"
-	TypeClaimEmitted           = "claim_emitted"
+	TypeRunStarted            = "run_started"
+	TypeRunCompleted          = "run_completed"
+	TypePlannerRoundStarted   = "planner_round_started"
+	TypePlannerRoundCompleted = "planner_round_completed"
+	TypeLLMCallStarted        = "llm_call_started"
+	TypeLLMCallCompleted      = "llm_call_completed"
+	TypeToolCallStarted       = "tool_call_started"
+	TypeToolCallCompleted     = "tool_call_completed"
+	TypeStageStarted          = "stage_started"
+	TypeStageCompleted        = "stage_completed"
+	TypeClaimEmitted          = "claim_emitted"
+	TypeValueNormalized       = "value_normalized"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -67,6 +71,17 @@ type Event struct {
 	ToolExitCode   int    `json:"tool_exit_code,omitempty"`
 	Truncated      bool   `json:"truncated,omitempty"`
 
+	// tool_call_completed bodies. Stdout and stderr get separate refs
+	// rather than one concatenated blob: a combined body would either
+	// need framing bytes (so the ref no longer resolves to what the
+	// tool actually wrote) or would lose which stream said what —
+	// and stderr is where a tool explains why it failed.
+	//
+	// In-process planner actions have a single output stream and
+	// populate ToolOutputBlob only.
+	ToolOutputBlob string `json:"tool_output_blob,omitempty"`
+	ToolStderrBlob string `json:"tool_stderr_blob,omitempty"`
+
 	// Executor policy snapshot, populated only on tool_call_started
 	// events emitted by the executor. Tool calls that bypass the
 	// executor (today: planner ripgrep going straight through the
@@ -80,6 +95,12 @@ type Event struct {
 	ActionCount      int `json:"action_count,omitempty"`
 	ObservationCount int `json:"observation_count,omitempty"`
 
+	// stage_*. Stage is the pipeline stage name; DurationMs is wall
+	// clock on stage_completed. Reason (below) carries the outcome,
+	// using the same "completed" / "error" vocabulary as run_completed.
+	Stage      string `json:"stage,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+
 	// run_completed, *_started errors
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -88,6 +109,13 @@ type Event struct {
 	ClaimID string                 `json:"claim_id,omitempty"`
 	Claim   string                 `json:"claim,omitempty"`
 	Cited   []citations.CitedBytes `json:"cited,omitempty"`
+
+	// value_normalized. Reason (above) carries the explanation; these
+	// three carry the part a reader cannot reconstruct from prose —
+	// which field, and what it said before and after.
+	Field     string `json:"field,omitempty"`
+	FromValue string `json:"from_value,omitempty"`
+	ToValue   string `json:"to_value,omitempty"`
 }
 
 // Constructors — keep callers from misfiling event-type-specific
@@ -168,7 +196,13 @@ func ToolCallStarted(runID, agent, toolName string, round int, toolArgsBlob stri
 	}
 }
 
-func ToolCallCompleted(runID, agent, toolName string, round int, ok bool, durationMs int64, errMsg string) Event {
+// ToolCallCompleted is the constructor for in-process tool calls (the
+// planner's read_file, list_dir, tree_sitter_outline, done, ...).
+//
+// outputBlob is required rather than optional on purpose: a completed
+// event that names the tool and nothing else records that something
+// happened, not what. Callers that genuinely have no output pass "".
+func ToolCallCompleted(runID, agent, toolName string, round int, ok bool, durationMs int64, outputBlob, errMsg string) Event {
 	return Event{
 		Type:           TypeToolCallCompleted,
 		RunID:          runID,
@@ -177,7 +211,38 @@ func ToolCallCompleted(runID, agent, toolName string, round int, ok bool, durati
 		ToolName:       toolName,
 		ToolOK:         ok,
 		ToolDurationMs: durationMs,
+		ToolOutputBlob: outputBlob,
 		Error:          errMsg,
+	}
+}
+
+// StageStarted / StageCompleted bracket one pipeline stage.
+//
+// They exist because `grep stage_ events.jsonl` used to return nothing:
+// only stages that happened to make an LLM call left any trace, and the
+// deterministic ones (profile, TWE context, cases, mapper) left none at
+// all. From the stream alone you could not tell whether they ran, how
+// long they took, or which one a run died in.
+func StageStarted(runID, stage string) Event {
+	return Event{
+		Type:  TypeStageStarted,
+		RunID: runID,
+		Stage: stage,
+	}
+}
+
+// StageCompleted always fires, including when the stage failed —
+// a stream that goes silent on failure is the case where the record
+// matters most. reason uses run_completed's vocabulary: "completed"
+// or "error".
+func StageCompleted(runID, stage, reason string, durationMs int64, errMsg string) Event {
+	return Event{
+		Type:       TypeStageCompleted,
+		RunID:      runID,
+		Stage:      stage,
+		Reason:     reason,
+		DurationMs: durationMs,
+		Error:      errMsg,
 	}
 }
 
@@ -222,11 +287,39 @@ func ClaimEmitted(runID, agent, caseID, claimID, claim string, cited []citations
 	}
 }
 
+// ValueNormalized records that a stage replaced a value the model
+// actually produced with a different one — an off-vocabulary rating
+// recovered by a corrective re-ask, or demoted to "unrated" when no
+// legal value could be obtained.
+//
+// This event exists because the Challenger's "synthetic echo" defect
+// (2026-07-28) survived four days for one reason: the rewrite left no
+// trace. The artifact said "theoretical" and nothing anywhere recorded
+// that the model had said "high". Any stage that rewrites model output
+// should emit this rather than rewriting silently.
+func ValueNormalized(runID, agent, caseID, field, from, to, reason string) Event {
+	return Event{
+		Type:      TypeValueNormalized,
+		RunID:     runID,
+		Agent:     agent,
+		CaseID:    caseID,
+		Field:     field,
+		FromValue: from,
+		ToValue:   to,
+		Reason:    reason,
+	}
+}
+
 // ToolCallExecutorCompleted carries the additional execution facts
 // the executor knows: exit code (separate from OK so a non-zero exit
 // from a normally-failing tool like rg-with-no-matches stays
-// machine-distinguishable from a real failure) and Truncated.
-func ToolCallExecutorCompleted(runID, agent, toolName string, round int, ok bool, exitCode int, durationMs int64, truncated bool, errMsg string) Event {
+// machine-distinguishable from a real failure), Truncated, and the two
+// output stream refs.
+//
+// stdoutBlob/stderrBlob are populated on the failure path too: a tool
+// that errored is exactly the call someone will be diagnosing, and
+// stderr is usually the only place it said why.
+func ToolCallExecutorCompleted(runID, agent, toolName string, round int, ok bool, exitCode int, durationMs int64, truncated bool, stdoutBlob, stderrBlob, errMsg string) Event {
 	return Event{
 		Type:           TypeToolCallCompleted,
 		RunID:          runID,
@@ -237,6 +330,8 @@ func ToolCallExecutorCompleted(runID, agent, toolName string, round int, ok bool
 		ToolExitCode:   exitCode,
 		ToolDurationMs: durationMs,
 		Truncated:      truncated,
+		ToolOutputBlob: stdoutBlob,
+		ToolStderrBlob: stderrBlob,
 		Error:          errMsg,
 	}
 }

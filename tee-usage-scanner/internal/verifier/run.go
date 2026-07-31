@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -209,6 +208,12 @@ Challenger view:
 - Counter arguments: %s
 - Remaining questions: %s
 
+Observed flow (the attack path the Investigator actually traced, in order — check the disputed step against the source below, do not re-derive the path):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — resolve it explicitly; corroborating a case whose counter-evidence you never addressed is how a false positive survives review):
+%s
+
 TWE prior knowledge:
 %s
 
@@ -236,9 +241,10 @@ Static check findings (%d total):
 		hypothesis.Confidence,
 		formatExpertCitationStatus(expertValidation),
 		challenge.IndependentIssuePresent, strings.Join(challenge.KeyDifferences, " | "),
-		challenge.Exploitability, challenge.ExploitNarrative,
+		artifacts.FormatRating(challenge.Exploitability), challenge.ExploitNarrative,
 		strings.Join(challenge.CounterArguments, " | "),
 		strings.Join(challenge.RemainingQuestions, " | "),
+		artifacts.FormatToolPath(pack.ObservedFlow), firstNonEmptyStr(strings.Join(pack.CounterEvidence, " | "), "(none)"),
 		firstNonEmptyStr(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants),
 		renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatSnippets(pack.Snippets),
@@ -247,16 +253,6 @@ Static check findings (%d total):
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
 	for round := 0; round < bus.MaxRounds()+1; round++ {
-		resp, err := client.Generate(ctx, llm.GenerateRequest{
-			SystemPrompt: systemPrompt,
-			Messages:     messages,
-			Temperature:  temperature,
-			JSONMode:     true,
-		})
-		if err != nil {
-			return artifacts.VerificationMemo{}, fmt.Errorf("llm generate: %w", err)
-		}
-
 		var parsed struct {
 			Status                 string                `json:"status"`
 			ChecksRun              []string              `json:"checks_run"`
@@ -271,8 +267,19 @@ Static check findings (%d total):
 				Question string `json:"question"`
 			} `json:"queries"`
 		}
-		if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-			return artifacts.VerificationMemo{}, fmt.Errorf("parse verifier json: %w | raw=%s", err, truncateStr(resp.Text, 400))
+		// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+		// single format wobble no longer costs the whole case. The response it
+		// returns is the one that actually parsed, so the assistant turn
+		// appended to the dialog below is the recovered reply, not the
+		// rejected one. See its doc comment for the bound.
+		resp, err := llm.GenerateJSON(ctx, client, "verifier", llm.GenerateRequest{
+			SystemPrompt: systemPrompt,
+			Messages:     messages,
+			Temperature:  temperature,
+			JSONMode:     true,
+		}, &parsed)
+		if err != nil {
+			return artifacts.VerificationMemo{}, err
 		}
 
 		if len(parsed.Queries) == 0 {

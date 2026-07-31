@@ -24,7 +24,7 @@ func TestCloneAtRevision(t *testing.T) {
 	writeAndCommit(t, origin, "version.txt", "v2\n", "second commit")
 
 	dest := filepath.Join(t.TempDir(), "checkout")
-	if err := cloneAtRevision(context.Background(), origin, firstCommit, dest); err != nil {
+	if err := cloneAtRevision(context.Background(), nil, origin, firstCommit, dest); err != nil {
 		t.Fatalf("cloneAtRevision: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestCloneAtRevision(t *testing.T) {
 
 func TestCloneAtRevision_BadRepositoryFailsFast(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "checkout")
-	err := cloneAtRevision(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"), "HEAD", dest)
+	err := cloneAtRevision(context.Background(), nil, filepath.Join(t.TempDir(), "does-not-exist"), "HEAD", dest)
 	if err == nil {
 		t.Fatal("expected an error cloning a nonexistent local repository")
 	}
@@ -54,6 +54,18 @@ func git(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+}
+
+// gitOutput is git() for the cases that need the command's stdout back.
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
 }
 
 func writeAndCommit(t *testing.T, dir, name, content, message string) {
@@ -98,7 +110,7 @@ func TestCloneAtRevision_RejectsArgvSmuggling(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := cloneAtRevision(context.Background(), c.repo, c.rev, dest)
+			err := cloneAtRevision(context.Background(), nil, c.repo, c.rev, dest)
 			if err == nil {
 				t.Fatalf("expected rejection of repo=%q rev=%q", c.repo, c.rev)
 			}

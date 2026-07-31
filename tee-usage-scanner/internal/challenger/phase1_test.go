@@ -88,7 +88,7 @@ func TestBuildIndependentViewLLM_PromptExcludesExpertConclusion(t *testing.T) {
 		Category: "rollback",
 		Snippets: []artifacts.PromptSnippet{{Path: "src/x.c", StartLine: 1, EndLine: 1, Content: "int x;"}},
 	}
-	_, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "challenger-001", 0)
+	_, _, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, repo, pack, caseContext{}, "challenger-001", 0)
 	if err != nil {
 		t.Fatalf("buildIndependentViewLLM: %v", err)
 	}
@@ -163,6 +163,122 @@ func TestChallengerRun_Phase1ArtifactPersistedBeforePhase2Reads(t *testing.T) {
 	}
 	if len(challenge.KeyDifferences) == 0 {
 		t.Error("challenge.KeyDifferences empty; phase 2 should always report a comparison result")
+	}
+}
+
+// ─── Investigation knowledge reaches the phase-1 prompt (2026-07-28) ─
+
+// sectionBody returns the text under the prompt section whose header
+// starts with headerPrefix, up to the next blank line. Asserting on the
+// section BODY (not "the prompt contains this string somewhere") is what
+// makes the empty case checkable: a header with nothing under it fails,
+// a header with "(none)" passes.
+func sectionBody(t *testing.T, prompt, headerPrefix string) string {
+	t.Helper()
+	i := strings.Index(prompt, headerPrefix)
+	if i < 0 {
+		t.Fatalf("prompt has no section starting %q:\n%s", headerPrefix, prompt)
+	}
+	rest := prompt[i:]
+	nl := strings.Index(rest, "\n")
+	if nl < 0 {
+		t.Fatalf("section %q has no body at all:\n%s", headerPrefix, prompt)
+	}
+	body := rest[nl+1:]
+	if end := strings.Index(body, "\n\n"); end >= 0 {
+		body = body[:end]
+	}
+	return strings.TrimSpace(body)
+}
+
+const (
+	observedFlowHeader    = "Observed flow ("
+	counterEvidenceHeader = "Counter-evidence the Investigator already found ("
+)
+
+// TestBuildIndependentPrompt_CarriesObservedFlowAndCounterEvidence is the
+// consumer-side half of the 2026-07-28 fix on the Challenger side. The
+// Challenger's job is to argue against the case, so counter-evidence the
+// Planner already found is its most directly usable input — it gets its
+// OWN labelled section, ahead of the general prior-knowledge blocks,
+// rather than being folded into one of the " | " field lists where it
+// would read as one more piece of case metadata.
+func TestBuildIndependentPrompt_CarriesObservedFlowAndCounterEvidence(t *testing.T) {
+	pack := artifacts.CasePack{
+		CaseID: "case-001",
+		ObservedFlow: []artifacts.ToolPathStep{
+			{
+				Location: artifacts.ToolLocation{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+				Kind:     "source",
+				Message:  "OBSERVED-STEP-ONE-MARKER",
+			},
+			{
+				Location: artifacts.ToolLocation{Path: "core/tee/tee_rollback.c", StartLine: 91, Symbol: "rollback_check"},
+				Message:  "OBSERVED-STEP-TWO-MARKER",
+			},
+		},
+		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER-A", "COUNTER-EVIDENCE-MARKER-B"},
+	}
+
+	_, user := buildIndependentPrompt(pack, caseContext{}, nil)
+
+	flow := sectionBody(t, user, observedFlowHeader)
+	for _, want := range []string{
+		"core/crypto/signed_hdr.c:262", "shdr_load_pub_key", "OBSERVED-STEP-ONE-MARKER",
+		"core/tee/tee_rollback.c:91", "rollback_check", "OBSERVED-STEP-TWO-MARKER",
+	} {
+		if !strings.Contains(flow, want) {
+			t.Errorf("observed-flow section missing %q:\n%s", want, flow)
+		}
+	}
+
+	counter := sectionBody(t, user, counterEvidenceHeader)
+	for _, want := range []string{"COUNTER-EVIDENCE-MARKER-A", "COUNTER-EVIDENCE-MARKER-B"} {
+		if !strings.Contains(counter, want) {
+			t.Errorf("counter-evidence section missing %q:\n%s", want, counter)
+		}
+	}
+
+	// Placement is the judgment call this test pins: counter-evidence is
+	// the Challenger's starting material, so it precedes the general TWE
+	// prior-knowledge block rather than trailing the prompt.
+	if strings.Index(user, counterEvidenceHeader) > strings.Index(user, "TWE prior knowledge:") {
+		t.Errorf("counter-evidence section should precede the TWE prior-knowledge block:\n%s", user)
+	}
+}
+
+func TestBuildIndependentPrompt_EmptyFlowAndCounterEvidenceRenderCleanly(t *testing.T) {
+	_, user := buildIndependentPrompt(artifacts.CasePack{CaseID: "case-001"}, caseContext{}, nil)
+
+	if got := sectionBody(t, user, observedFlowHeader); got != "(none)" {
+		t.Errorf("empty observed flow rendered as %q, want %q (a dangling header reads as a truncated path)", got, "(none)")
+	}
+	if got := sectionBody(t, user, counterEvidenceHeader); got != "(none)" {
+		t.Errorf("empty counter-evidence rendered as %q, want %q", got, "(none)")
+	}
+}
+
+// TestBuildIndependentViewLLM_PromptCarriesObservedFlow proves the
+// rendering survives the real call path (the same one Run uses), not
+// only a direct buildIndependentPrompt call.
+func TestBuildIndependentViewLLM_PromptCarriesObservedFlow(t *testing.T) {
+	stub := &stubLLM{responseJSON: independentViewJSON}
+	pack := artifacts.CasePack{
+		CaseID: "case-001",
+		ObservedFlow: []artifacts.ToolPathStep{{
+			Location: artifacts.ToolLocation{Path: "core/tee/tee_rollback.c", StartLine: 91, Symbol: "rollback_check"},
+			Message:  "OBSERVED-STEP-MARKER",
+		}},
+		CounterEvidence: []string{"COUNTER-EVIDENCE-MARKER"},
+	}
+	if _, _, err := buildIndependentViewLLM(context.Background(), stub, stubToolAdapter{}, t.TempDir(), pack, caseContext{}, "challenger-001", 0); err != nil {
+		t.Fatalf("buildIndependentViewLLM: %v", err)
+	}
+	prompt := stub.lastRequest().Messages[0].Content
+	for _, want := range []string{"OBSERVED-STEP-MARKER", "rollback_check", "COUNTER-EVIDENCE-MARKER"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("phase-1 prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

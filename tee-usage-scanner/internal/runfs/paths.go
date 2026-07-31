@@ -37,6 +37,14 @@ func ChallengerDir(runDir string) string {
 	return filepath.Join(runDir, "05_challenger")
 }
 
+// ChallengerNormalizationsPath is where the Challenger records every
+// value it replaced (see artifacts.ChallengerNormalizations). The name
+// deliberately does not match the "challenge-*.json" /
+// "independent-*.json" globs downstream stages iterate over.
+func ChallengerNormalizationsPath(runDir string) string {
+	return filepath.Join(ChallengerDir(runDir), "normalizations.json")
+}
+
 func VerifierDir(runDir string) string {
 	return filepath.Join(runDir, "06_verifier")
 }

@@ -13,24 +13,24 @@ import (
 //
 // Why four states instead of three:
 //   - valid       :  every citation on the fact still resolves and
-//                    its sha256 matches the live bytes
+//     its sha256 matches the live bytes
 //   - stale       :  at least one citation drifted (sha256 mismatch,
-//                    file missing, line range invalid). The fact's
-//                    text may still be true in spirit, but the
-//                    specific evidence the agent attached has moved
-//                    or disappeared. Reason names the first failure.
+//     file missing, line range invalid). The fact's
+//     text may still be true in spirit, but the
+//     specific evidence the agent attached has moved
+//     or disappeared. Reason names the first failure.
 //   - unanchored  :  the fact has no citations attached (the agent
-//                    asserted without producing evidence). Distinct
-//                    from stale because the agent never claimed to
-//                    have anchored bytes.
+//     asserted without producing evidence). Distinct
+//     from stale because the agent never claimed to
+//     have anchored bytes.
 //   - unresolved  :  validation could not run because repoRoot is
-//                    empty or does not exist on disk. This shows up
-//                    when stats / verifier replays an artifact-only
-//                    run without a live checkout. Lumped into stale,
-//                    a missing checkout would silently flag every
-//                    fact as drifted; explicit "unresolved" tells
-//                    consumers "we don't know" rather than "we know
-//                    it broke".
+//     empty or does not exist on disk. This shows up
+//     when stats / verifier replays an artifact-only
+//     run without a live checkout. Lumped into stale,
+//     a missing checkout would silently flag every
+//     fact as drifted; explicit "unresolved" tells
+//     consumers "we don't know" rather than "we know
+//     it broke".
 const (
 	StatusValid      = "valid"
 	StatusStale      = "stale"
@@ -56,7 +56,7 @@ type CitationValidation struct {
 //   - repoRoot empty or missing   → StatusUnresolved (Reason explains)
 //   - every citation validates    → StatusValid
 //   - any citation fails          → StatusStale (Reason names the
-//                                    first failing citation's error)
+//     first failing citation's error)
 //
 // Strict semantics for stale: a fact backed by 5 citations where 1
 // drifted is reported as stale. Verifier prompts can choose how to

@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
 // Operation identifies one fact-layer query this package knows how to run.
@@ -53,6 +56,22 @@ type Request struct {
 	// normally unnecessary — it exists for forward compatibility with a
 	// future build mode that does need a compiler on PATH.
 	ExtraPATH string
+
+	// Exec routes this package's own subprocesses — the git clone and
+	// checkout that build the database's source tree — through the
+	// recording chokepoint. The CodeQL subprocesses are recorded by the
+	// Engine, which carries its own executor.
+	//
+	// Request is the seam because it is already this package's single
+	// input object and already carries per-call wiring that is not part
+	// of the request's identity (ExtraPATH is the precedent). Like
+	// ExtraPATH, Exec is deliberately absent from argumentsSHA256 and
+	// factID: whether a run recorded its subprocesses says nothing about
+	// what the query found, so wiring it in must not invalidate a fact or
+	// miss a database cache hit.
+	//
+	// Nil means "clone, record nothing".
+	Exec executor.Executor
 }
 
 func (r Request) validate() error {
@@ -109,4 +128,45 @@ func (r Request) argumentsSHA256() string {
 // file per repeated call.
 func (r Request) factID() string {
 	return fmt.Sprintf("trustir-cpp-%s-%s", r.Operation, r.argumentsSHA256()[:16])
+}
+
+// SupportedOperations returns the operations this fact layer can actually
+// execute, sorted for a stable prompt and a stable error message.
+//
+// It exists because the closed vocabulary was previously unknowable from
+// outside: the planner's prompt carried one "e.g." value and nothing else,
+// and neither the action handler nor Request.validate rejected anything
+// else. A model therefore had two ways to fail — invent an operation that
+// does not exist (observed 2026-07-27: "cpp.flow.bounds_check_consistency",
+// which produced a persisted ToolFact for a query that was never run), or,
+// having no idea what was legal, never call the action at all (observed
+// 2026-07-29 across three runs, including one whose repository DID have a
+// fact table). Publishing the list closes both.
+func SupportedOperations() []Operation {
+	out := make([]Operation, 0, len(operationQueries))
+	for op := range operationQueries {
+		out = append(out, op)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// SupportedOperationStrings is SupportedOperations as plain strings, for
+// callers that render the vocabulary into prompts or error text.
+func SupportedOperationStrings() []string {
+	ops := SupportedOperations()
+	out := make([]string, len(ops))
+	for i, op := range ops {
+		out[i] = string(op)
+	}
+	return out
+}
+
+// IsSupportedOperation reports whether name is an operation this fact layer
+// can execute. Callers should check before dispatching so an unknown value
+// fails where the caller can still correct it, rather than becoming a
+// persisted "unsupported" ToolFact for a query that never ran.
+func IsSupportedOperation(name string) bool {
+	_, ok := operationQueries[Operation(strings.TrimSpace(name))]
+	return ok
 }

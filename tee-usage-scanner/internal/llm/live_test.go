@@ -27,7 +27,7 @@ func TestLiveLLMDataSource(t *testing.T) {
 func TestLiveGLMDataSource(t *testing.T) {
 	runLiveLLMDataSourceTest(t, config.Config{
 		LLMProvider:   "glm",
-		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_GLM_BASE_URL", "GLM_BASE_URL", "ZAI_BASE_URL", "TEECHECK_LLM_BASE_URL"),
+		LLMBaseURL:    firstNonEmptyEnv("TEECHECK_GLM_BASE_URL", "GLM_BASE_URL", "ZAI_BASE_URL"),
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_GLM_API_KEY", "GLM_API_KEY", "ZAI_API_KEY", "TEECHECK_LLM_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_GLM_MODEL", "GLM_MODEL", "ZAI_MODEL", "TEECHECK_LLM_MODEL"),
 		LLMTimeoutSec: 60,
@@ -121,13 +121,11 @@ Additional context: The function verify_qe_identity_policy in verify.rs does not
 			Answer string   `json:"answer"`
 			Facts  []string `json:"facts"`
 		}
-		text := resp.Text
-		if idx := strings.Index(text, "{"); idx >= 0 {
-			if end := strings.LastIndex(text, "}"); end > idx {
-				text = text[idx : end+1]
-			}
-		}
-		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		// Use the shared extractor, not a hand-rolled index scan. The
+		// naive form this replaced — first "{" to last "}" — is the exact
+		// pattern that made a live run unrecoverable: it cannot tell a
+		// brace in prose or a fenced block from the start of an object.
+		if err := llm.ExtractJSONObject(resp.Text, &parsed); err != nil {
 			t.Fatalf("Failed to parse agent response as JSON: %v\nRaw: %s", err, resp.Text)
 		}
 		if parsed.Answer == "" {

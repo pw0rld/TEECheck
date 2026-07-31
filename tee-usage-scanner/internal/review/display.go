@@ -16,9 +16,9 @@ import (
 //
 //   - Verdict summary  (arbiter status / severity / confidence / files)
 //   - Anchored evidence  (Hypothesis.SupportingFacts +
-//                         memo.ConfirmedFacts + citation refs)
+//     memo.ConfirmedFacts + citation refs)
 //   - Unanchored context (UntypedFacts + verifier untyped fields,
-//                         all tagged [unanchored ...])
+//     all tagged [unanchored ...])
 //   - Verifier judgment  (status + Contradictions, citation-aware)
 //
 // The full LLM packet is still printed at the end as a reference

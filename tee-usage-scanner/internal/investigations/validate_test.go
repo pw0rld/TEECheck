@@ -143,3 +143,133 @@ func TestValidate_NoOpWhenEverythingResolves(t *testing.T) {
 		t.Error("Validate must not change the investigation ID")
 	}
 }
+
+// TestValidate_DemotesHallucinatedRoleSymbol exercises
+// validateRoleLocations (invoked here through the exported Validate, since
+// this file is package investigations_test and cannot call the unexported
+// function directly) for the case a real audit hit: the file exists and the
+// line is real, only the symbol is fabricated. This is the exact shape the
+// 2026-07-27 audit found in inv-flow-001-3a998d336f97.json.
+func TestValidate_DemotesHallucinatedRoleSymbol(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src", "pk", "rsa")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "LTC_SET_ASN1(siginfo, 1, OCTET_STRING, tmpbuf, siglen);\nder_decode_sequence(out, outlen, siginfo, 2);\n"
+	if err := os.WriteFile(filepath.Join(src, "rsa_verify_hash.c"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := artifacts.TWEInvestigation{
+		InvestigationID: "inv-test-001",
+		FilledRoles: map[string]artifacts.ToolLocation{
+			"checks_that_do_not_dominate": {
+				Path:      "src/pk/rsa/rsa_verify_hash.c",
+				StartLine: 141,
+				Symbol:    "der_decode_sequence_flexi",
+			},
+		},
+	}
+
+	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
+
+	if _, still := got.FilledRoles["checks_that_do_not_dominate"]; still {
+		t.Fatal("role with a symbol absent from the file must not stay filled")
+	}
+	if !containsString(got.MissingRoles, "checks_that_do_not_dominate") {
+		t.Fatalf("demoted role must land in MissingRoles, got %v", got.MissingRoles)
+	}
+	var found bool
+	for _, a := range adjustments {
+		if a.Kind == "unresolved_role_symbol" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want an unresolved_role_symbol adjustment, got %+v", adjustments)
+	}
+}
+
+func TestValidate_KeepsRealRoleSymbol(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "a.c"), []byte("void der_decode_sequence(void) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inv := artifacts.TWEInvestigation{
+		InvestigationID: "inv-test-002",
+		FilledRoles: map[string]artifacts.ToolLocation{
+			"r": {Path: "src/a.c", StartLine: 1, Symbol: "der_decode_sequence"},
+		},
+	}
+	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
+	if _, ok := got.FilledRoles["r"]; !ok {
+		t.Fatal("a role whose symbol really appears in the file must stay filled")
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("want no adjustments, got %+v", adjustments)
+	}
+}
+
+// TestValidate_EmptyRoleSymbolSkipsSymbolCheck is the sole guard on
+// validate.go's `if loc.Symbol != ""`: an empty Symbol means the file
+// existence check alone decides.
+//
+// It replaces a pair of tests, one of which could not fail. The deleted
+// TestValidate_EmptyRoleSymbolUnchanged pointed an empty-symbol role at a
+// readable file and asserted the role stayed filled — but with the guard
+// deleted that case still passes, because symbolcheck.FileContainsSymbol
+// reduces to strings.Contains(body, "") and "" is a substring of everything.
+// It was green with the guard, green without it, and therefore covered
+// nothing.
+//
+// Role "readable" below preserves that (weak but documented) case. Role
+// "unreadable" is the one that actually holds the guard in place: os.Stat
+// succeeding does not mean os.ReadFile will, and a directory is the portable
+// way to force that split (permission bits are unreliable when the suite runs
+// as root). With the guard removed, FileContainsSymbol(root, dir, "") returns
+// (false, error) and the `err != nil || !ok` branch demotes the role with the
+// nonsense reason that it "declares symbol \"\" which does not appear in" its
+// own path.
+func TestValidate_EmptyRoleSymbolSkipsSymbolCheck(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "a.c"), []byte("nothing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirPath := filepath.Join("src", "adir")
+	if err := os.MkdirAll(filepath.Join(root, dirPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := artifacts.TWEInvestigation{
+		InvestigationID: "inv-test-003",
+		FilledRoles: map[string]artifacts.ToolLocation{
+			"readable":   {Path: "src/a.c", StartLine: 1},
+			"unreadable": {Path: dirPath, StartLine: 1},
+		},
+	}
+	got, adjustments := investigations.Validate(inv, investigations.ValidationInput{RepoRoot: root})
+	for _, role := range []string{"readable", "unreadable"} {
+		if _, ok := got.FilledRoles[role]; !ok {
+			t.Errorf("role %q declares no symbol, so file existence alone must decide — it must stay filled", role)
+		}
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("want no adjustments, got %+v", adjustments)
+	}
+}
+
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}

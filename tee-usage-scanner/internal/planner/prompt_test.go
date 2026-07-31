@@ -1,6 +1,7 @@
 package planner_test
 
 import (
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"strings"
 	"testing"
 
@@ -155,6 +156,62 @@ func TestBuildRoundPrompt_IncludesCandidatesSoFar(t *testing.T) {
 	}
 }
 
+func TestBuildRoundPrompt_IncludesStickyPlaybookDetail(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AddPlaybookDetail("TWE-STATE-001", "Attacker: replays persisted state wholesale.")
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, "TWE PLAYBOOK DETAIL") {
+		t.Error("round prompt missing sticky playbook detail header")
+	}
+	if !strings.Contains(prompt, "TWE-STATE-001") {
+		t.Error("round prompt missing pulled TWE id")
+	}
+	if !strings.Contains(prompt, "Attacker: replays persisted state wholesale.") {
+		t.Error("round prompt missing pulled detail text")
+	}
+}
+
+func TestBuildRoundPrompt_StickyPlaybookDetailIsNotTruncated(t *testing.T) {
+	state := planner.NewState("run-001")
+
+	// Longer than the 1500-char RECENT ROUNDS truncation that action
+	// Output goes through — the sticky block must carry it in full
+	// regardless, for as many rounds as the loop runs, not just the last 2.
+	head := "Investigate: " + strings.Repeat("x", 2000)
+	tail := "END-OF-DETAIL-MARKER"
+	detail := head + tail
+	if len(detail) <= 1500 {
+		t.Fatalf("test detail is only %d chars; must exceed 1500 to prove no truncation", len(detail))
+	}
+	state.AddPlaybookDetail("TWE-STATE-001", detail)
+
+	// Push the detail's originating round out of the RECENT ROUNDS window
+	// (last 2 rounds) to prove the sticky block, not RECENT ROUNDS, is what
+	// carries it.
+	for i := 1; i <= 4; i++ {
+		state.AppendRound(artifacts.RoundRecord{Round: i, Thought: "unrelated round"})
+	}
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, tail) {
+		t.Errorf("round prompt truncated the sticky playbook detail before its tail marker %q", tail)
+	}
+}
+
+func TestPlannerState_AddPlaybookDetailDedupesByID(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AddPlaybookDetail("TWE-STATE-001", "first pull")
+	state.AddPlaybookDetail("TWE-STATE-001", "second pull should be ignored")
+
+	if len(state.PlaybookDetails) != 1 {
+		t.Fatalf("expected 1 stored detail, got %d", len(state.PlaybookDetails))
+	}
+	if state.PlaybookDetails[0].Text != "first pull" {
+		t.Errorf("expected first pull to win, got %q", state.PlaybookDetails[0].Text)
+	}
+}
+
 // ─── §7.5/§24: TWE/Architecture/Invariant prior-knowledge injection ──────
 
 func TestBuildSystemPrompt_InjectsTWEContext(t *testing.T) {
@@ -270,6 +327,20 @@ func TestBuildRoundPrompt_OmitsInvestigationsHeaderWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_DocumentsPlaybookDetailAction(t *testing.T) {
+	out := planner.BuildSystemPrompt([]string{"ripgrep", "twe_playbook_detail", "done"}, "", planner.PriorKnowledge{})
+	// Verify the action name appears
+	if !strings.Contains(out, "twe_playbook_detail") {
+		t.Error("system prompt must document the twe_playbook_detail action")
+	}
+	// Verify the exact rendered format: "- twe_playbook_detail  args={...with twe_id inside...}"
+	// This ensures actionArgSchemas["twe_playbook_detail"] exists and documents twe_id,
+	// not just that twe_id appears elsewhere (done action has "twe_ids" by coincidence).
+	if !strings.Contains(out, "- twe_playbook_detail  args={\"twe_id\"") {
+		t.Error("system prompt must document twe_playbook_detail's args with twe_id schema (not fallback {...})")
+	}
+}
+
 // TestBuildSystemPrompt_Deanchored is the de-anchoring acceptance test: the
 // system prompt must not steer the planner toward a deleted action
 // (sink_catalog_lookup) or a single language (*.rs, Cargo). It must instead
@@ -285,5 +356,35 @@ func TestBuildSystemPrompt_Deanchored(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("system prompt missing guidance token %q", want)
 		}
+	}
+}
+
+// Every other planner action takes arguments a model can derive from the
+// code in front of it. fact_layer_query alone requires a value from a
+// closed vocabulary only the source knew, and the schema carried one "e.g."
+// and no list. The model failed in both available directions: it invented
+// an operation that does not exist (2026-07-27), and across three runs on
+// 2026-07-29 — one of them against a repository that DID have a fact table,
+// with CodeQL installed and the action registered — it never called the
+// action at all, never mentioning the fact layer in eight rounds.
+func TestBuildSystemPrompt_EnumeratesFactLayerOperations(t *testing.T) {
+	prompt := planner.BuildSystemPrompt(
+		[]string{"fact_layer_query", "read_file"}, "", planner.PriorKnowledge{})
+
+	ops := trustirfacts.SupportedOperationStrings()
+	if len(ops) == 0 {
+		t.Skip("no executable operations in this build")
+	}
+	for _, op := range ops {
+		if !strings.Contains(prompt, op) {
+			t.Errorf("operation %q is executable but absent from the prompt — the model cannot ask for what it cannot see", op)
+		}
+	}
+	if !strings.Contains(prompt, "one of:") {
+		t.Error("the schema must present the operations as a closed list, not as an example")
+	}
+	// The old shape said "e.g." — a single sample the model had to guess from.
+	if strings.Contains(prompt, `(e.g. "cpp.state.rollback_version_propagation")`) {
+		t.Error("the example-only schema is back; a lone e.g. is what made the vocabulary unknowable")
 	}
 }

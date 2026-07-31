@@ -13,6 +13,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 // ─── Test harness ────────────────────────────────────────────────────
@@ -57,8 +58,27 @@ pub enum Error {
 }
 `
 	writeRepoFile(t, repoRoot, "src/attest.rs", attestRs)
+	writeRunManifest(t, repoRoot, runDir)
 
 	return repoRoot, runDir
+}
+
+// writeRunManifest puts a valid 00_manifest.json in the run dir. Without it
+// runfs.LoadManifest fails inside planner.Run and the candidate-derived
+// ("thin") Case Pack branch is skipped entirely — which is exactly what
+// happened in every planner test until this was added, leaving that half of
+// Run's output untested.
+func writeRunManifest(t *testing.T, repoRoot, runDir string) {
+	t.Helper()
+	if err := runfs.WriteJSON(runfs.ManifestPath(runDir), artifacts.Manifest{
+		SchemaVersion: "teecheck.manifest.v1",
+		RunID:         "test-run",
+		LocalPath:     repoRoot,
+		Commit:        "abcdef1234567",
+		Focus:         "tee",
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeRepoFile(t *testing.T, repoRoot, rel, content string) {
@@ -326,6 +346,24 @@ func TestPlannerRun_HallucinatedPathsDroppedAndRecorded(t *testing.T) {
 	if !foundHallucinationErr {
 		t.Errorf("no 'hallucinated' error in Bundle.Errors: %+v", result.Bundle.Errors)
 	}
+
+	// The candidate half of the done payload must reach RunResult.CasePacks
+	// as a thin pack — and only the surviving candidate may. This is the
+	// assertion that fails if Run ever returns `packs` (rich only) instead
+	// of `merged`, or if the hallucinated candidate leaks past
+	// convertCandidates into a pack.
+	if len(result.CasePacks) != 1 {
+		t.Fatalf("CasePacks = %d, want exactly 1 thin pack for the surviving candidate: %+v", len(result.CasePacks), result.CasePacks)
+	}
+	got := result.CasePacks[0]
+	if len(got.TargetFiles) != 1 || got.TargetFiles[0] != "src/attest.rs" {
+		t.Fatalf("CasePacks[0].TargetFiles = %v, want [src/attest.rs] — the real path, not the hallucinated one", got.TargetFiles)
+	}
+	for _, f := range got.TargetFiles {
+		if strings.Contains(f, "sgx/svc") {
+			t.Fatalf("hallucinated path reached a Case Pack: %v", got.TargetFiles)
+		}
+	}
 }
 
 // ─── Observed paths in prompt ────────────────────────────────────────
@@ -366,6 +404,70 @@ func TestPlannerRun_FinalRoundPromptIncludesObservedPaths(t *testing.T) {
 	}
 }
 
+// ─── Sticky TWE playbook detail (Fix 1) ───────────────────────────────
+
+// fakePlaybookSource is a minimal actions.PlaybookDetailSource test double.
+type fakePlaybookSource struct {
+	byID map[string]string
+}
+
+func (f *fakePlaybookSource) Detail(tweID string) (string, bool) {
+	text, ok := f.byID[tweID]
+	return text, ok
+}
+
+// TestPlannerRun_PulledPlaybookDetailStaysInPromptAcrossRounds proves the
+// fix for the "throttled and then evaporates" bug: once the planner pulls a
+// TWE's detail via twe_playbook_detail, that full text must keep appearing
+// in every subsequent round's prompt — not just the 2-round, 1500-char
+// window that RECENT ROUNDS uses for ordinary action output.
+func TestPlannerRun_PulledPlaybookDetailStaysInPromptAcrossRounds(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+
+	detailText := "[TWE-STATE-001] Trusted State Rollback\nInvestigate: " + strings.Repeat("x", 2000) + "END-OF-DETAIL-MARKER\n"
+	src := &fakePlaybookSource{byID: map[string]string{"TWE-STATE-001": detailText}}
+	reg := actions.NewDefaultRegistryWithFacts(nil, "", src)
+
+	client := &mockLLM{scripts: []string{
+		`{"thought":"pull detail","actions":[{"name":"twe_playbook_detail","args":{"twe_id":"TWE-STATE-001"}}]}`,
+		`{"thought":"r2","actions":[{"name":"list_dir","args":{"path":"."}}]}`,
+		`{"thought":"r3","actions":[{"name":"list_dir","args":{"path":".","depth":1}}]}`,
+		`{"thought":"r4","actions":[{"name":"ripgrep","args":{"pattern":"verify","globs":["*.rs"]}}]}`,
+		`{"thought":"done","actions":[{"name":"done","args":{"summary":"ok","candidates":[]}}]}`,
+	}}
+
+	budget := defaultTestBudget()
+	budget.MaxRounds = 5
+
+	_ = planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "test-sticky-detail",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Client:   client,
+		Registry: reg,
+		Budget:   budget,
+	})
+
+	if len(client.sent) < 5 {
+		t.Fatalf("expected 5 LLM calls, got %d", len(client.sent))
+	}
+
+	// Round 5's prompt is 3 rounds after the pull, well outside the 2-round
+	// RECENT ROUNDS window — the sticky block is the only thing that could
+	// still carry it there, and it must carry it whole, tail marker
+	// included, not cut at 1500 chars.
+	round5Msg := client.sent[4].Messages[0].Content
+	if !strings.Contains(round5Msg, "TWE PLAYBOOK DETAIL") {
+		t.Errorf("round 5 prompt missing sticky TWE PLAYBOOK DETAIL section")
+	}
+	if !strings.Contains(round5Msg, "TWE-STATE-001") {
+		t.Errorf("round 5 prompt missing pulled TWE id")
+	}
+	if !strings.Contains(round5Msg, "END-OF-DETAIL-MARKER") {
+		t.Errorf("round 5 prompt truncated the pulled detail before its tail marker")
+	}
+}
+
 // ─── Non-final round soft whitelist ──────────────────────────────────
 
 func TestPlannerRun_MiddleRoundPromptUsesSoftWhitelist(t *testing.T) {
@@ -399,5 +501,78 @@ func TestPlannerRun_MiddleRoundPromptUsesSoftWhitelist(t *testing.T) {
 	}
 	if !strings.Contains(round2Msg, "src/attest.rs") {
 		t.Errorf("middle round whitelist missing src/attest.rs")
+	}
+}
+
+// ─── Corrective re-ask on an unparseable reply ───────────────────────
+
+// A model that narrates instead of emitting the required JSON object used to
+// kill the entire run on its first slip — seven good rounds discarded because
+// the eighth said "Let me continue reading." response_format is not honoured
+// on every round by every endpoint, so the planner re-asks once before giving
+// up. Observed against glm-5.2 on 2026-07-28: rounds 1-4 parsed, round 5
+// returned 387 bytes of prose, run terminated with 0 candidates.
+func TestPlannerRun_ReAsksOnceWhenReplyIsNotJSON(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+	client := &mockLLM{scripts: []string{
+		"I have the PSS branch. Let me continue reading.",
+		`{"thought":"recovered","actions":[{"name":"done","args":{"summary":"recovered after a re-ask","candidates":[]}}]}`,
+	}}
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "reask-001",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Client:   client,
+		Registry: actions.NewDefaultRegistryWithNav(),
+		Budget:   defaultTestBudget(),
+	})
+
+	if result.Err != nil {
+		t.Fatalf("a single unparseable reply must not fail the run: %v", result.Err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("want exactly 2 LLM calls (original + one corrective re-ask), got %d", client.calls)
+	}
+	retry := client.sent[1].Messages[0].Content
+	if !strings.Contains(retry, "YOUR PREVIOUS REPLY WAS REJECTED") {
+		t.Error("the re-ask must tell the model its reply was rejected")
+	}
+	if !strings.Contains(retry, "Let me continue reading") {
+		t.Error("the re-ask must quote the rejected reply back so the model can see what was wrong")
+	}
+	if result.Bundle.PlannerMeta.TerminationReason == "llm_malformed" {
+		t.Error("run terminated as malformed even though the re-ask parsed")
+	}
+	// The round really cost two calls; rounds.jsonl must not under-report it.
+	if result.Bundle.PlannerMeta.TokensUsed == 0 {
+		t.Error("token accounting lost the re-ask")
+	}
+}
+
+// Two unparseable replies in a row is a real failure: stop, do not burn the
+// whole budget re-asking.
+func TestPlannerRun_GivesUpAfterOneFailedReAsk(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+	// mockLLM repeats its last script once exhausted, so every reply is prose.
+	client := &mockLLM{scripts: []string{"still not json, sorry"}}
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "reask-002",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Client:   client,
+		Registry: actions.NewDefaultRegistryWithNav(),
+		Budget:   defaultTestBudget(),
+	})
+
+	if result.Err == nil {
+		t.Fatal("two unparseable replies in a row must fail the round")
+	}
+	if client.calls != 2 {
+		t.Fatalf("want exactly 2 calls — one bounded re-ask, not an unbounded loop; got %d", client.calls)
+	}
+	if result.Bundle.PlannerMeta.TerminationReason != "llm_malformed" {
+		t.Errorf("termination_reason = %q, want %q", result.Bundle.PlannerMeta.TerminationReason, "llm_malformed")
 	}
 }

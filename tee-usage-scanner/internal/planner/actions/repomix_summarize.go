@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
 )
 
@@ -44,9 +45,24 @@ func (RepomixSummarizeHandler) Run(ctx context.Context, req ActionRequest) Actio
 		return fail("repomix_summarize", err.Error())
 	}
 
+	// The executor comes from the ActionRequest the planner already
+	// populates for every call, so this handler needs no field of its own —
+	// the same seam RipgrepHandler uses. Unlike ripgrep it does NOT refuse
+	// a nil executor: repomix must keep working for callers with no event
+	// stream, and repomix.Pack falls back to a silent local executor.
+	//
+	// Deliberately not marked ExecutorBacked: the planner's own
+	// tool_call_* pair for this action carries the FORMATTED, capped
+	// observation the LLM actually saw, while the executor's pair carries
+	// the raw npx invocation. They describe different things at different
+	// granularities, so suppressing either would lose information rather
+	// than remove a duplicate.
 	result, err := repomix.Pack(ctx, repomix.PackRequest{
 		RepoRoot: full,
 		Compress: args.Compress,
+		Exec: executor.Bind(req.Executor, executor.Binding{
+			RunID: req.RunID, Agent: req.Agent, Round: req.Round,
+		}),
 	})
 	if err != nil {
 		return fail("repomix_summarize", fmt.Sprintf("repomix: %v", err))

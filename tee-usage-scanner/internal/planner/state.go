@@ -30,6 +30,25 @@ type PlannerState struct {
 	// renders and what the main loop appends to as the LLM's `done` payload
 	// declares new or updated investigations across passes.
 	Investigations []artifacts.TWEInvestigation `json:"investigations,omitempty"`
+
+	// PlaybookDetails holds the full text of every TWE playbook detail the
+	// Planner has pulled via the twe_playbook_detail action so far this run,
+	// in the order first pulled. A pulled detail otherwise reaches the LLM
+	// only through BuildRoundPrompt's RECENT ROUNDS rendering, which
+	// truncates at 1500 chars and keeps only the last 2 rounds — nowhere
+	// near enough for a detail block sized against the 3000-token budget
+	// (see twecontext.maxDetailContextTokens). Storing it here, mirroring
+	// Investigations, lets BuildRoundPrompt render it in full for every
+	// remaining round of the loop instead of letting it evaporate.
+	PlaybookDetails []PulledPlaybookDetail `json:"playbook_details,omitempty"`
+}
+
+// PulledPlaybookDetail is one TWE's full investigation method, pulled by a
+// twe_playbook_detail action during this run, kept verbatim for the rest of
+// the loop.
+type PulledPlaybookDetail struct {
+	TWEID string `json:"twe_id"`
+	Text  string `json:"text"`
 }
 
 // NewState returns an empty PlannerState bound to a run id.
@@ -85,6 +104,20 @@ func (s *PlannerState) AddCandidates(cands []artifacts.Candidate) {
 // dedupe by ID before calling this, mirroring AddCandidates' contract.
 func (s *PlannerState) AddInvestigations(invs []artifacts.TWEInvestigation) {
 	s.Investigations = append(s.Investigations, invs...)
+}
+
+// AddPlaybookDetail stores a pulled TWE playbook detail under tweID,
+// preserving first-pull insertion order for stable prompt rendering. A
+// second pull of the same tweID is a no-op — the detail text for a given id
+// is stable within a run, so there is nothing to update and no reason to
+// store it twice.
+func (s *PlannerState) AddPlaybookDetail(tweID, text string) {
+	for _, d := range s.PlaybookDetails {
+		if d.TWEID == tweID {
+			return
+		}
+	}
+	s.PlaybookDetails = append(s.PlaybookDetails, PulledPlaybookDetail{TWEID: tweID, Text: text})
 }
 
 // LastRoundsForPrompt returns up to n most recent rounds for prompt

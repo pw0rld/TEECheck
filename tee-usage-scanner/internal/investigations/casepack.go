@@ -24,10 +24,11 @@ type CasePackInput struct {
 
 // BuildCasePack renders the bounded Case Pack (§10, §24 "Case Pack 修改")
 // for one investigation: the related TWE/invariant IDs, the architecture
-// slice and ToolFact refs the investigation actually used, its outstanding
-// required evidence and coverage gaps, and the matched playbook's common
-// defenses/false positives — everything Expert/Challenger need without
-// re-deriving it from the full Architecture Model or TWE catalog (§11.3).
+// slice and ToolFact refs the investigation actually used, the attack path
+// it traced and the counter-evidence it found, its outstanding required
+// evidence and coverage gaps, and the matched playbook's common defenses/
+// false positives — everything Expert/Challenger need without re-deriving
+// it from the full Architecture Model or TWE catalog (§11.3).
 //
 // Category is set to inv.Classification: standard/variant/composition/
 // catalog_gap is exactly the axis §24 asks a Case Pack to carry, and it is
@@ -52,6 +53,15 @@ func BuildCasePack(inv artifacts.TWEInvestigation, in CasePackInput) artifacts.C
 		CommonFalsePositives: append([]string{}, in.CommonFalsePositives...),
 		CoverageGaps:         append([]string{}, inv.CoverageGaps...),
 		MissingLinks:         missingLinks(inv),
+
+		// ObservedFlow and CounterEvidence are the two fields the
+		// investigation produces that nothing else in the run can
+		// reconstruct: the path the Investigator actually traced, and
+		// what it found against its own hypothesis. Copied like every
+		// slice above so a caller still editing its TWEInvestigation
+		// cannot reach into the pack's backing array.
+		ObservedFlow:    append([]artifacts.ToolPathStep{}, inv.ObservedFlow...),
+		CounterEvidence: append([]string{}, inv.CounterEvidence...),
 	}
 	pack.TargetFiles, pack.TargetSymbols = targetsFromRoles(inv.FilledRoles)
 	return pack

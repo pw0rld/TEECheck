@@ -64,14 +64,14 @@ func ResolveFacts(in []CitedFact, repoRoot string) (out []CitedFact, resolveErro
 // FlattenFacts produces the legacy fields from a structured
 // cited-fact list:
 //   - validatedText : text of every fact whose citations resolved
-//                     cleanly. Asserted-but-unanchored facts are
-//                     intentionally excluded so consumers can use
-//                     these as the "validated facts" surface.
+//     cleanly. Asserted-but-unanchored facts are
+//     intentionally excluded so consumers can use
+//     these as the "validated facts" surface.
 //   - pool          : union of every resolved citation across all
-//                     facts, deduplicated by
-//                     (file, start_byte, end_byte, sha256). Keeps
-//                     legacy "Cited"-reading code working through
-//                     the migration.
+//     facts, deduplicated by
+//     (file, start_byte, end_byte, sha256). Keeps
+//     legacy "Cited"-reading code working through
+//     the migration.
 func FlattenFacts(facts []CitedFact) (validatedText []string, pool []CitedBytes) {
 	seen := map[string]bool{}
 	for _, f := range facts {

@@ -208,6 +208,20 @@ type CasePack struct {
 	// disclosed limitations of this case's evidence, so a downstream
 	// agent (or human reviewer) never mistakes silence for completeness.
 	CoverageGaps []string `json:"coverage_gaps,omitempty"`
+	// ObservedFlow mirrors TWEInvestigation.ObservedFlow — the ordered
+	// attack path the Investigator actually traced, not a path anyone
+	// re-derives downstream. Until 2026-07-28 it lived only in
+	// 03_investigations/<id>.json, which no production reader opens, so
+	// the single most specific thing an investigation produces never
+	// reached Expert/Challenger/Verifier/Arbiter. Rendered into every
+	// agent prompt via FormatToolPath.
+	ObservedFlow []ToolPathStep `json:"observed_flow,omitempty"`
+	// CounterEvidence mirrors TWEInvestigation.CounterEvidence — the
+	// evidence the Investigator found AGAINST its own hypothesis. Same
+	// history as ObservedFlow above. It is carried separately from
+	// CommonFalsePositives (which is generic playbook prior knowledge):
+	// this is what was observed in THIS repository.
+	CounterEvidence []string `json:"counterevidence,omitempty"`
 }
 
 type Hypothesis struct {

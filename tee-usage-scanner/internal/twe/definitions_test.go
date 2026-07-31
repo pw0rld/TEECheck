@@ -67,14 +67,22 @@ func TestLoadDefinitionsRejects(t *testing.T) {
 // shipped catalog must have exactly 16 unique-id entries, the exact
 // per-family counts §20.1's table lists, and use every family types.go
 // declares — no eighth family, no missing one.
+//
+// The catalog now has 19 entries: the original 16 migrated verbatim from
+// tee-audit, plus 3 TEECheck-local additions (TWE-GUARD-004, TWE-LEAK-003,
+// TWE-LEAK-004 — see catalog.yml's "TEECheck-local extensions" section) that
+// cover weakness classes the attestation-centric migrated catalog has no
+// entry for. wantCounts below is updated to 16+3 = 19, split across the
+// Guard and Leakage families the new entries land in; no new family was
+// introduced, so the family-set assertion further down is unaffected.
 func TestShippedDefinitionCatalog(t *testing.T) {
 	path := filepath.Join("..", "..", "knowledge", "twe", "definitions", "catalog.yml")
 	defs, err := LoadDefinitions(path)
 	if err != nil {
 		t.Fatalf("load shipped catalog: %v", err)
 	}
-	if len(defs) != 16 {
-		t.Fatalf("len(defs) = %d, want 16", len(defs))
+	if len(defs) != 19 {
+		t.Fatalf("len(defs) = %d, want 19 (16 migrated + 3 TEECheck-local)", len(defs))
 	}
 
 	seenIDs := make(map[string]bool, len(defs))
@@ -89,12 +97,12 @@ func TestShippedDefinitionCatalog(t *testing.T) {
 
 	wantCounts := map[Family]int{
 		FamilyFlow:    2,
-		FamilyGuard:   3,
+		FamilyGuard:   4, // 3 migrated + TWE-GUARD-004 (TEECheck-local)
 		FamilyBinding: 3,
 		FamilyState:   2,
 		FamilyConfig:  2,
 		FamilyDesign:  2,
-		FamilyLeakage: 2,
+		FamilyLeakage: 4, // 2 migrated + TWE-LEAK-003, TWE-LEAK-004 (TEECheck-local)
 	}
 	if len(countByFamily) != len(ValidFamilies) {
 		t.Fatalf("shipped catalog uses %d families, want all %d from internal/twe.Family", len(countByFamily), len(ValidFamilies))
@@ -133,6 +141,46 @@ func TestOldEntriesReconcileWithShippedDefinitions(t *testing.T) {
 		if d.Family != e.Family {
 			t.Errorf("%s: legacy Entry family %s disagrees with definition family %s", e.ID, e.Family, d.Family)
 		}
+	}
+}
+
+// The migrated tee-audit catalog is attestation-centric; these three entries
+// are TEECheck-local additions covering weakness classes the benchmark
+// actually contains. The test pins their identity so a future upstream merge
+// cannot silently drop them.
+func TestCatalogCarriesLocalExtensions(t *testing.T) {
+	path := filepath.Join("..", "..", "knowledge", "twe", "definitions", "catalog.yml")
+	defs, err := LoadDefinitions(path)
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	byID := map[string]Definition{}
+	for _, d := range defs {
+		byID[d.ID] = d
+	}
+	for id, wantFamily := range map[string]Family{
+		"TWE-GUARD-004": FamilyGuard,
+		"TWE-LEAK-003":  FamilyLeakage,
+		"TWE-LEAK-004":  FamilyLeakage,
+	} {
+		d, ok := byID[id]
+		if !ok {
+			t.Errorf("%s missing from the shipped catalog", id)
+			continue
+		}
+		if d.Family != wantFamily {
+			t.Errorf("%s family = %q, want %q", id, d.Family, wantFamily)
+		}
+		if d.Name == "" {
+			t.Errorf("%s has no name", id)
+		}
+		if err := d.Validate(); err != nil {
+			t.Errorf("%s fails validation: %v", id, err)
+		}
+	}
+	// The 16 migrated entries must still be present — this change adds, never replaces.
+	if len(defs) != 19 {
+		t.Errorf("catalog has %d entries, want 19 (16 migrated + 3 local)", len(defs))
 	}
 }
 

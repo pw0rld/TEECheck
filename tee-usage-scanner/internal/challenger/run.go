@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/tools"
@@ -30,6 +30,17 @@ import (
 //	KeyDifferences against the phase-1 view, and produces the final
 //	Challenge.
 func Run(cfg config.Config, client llm.Client) error {
+	return RunWithEvents(cfg, client, nil)
+}
+
+// RunWithEvents is the pipeline-facing entry point. The recorder is the
+// same instance upstream stages use, so a value_normalized event lands
+// on the same seq stream as the llm_call_completed that produced the
+// offending value. rec may be nil (Nop pattern, matching
+// expert.RunWithEvents) — the run-directory record in
+// runfs.ChallengerNormalizationsPath is written either way, so a manual
+// rerun that owns no events.jsonl still leaves the trace.
+func RunWithEvents(cfg config.Config, client llm.Client, rec events.Recorder) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -41,6 +52,11 @@ func Run(cfg config.Config, client llm.Client) error {
 
 	toolAdapter := tools.NewLocalAdapter()
 
+	// Never nil: a run with nothing rewritten must still write an empty
+	// record, so an absent Adjustments list is positive evidence rather
+	// than an ambiguous missing file.
+	normalizations := []artifacts.NormalizationAdjustment{}
+
 	count := 0
 	for idx, casePath := range casePaths {
 		var pack artifacts.CasePack
@@ -50,10 +66,12 @@ func Run(cfg config.Config, client llm.Client) error {
 
 		// ── Phase 1: independent judgment, no Hypothesis in scope. ──
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
-		independentView, err := buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		independentView, phase1Adjustments, err := buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			return fmt.Errorf("challenger phase-1 llm for %s: %w", pack.CaseID, err)
 		}
+		normalizations = append(normalizations, phase1Adjustments...)
+		emitNormalizations(rec, manifest.RunID, cfg.AgentID, phase1Adjustments)
 		independentPath := filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("independent-%03d.json", idx+1))
 		if err := runfs.WriteJSON(independentPath, independentView); err != nil {
 			return fmt.Errorf("write independent view %s: %w", independentView.CaseID, err)
@@ -66,10 +84,12 @@ func Run(cfg config.Config, client llm.Client) error {
 			return fmt.Errorf("read hypothesis %s: %w", hypothesisPath, err)
 		}
 
-		challenge, err := buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
+		challenge, phase2Adjustments, err := buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			return fmt.Errorf("challenger phase-2 llm for %s: %w", pack.CaseID, err)
 		}
+		normalizations = append(normalizations, phase2Adjustments...)
+		emitNormalizations(rec, manifest.RunID, cfg.AgentID, phase2Adjustments)
 		challenge.IndependentViewPath = independentPath
 
 		target := filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("challenge-%03d.json", idx+1))
@@ -78,16 +98,44 @@ func Run(cfg config.Config, client llm.Client) error {
 		}
 		count++
 	}
-	fmt.Printf("Wrote %d challenge file(s) to %s\n", count, runfs.ChallengerDir(cfg.RunDir))
+
+	// Part 2 of the 2026-07-28 fix: a value the scanner replaced must be
+	// discoverable from the run directory alone, together with what it
+	// said before. Written unconditionally.
+	record := artifacts.ChallengerNormalizations{
+		SchemaVersion: artifacts.SchemaVersionChallengerNormalizationsV1,
+		RunID:         manifest.RunID,
+		AgentID:       cfg.AgentID,
+		Adjustments:   normalizations,
+	}
+	if err := runfs.WriteJSON(runfs.ChallengerNormalizationsPath(cfg.RunDir), record); err != nil {
+		return fmt.Errorf("write challenger normalizations: %w", err)
+	}
+
+	fmt.Printf("Wrote %d challenge file(s) to %s (%d normalization adjustment(s) recorded in %s)\n",
+		count, runfs.ChallengerDir(cfg.RunDir), len(normalizations), runfs.ChallengerNormalizationsPath(cfg.RunDir))
 	return nil
 }
 
-func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, independent artifacts.ChallengerIndependentView, agentID string, temperature float64) (artifacts.Challenge, error) {
+// emitNormalizations mirrors each adjustment onto the run-wide event
+// stream when the caller supplied a recorder. Emission failures are
+// non-fatal: the artifact-level record in
+// runfs.ChallengerNormalizationsPath is the durable copy.
+func emitNormalizations(rec events.Recorder, runID, agentID string, adjustments []artifacts.NormalizationAdjustment) {
+	if rec == nil {
+		return
+	}
+	for _, adj := range adjustments {
+		_ = rec.Emit(events.ValueNormalized(runID, agentID, adj.CaseID, adj.Field, adj.From, adj.To, adj.Reason))
+	}
+}
+
+func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, independent artifacts.ChallengerIndependentView, agentID string, temperature float64) (artifacts.Challenge, []artifacts.NormalizationAdjustment, error) {
 	searchTerms := append([]string{}, hypothesis.MissingObligations...)
 	searchTerms = append(searchTerms, "caller", "bind", "verify", "authorize", "wrapper")
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)
 	if err != nil {
-		return artifacts.Challenge{}, err
+		return artifacts.Challenge{}, nil, err
 	}
 
 	// Phase 2 (§7.7): the Challenger already formed an independent
@@ -102,7 +150,9 @@ func buildChallengeLLM(ctx context.Context, client llm.Client, toolAdapter tools
 - counter_arguments (array of strings)
 - remaining_questions (array of strings)
 - suggested_checks (array of strings)
-- exploitability (string)
+- exploitability ("proven"|"likely"|"theoretical"|"unlikely" — this is
+  YOUR OWN judgement of whether the attack is reachable, on this scale
+  and no other; it is not a restatement of anyone's confidence)
 - reviewer_stance (string)
 - key_differences (array of strings — where your phase-1 independent view and the Expert hypothesis actually disagree)
 
@@ -137,23 +187,11 @@ Tool hits:
 Snippets:
 %s
 `, pack.CaseID, pack.Category, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.OpenQuestions, " | "),
-		independent.IssuePresent, independent.Reasoning, strings.Join(independent.DefensesConsidered, " | "), strings.Join(independent.CounterExamples, " | "), independent.Confidence,
+		independent.IssuePresent, independent.Reasoning, strings.Join(independent.DefensesConsidered, " | "), strings.Join(independent.CounterExamples, " | "), artifacts.FormatRating(independent.Confidence),
 		hypothesis.Title, hypothesis.Summary, hypothesis.SuspectedIssue, strings.Join(hypothesis.MissingObligations, ", "), strings.Join(hypothesis.SupportingFacts, " | "), hypothesis.Confidence,
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
 
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: system,
-		Messages: []llm.Message{
-			{Role: "user", Content: user},
-		},
-		Temperature: temperature,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return artifacts.Challenge{}, err
-	}
-
-	var parsed struct {
+	type phase2Reply struct {
 		ExploitNarrative   string   `json:"exploit_narrative"`
 		CounterArguments   []string `json:"counter_arguments"`
 		RemainingQuestions []string `json:"remaining_questions"`
@@ -162,8 +200,22 @@ Snippets:
 		ReviewerStance     string   `json:"reviewer_stance"`
 		KeyDifferences     []string `json:"key_differences"`
 	}
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-		return artifacts.Challenge{}, fmt.Errorf("parse challenger json: %w | raw=%s", err, truncate(resp.Text, 400))
+	// hypothesis is in scope here, but nothing about it reaches the
+	// exploitability value: the spec below names only this field's own
+	// vocabulary, and an unusable answer becomes RatingUnrated. The
+	// Challenger's independent judgement is never derived from the
+	// judgement it exists to challenge.
+	parsed, adjustments, err := generateWithRatingRetry(ctx, client, system, user, temperature,
+		pack.CaseID, "challenger phase-2",
+		ratingSpec[phase2Reply]{
+			field:      "exploitability",
+			vocabulary: exploitabilityVocabulary,
+			normalize:  normalizeExploitability,
+			get:        func(r *phase2Reply) string { return r.Exploitability },
+			set:        func(r *phase2Reply, v string) { r.Exploitability = v },
+		})
+	if err != nil {
+		return artifacts.Challenge{}, nil, err
 	}
 
 	keyDiffs := uniq(parsed.KeyDifferences)
@@ -182,11 +234,11 @@ Snippets:
 		CounterArguments:        uniq(parsed.CounterArguments),
 		RemainingQuestions:      uniq(append(parsed.RemainingQuestions, pack.OpenQuestions...)),
 		SuggestedChecks:         uniq(append(parsed.SuggestedChecks, flattenToolHits(toolHits)...)),
-		Exploitability:          normalizeExploitability(parsed.Exploitability, hypothesis.Confidence),
+		Exploitability:          parsed.Exploitability,
 		ReviewerStance:          firstNonEmpty(parsed.ReviewerStance, "challenge_required"),
 		IndependentIssuePresent: independent.IssuePresent,
 		KeyDifferences:          keyDiffs,
-	}, nil
+	}, adjustments, nil
 }
 
 func primaryLabel(pack artifacts.CasePack) string {
@@ -238,18 +290,6 @@ func formatSnippets(snippets []artifacts.PromptSnippet) string {
 		lines = append(lines, fmt.Sprintf("FILE %s (%d-%d)\n%s", snippet.Path, snippet.StartLine, snippet.EndLine, snippet.Content))
 	}
 	return strings.Join(lines, "\n\n")
-}
-
-func normalizeExploitability(value, expertConfidence string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "proven", "likely", "theoretical", "unlikely":
-		return value
-	}
-	if expertConfidence == "high" {
-		return "likely"
-	}
-	return "theoretical"
 }
 
 func firstNonEmpty(values ...string) string {

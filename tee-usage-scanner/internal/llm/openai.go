@@ -18,6 +18,7 @@ type OpenAIClient struct {
 	model       string
 	httpClient  *http.Client
 	temperature float64
+	maxTokens   int
 }
 
 func NewOpenAIClient(cfg config.Config) *OpenAIClient {
@@ -28,6 +29,7 @@ func NewOpenAIClient(cfg config.Config) *OpenAIClient {
 		model:       cfg.LLMModel,
 		httpClient:  newHTTPClient(cfg.LLMTimeoutSec),
 		temperature: cfg.LLMTemp,
+		maxTokens:   maxTokensOrDefault(cfg.LLMMaxTokens),
 	}
 }
 
@@ -37,10 +39,20 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		Messages:    buildMessages(req.SystemPrompt, req.Messages),
 		Temperature: req.Temperature,
 		Stream:      false,
-		MaxTokens:   16384,
+		MaxTokens:   c.maxTokens,
 	}
 	if body.Temperature == 0.0 {
 		body.Temperature = c.temperature
+	}
+	// Honour the caller's JSONMode. Every LLM-backed agent in this repo sets
+	// it (14 call sites) because every one of them parses the reply as a JSON
+	// object and fails the stage otherwise. Until now nothing consumed the
+	// flag on this path, so "JSON mode" rested entirely on the model choosing
+	// to obey the prompt's instructions. Models that narrate before acting —
+	// glm-5.2 replies "Let me start by getting the TWE playbook details…" —
+	// then break every agent with a parse error.
+	if req.JSONMode {
+		body.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
 	}
 
 	payload, err := json.Marshal(body)
@@ -105,11 +117,23 @@ type openAIChatResponse struct {
 			Content string `json:"content"`
 		} `json:"delta"`
 		Text string `json:"text"`
+		// FinishReason distinguishes "the model had nothing to say" from
+		// "the model ran out of budget mid-thought". On a reasoning model
+		// they look identical from Content alone — glm-5.2 spends the
+		// completion budget on reasoning_content first, so exhausting it
+		// yields finish_reason "length" with Content empty.
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
+		// Reasoning models report how much of the completion budget went to
+		// thinking rather than to the answer. Only used to explain a
+		// budget-exhaustion failure to the operator.
+		CompletionTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -129,6 +153,18 @@ func parseOpenAIResponse(contentType string, body []byte) (string, Usage, error)
 	}
 	text := extractOpenAIText(parsed)
 	if strings.TrimSpace(text) == "" {
+		// Name the cause. A reasoning model that exhausts max_tokens on its
+		// own reasoning returns finish_reason "length" with empty content,
+		// which is indistinguishable from "said nothing" unless we look.
+		// Reported as "no text content found", it sent one debugging session
+		// looking for a parser bug that did not exist.
+		if len(parsed.Choices) > 0 && parsed.Choices[0].FinishReason == "length" {
+			return "", Usage{}, fmt.Errorf(
+				"model exhausted its completion budget before emitting any content "+
+					"(finish_reason=length, %d completion tokens of which %d were reasoning); "+
+					"raise --llm-max-tokens or TEECHECK_LLM_MAX_TOKENS above the current limit",
+				parsed.Usage.CompletionTokens, parsed.Usage.CompletionTokensDetails.ReasoningTokens)
+		}
 		return "", Usage{}, fmt.Errorf("no text content found in response")
 	}
 	usage := Usage{

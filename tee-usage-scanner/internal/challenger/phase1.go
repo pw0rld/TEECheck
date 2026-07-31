@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/tools"
@@ -43,6 +42,10 @@ Check specifically for:
   this snippet misses
 - the TWE's own common_defenses and common_false_positives lists —
   if the visible code matches one of those patterns, say so
+- the counter-evidence section below: the Investigator already
+  recorded observations AGAINST this issue in THIS repository. Start
+  from those rather than re-deriving them, and say explicitly if one
+  of them settles the question
 
 Return exactly one JSON object with fields:
 - issue_present (boolean)
@@ -70,6 +73,12 @@ Return exactly one JSON object with fields:
 - coverage_gaps: %s
 - open_questions: %s
 
+Counter-evidence the Investigator already found (evidence AGAINST the issue — this is your starting material: confirm it, extend it, or say why it does not hold):
+%s
+
+Observed flow (the attack path the Investigator actually traced, in order — the specific chain you are being asked to break):
+%s
+
 TWE prior knowledge:
 %s
 
@@ -95,6 +104,7 @@ Snippets (the raw source this case is about):
 		strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "),
 		strings.Join(pack.RequiredEvidence, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
 		strings.Join(pack.OpenQuestions, " | "),
+		firstNonEmpty(strings.Join(pack.CounterEvidence, " | "), "(none)"), artifacts.FormatToolPath(pack.ObservedFlow),
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants),
 		renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
@@ -104,38 +114,50 @@ Snippets (the raw source this case is about):
 
 // buildIndependentViewLLM runs phase 1 against the LLM. Search terms
 // for the tool-hit lookup come only from the CasePack (expected
-// obligations, target symbols, common defenses/false positives) — the
+// obligations, required evidence, target symbols) — the
 // same "no hypothesis anywhere in this call chain" property
 // buildIndependentPrompt has.
-func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.ChallengerIndependentView, error) {
+//
+// The returned adjustments name every value the stage replaced (see
+// generateWithRatingRetry); the caller persists them.
+func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.ChallengerIndependentView, []artifacts.NormalizationAdjustment, error) {
 	searchTerms := append([]string{}, pack.ExpectedObligations...)
+	// RequiredEvidence is the investigation-derived counterpart of
+	// ExpectedObligations: the legacy path fills one, the llm path the
+	// other, and neither fills both. Without it an llm-path pack searched on
+	// TargetSymbols plus the fixed terms below only.
+	searchTerms = append(searchTerms, pack.RequiredEvidence...)
 	searchTerms = append(searchTerms, pack.TargetSymbols...)
 	searchTerms = append(searchTerms, "caller", "bind", "verify", "authorize", "wrapper")
 	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)
 	if err != nil {
-		return artifacts.ChallengerIndependentView{}, err
+		return artifacts.ChallengerIndependentView{}, nil, err
 	}
 
 	system, user := buildIndependentPrompt(pack, caseCtx, toolHits)
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: system,
-		Messages:     []llm.Message{{Role: "user", Content: user}},
-		Temperature:  temperature,
-		JSONMode:     true,
-	})
-	if err != nil {
-		return artifacts.ChallengerIndependentView{}, err
-	}
 
-	var parsed struct {
+	type phase1Reply struct {
 		IssuePresent       bool     `json:"issue_present"`
 		Reasoning          string   `json:"reasoning"`
 		DefensesConsidered []string `json:"defenses_considered"`
 		CounterExamples    []string `json:"counter_examples"`
 		Confidence         string   `json:"confidence"`
 	}
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-		return artifacts.ChallengerIndependentView{}, fmt.Errorf("parse challenger phase-1 json: %w | raw=%s", err, truncate(resp.Text, 400))
+	// The prompt above asks for "low"|"medium"|"high"; the normalizer
+	// below accepts exactly that set and nothing else. When those two
+	// lists disagree, every legal answer is silently discarded — which
+	// is precisely what happened here for four days.
+	parsed, adjustments, err := generateWithRatingRetry(ctx, client, system, user, temperature,
+		pack.CaseID, "challenger phase-1",
+		ratingSpec[phase1Reply]{
+			field:      "confidence",
+			vocabulary: confidenceVocabulary,
+			normalize:  normalizeConfidence,
+			get:        func(r *phase1Reply) string { return r.Confidence },
+			set:        func(r *phase1Reply, v string) { r.Confidence = v },
+		})
+	if err != nil {
+		return artifacts.ChallengerIndependentView{}, nil, err
 	}
 
 	return artifacts.ChallengerIndependentView{
@@ -146,9 +168,9 @@ func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter
 		Reasoning:          firstNonEmpty(parsed.Reasoning, "(no reasoning returned)"),
 		DefensesConsidered: uniq(parsed.DefensesConsidered),
 		CounterExamples:    uniq(parsed.CounterExamples),
-		Confidence:         normalizeExploitability(parsed.Confidence, ""),
+		Confidence:         parsed.Confidence,
 		KnownLimitations:   []string{knownIndependenceLimitation},
-	}, nil
+	}, adjustments, nil
 }
 
 // knownIndependenceLimitation is §7.7's disclosed caveat: the
@@ -159,4 +181,3 @@ func buildIndependentViewLLM(ctx context.Context, client llm.Client, toolAdapter
 // ChallengerIndependentView so it travels with the artifact rather
 // than living only in a doc comment.
 const knownIndependenceLimitation = "phase-1 ToolFacts were selected by the Expert/Planner's earlier investigation; this is independence of conclusion, not independence of evidence selection (§7.7)"
-

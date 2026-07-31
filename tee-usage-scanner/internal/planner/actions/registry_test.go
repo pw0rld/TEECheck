@@ -83,6 +83,19 @@ func TestRegistry_ListsRegisteredActions(t *testing.T) {
 	}
 }
 
+func TestFactsRegistry_RegistersPlaybookDetail(t *testing.T) {
+	r := actions.NewDefaultRegistryWithFacts(nil, "", nil)
+	found := false
+	for _, n := range r.Names() {
+		if n == "twe_playbook_detail" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("twe_playbook_detail must be registered, got %v", r.Names())
+	}
+}
+
 func TestNavRegistry_NoSinkAction(t *testing.T) {
 	r := actions.NewDefaultRegistryWithNav()
 	names := r.Names()

@@ -3,6 +3,7 @@ package actions_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"strings"
 	"testing"
 
@@ -121,5 +122,46 @@ func TestFactLayerQuery_UnsupportedRepositoryNeverTouchesEngine(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "tool_fact_ref") {
 		t.Errorf("Output = %s, want a tool_fact_ref (artifact reference, not a giant blob)", result.Output)
+	}
+}
+
+// An operation outside the closed vocabulary must fail at the edge, naming
+// the legal values. Nothing checked before: an invented operation reached
+// trustirfacts.Run, which persisted an "unsupported" ToolFact for a query
+// that never ran, and whose error text blamed the repository rather than
+// the operation. Observed for real on 2026-07-27 with
+// "cpp.flow.bounds_check_consistency".
+func TestFactLayerQuery_UnknownOperationIsRejectedWithTheVocabulary(t *testing.T) {
+	h := &actions.FactLayerQueryHandler{Engine: nil, QueryPackDir: "irrelevant"}
+	res := h.Run(context.Background(), actions.ActionRequest{
+		Args: []byte(`{"operation":"cpp.flow.bounds_check_consistency"}`),
+	})
+	if res.OK {
+		t.Fatal("an operation outside the vocabulary must not be accepted")
+	}
+	if !strings.Contains(res.Error, "unknown operation") {
+		t.Errorf("error must say the operation is unknown, got: %q", res.Error)
+	}
+	for _, op := range trustirfacts.SupportedOperationStrings() {
+		if !strings.Contains(res.Error, op) {
+			t.Errorf("error must name the legal value %q so the model can correct itself; got: %q", op, res.Error)
+		}
+	}
+}
+
+// A known operation must get past the vocabulary check — the guard must not
+// reject everything.
+func TestFactLayerQuery_KnownOperationPassesTheVocabularyCheck(t *testing.T) {
+	ops := trustirfacts.SupportedOperationStrings()
+	if len(ops) == 0 {
+		t.Skip("no executable operations in this build")
+	}
+	h := &actions.FactLayerQueryHandler{Engine: nil, QueryPackDir: "irrelevant"}
+	res := h.Run(context.Background(), actions.ActionRequest{
+		Args: []byte(`{"operation":"` + ops[0] + `"}`),
+	})
+	// It still fails — the engine is nil — but on the engine, not the vocabulary.
+	if strings.Contains(res.Error, "unknown operation") {
+		t.Fatalf("a legal operation was rejected as unknown: %q", res.Error)
 	}
 }

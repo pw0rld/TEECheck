@@ -9,17 +9,13 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/arbiter"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/collabrun"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/expert"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/feedback"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/hotspots"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/knowledge"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/mapper"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/pipeline"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomap"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/report"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
@@ -47,12 +43,6 @@ func main() {
 	switch cfg.Command {
 	case "knowledge-init":
 		err = knowledge.RunInit(cfg)
-	case "collab-run":
-		var runPath string
-		runPath, err = collabrun.Run(cfg, time.Now())
-		if err == nil {
-			fmt.Printf("Collaborative run completed at %s\n", runPath)
-		}
 	case "init-run":
 		var runPath string
 		runPath, err = runinit.Run(cfg, time.Now())
@@ -61,12 +51,6 @@ func main() {
 		}
 	case "preprocess":
 		err = preprocessor.Run(cfg)
-	case "mapper":
-		err = mapper.Run(cfg)
-	case "map":
-		err = repomap.Run(cfg)
-	case "hotspots":
-		err = hotspots.Run(cfg)
 	case "cases":
 		err = cases.Run(cfg)
 	case "expert":

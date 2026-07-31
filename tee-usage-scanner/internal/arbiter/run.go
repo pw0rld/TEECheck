@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentbus"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -78,7 +77,7 @@ func buildPacket(pack artifacts.CasePack, hypothesis artifacts.Hypothesis, chall
 	}
 	b.WriteString("\n")
 	b.WriteString("## Challenger View\n\n")
-	b.WriteString(fmt.Sprintf("- Exploitability: %s\n", challenge.Exploitability))
+	b.WriteString(fmt.Sprintf("- Exploitability: %s\n", artifacts.FormatRating(challenge.Exploitability)))
 	b.WriteString(fmt.Sprintf("- Narrative: %s\n", challenge.ExploitNarrative))
 	if len(challenge.CounterArguments) > 0 {
 		b.WriteString("- Counter-arguments:\n")
@@ -262,6 +261,12 @@ Verifier resolution:
 - Evidence distinctions (not-found vs proven-absent): %s
 - Invariant status updates proposed (NOT yet applied to the stored artifact): %s
 
+Observed flow (the attack path the Investigator actually traced, in order — this is the chain attack_chain_complete above refers to):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — a judgment that does not account for it is not an aggregation of the evidence):
+%s
+
 Anchored ToolFacts:
 %s
 
@@ -282,7 +287,7 @@ citation-validated. Validated items are the basis for any
 		strings.Join(hypothesis.SupportingFacts, " | "),
 		taggedJoin(hypothesis.UntypedFacts, "[unanchored]"),
 		independent.IssuePresent, independent.Reasoning, strings.Join(orNone(challenge.KeyDifferences), " | "),
-		challenge.Exploitability, challenge.ReviewerStance,
+		artifacts.FormatRating(challenge.Exploitability), challenge.ReviewerStance,
 		strings.Join(challenge.CounterArguments, " | "),
 		memo.Status,
 		strings.Join(memo.ConfirmedFacts, " | "),
@@ -291,6 +296,7 @@ citation-validated. Validated items are the basis for any
 		taggedJoin(memo.UntypedContradictions, "[unanchored]"),
 		formatEvidenceDistinctionsForLLM(memo.EvidenceDistinctions),
 		formatInvariantUpdatesForLLM(memo.InvariantUpdates),
+		artifacts.FormatToolPath(pack.ObservedFlow), taggedJoin(pack.CounterEvidence, "-"),
 		taggedJoin(renderAnchoredToolFacts(caseCtx), "-"),
 		taggedJoin(renderArchitectureEvidenceStatus(caseCtx.archModel), "-"),
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))
@@ -299,16 +305,6 @@ citation-validated. Validated items are the basis for any
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
 	for round := 0; round < bus.MaxRounds()+1; round++ {
-		resp, err := client.Generate(ctx, llm.GenerateRequest{
-			SystemPrompt: systemPrompt,
-			Messages:     messages,
-			Temperature:  temperature,
-			JSONMode:     true,
-		})
-		if err != nil {
-			return artifacts.FindingItem{}, "", fmt.Errorf("llm generate: %w", err)
-		}
-
 		var parsed struct {
 			Status               string   `json:"status"`
 			Severity             string   `json:"severity"`
@@ -322,8 +318,19 @@ citation-validated. Validated items are the basis for any
 				Question string `json:"question"`
 			} `json:"queries"`
 		}
-		if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-			return artifacts.FindingItem{}, "", fmt.Errorf("parse arbiter json: %w | raw=%s", err, truncateArbiter(resp.Text, 400))
+		// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+		// single format wobble no longer costs the whole case. The response it
+		// returns is the one that actually parsed, so the assistant turn
+		// appended to the dialog below is the recovered reply, not the
+		// rejected one. See its doc comment for the bound.
+		resp, err := llm.GenerateJSON(ctx, client, "arbiter", llm.GenerateRequest{
+			SystemPrompt: systemPrompt,
+			Messages:     messages,
+			Temperature:  temperature,
+			JSONMode:     true,
+		}, &parsed)
+		if err != nil {
+			return artifacts.FindingItem{}, "", err
 		}
 
 		if len(parsed.Queries) == 0 {
@@ -459,11 +466,4 @@ func writeDialogJSONL(path string, dialog *agentbus.Dialog) error {
 		}
 	}
 	return nil
-}
-
-func truncateArbiter(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

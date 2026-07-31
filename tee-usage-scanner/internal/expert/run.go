@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/agentutil"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/citations"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -98,7 +97,20 @@ func emitClaimEvents(rec events.Recorder, runID, agentID string, h artifacts.Hyp
 // can use the same primitives without code duplication.
 
 func buildHypothesisLLM(ctx context.Context, client llm.Client, toolAdapter tools.Adapter, repoRoot string, pack artifacts.CasePack, caseCtx caseContext, agentID string, temperature float64) (artifacts.Hypothesis, error) {
-	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, append(pack.ExpectedObligations, pack.TargetSymbols...), 8)
+	// Search terms come from the pack only. RequiredEvidence is included
+	// alongside ExpectedObligations because the two play the same role from
+	// opposite ends of the pipeline: the legacy path (internal/cases) fills
+	// expected_obligations and leaves required_evidence empty, while an
+	// investigation-derived pack fills required_evidence and leaves
+	// expected_obligations empty. Taking only the former left every llm-path
+	// pack searching on TargetSymbols alone.
+	//
+	// The slice is copied rather than appended onto pack.ExpectedObligations,
+	// whose backing array belongs to the caller's pack.
+	searchTerms := append([]string{}, pack.ExpectedObligations...)
+	searchTerms = append(searchTerms, pack.RequiredEvidence...)
+	searchTerms = append(searchTerms, pack.TargetSymbols...)
+	toolHits, err := toolAdapter.SearchKeywords(ctx, repoRoot, pack.TargetFiles, searchTerms, 8)
 	if err != nil {
 		return artifacts.Hypothesis{}, err
 	}
@@ -167,6 +179,7 @@ Case:
 - target_files: %s
 - target_symbols: %s
 - expected_obligations: %s
+- required_evidence: %s
 - why_selected: %s
 - graph_facts: %s
 - open_questions: %s
@@ -176,6 +189,12 @@ Case:
 - common_false_positives: %s
 - missing_links: %s
 - coverage_gaps: %s
+
+Observed flow (the attack path the Investigator actually traced, in order):
+%s
+
+Counter-evidence the Investigator already found (evidence AGAINST this case — weigh it before concluding, do not restate it as your own finding):
+%s
 
 TWE prior knowledge:
 %s
@@ -197,22 +216,11 @@ Tool hits:
 
 Snippets:
 %s
-`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
+`, pack.CaseID, pack.Category, pack.Priority, strings.Join(pack.TargetFiles, ", "), strings.Join(pack.TargetSymbols, ", "), strings.Join(pack.ExpectedObligations, ", "), strings.Join(pack.RequiredEvidence, " | "), strings.Join(pack.WhySelected, " | "), strings.Join(pack.GraphFacts, " | "), strings.Join(pack.OpenQuestions, " | "),
 		strings.Join(pack.RelatedTWEs, ", "), strings.Join(pack.CommonDefenses, " | "), strings.Join(pack.CommonFalsePositives, " | "), strings.Join(pack.MissingLinks, " | "), strings.Join(pack.CoverageGaps, " | "),
+		artifacts.FormatToolPath(pack.ObservedFlow), firstNonEmpty(strings.Join(pack.CounterEvidence, " | "), "(none)"),
 		firstNonEmpty(caseCtx.tweText, "(none)"), renderArchitectureSlice(caseCtx.archModel), renderInvariants(caseCtx.invariants), renderToolFacts(caseCtx.toolFacts, caseCtx.missingToolFacts),
 		formatKnowledgeHints(pack.KnowledgeHints), formatToolHits(toolHits), formatSnippets(pack.Snippets))
-
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: system,
-		Messages: []llm.Message{
-			{Role: "user", Content: user},
-		},
-		Temperature: temperature,
-		JSONMode:    true,
-	})
-	if err != nil {
-		return artifacts.Hypothesis{}, err
-	}
 
 	var parsed struct {
 		Title              string   `json:"title"`
@@ -228,13 +236,23 @@ Snippets:
 		// is accepted as a transitional fallback for prompt
 		// versions that don't ask for cited_facts (e.g. the
 		// legacy prompt versions or a model that ignores instructions).
-		CitedFacts      []citations.CitedFact `json:"cited_facts"`
-		SupportingFacts []string              `json:"supporting_facts"`
-		Confidence      string                `json:"confidence"`
-		NeedsVerification bool                `json:"needs_verification"`
+		CitedFacts        []citations.CitedFact `json:"cited_facts"`
+		SupportingFacts   []string              `json:"supporting_facts"`
+		Confidence        string                `json:"confidence"`
+		NeedsVerification bool                  `json:"needs_verification"`
 	}
-	if err := agentutil.UnmarshalJSONObject(resp.Text, &parsed); err != nil {
-		return artifacts.Hypothesis{}, fmt.Errorf("parse expert json: %w | raw=%s", err, truncate(resp.Text, 400))
+	// llm.GenerateJSON re-asks once if the reply is not a JSON object; a
+	// single format wobble no longer costs the whole case. See its doc
+	// comment for the bound.
+	if _, err := llm.GenerateJSON(ctx, client, "expert", llm.GenerateRequest{
+		SystemPrompt: system,
+		Messages: []llm.Message{
+			{Role: "user", Content: user},
+		},
+		Temperature: temperature,
+		JSONMode:    true,
+	}, &parsed); err != nil {
+		return artifacts.Hypothesis{}, err
 	}
 
 	// Resolve every citation against the repo: drop ones that fail,
@@ -377,11 +395,4 @@ func uniq(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func truncate(value string, n int) string {
-	if len(value) <= n {
-		return value
-	}
-	return value[:n] + "..."
 }

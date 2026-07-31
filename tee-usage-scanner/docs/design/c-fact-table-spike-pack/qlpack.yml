@@ -1,4 +1,0 @@
-name: spike/optee-facts
-version: 0.0.1
-dependencies:
-  codeql/cpp-all: "*"

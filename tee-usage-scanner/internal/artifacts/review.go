@@ -12,12 +12,12 @@ package artifacts
 //     NormalizeVerdict
 //   - new writes use the long names below
 const (
-	VerdictTruePositive     = "true_positive"
-	VerdictFalsePositive    = "false_positive"
-	VerdictNeedsContext     = "needs_context"
-	VerdictDesignRisk       = "design_risk"
-	VerdictNoIssueObserved  = "no_issue_observed"
-	VerdictSkip             = "skip"
+	VerdictTruePositive    = "true_positive"
+	VerdictFalsePositive   = "false_positive"
+	VerdictNeedsContext    = "needs_context"
+	VerdictDesignRisk      = "design_risk"
+	VerdictNoIssueObserved = "no_issue_observed"
+	VerdictSkip            = "skip"
 )
 
 // ReasonCode is a closed taxonomy explaining *why* a finding got the
@@ -113,4 +113,18 @@ func (r ReviewRecord) EffectiveReasonCode() string {
 		return r.ReasonCode
 	}
 	return r.FPReason
+}
+
+// EffectiveSeverity returns the reviewer's corrected severity,
+// falling back to the legacy Severity field when CorrectedSeverity is
+// unset. `teecheck review` only ever writes CorrectedSeverity, so a
+// consumer that reads the raw Severity field silently gets "" for
+// every record written since the Phase 1.5 schema bump. Read this
+// instead — it is the one place the preference documented on
+// ReviewRecord.Severity is implemented.
+func (r ReviewRecord) EffectiveSeverity() string {
+	if r.CorrectedSeverity != "" {
+		return r.CorrectedSeverity
+	}
+	return r.Severity
 }

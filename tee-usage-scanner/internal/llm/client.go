@@ -31,3 +31,14 @@ func NewClient(cfg config.Config) Client {
 		},
 	})
 }
+
+// maxTokensOrDefault keeps a zero-valued config working. Callers that build
+// a Config by hand — every test in this repo, and the standalone
+// subcommands — leave LLMMaxTokens unset, and a max_tokens of 0 would be
+// sent verbatim and rejected by the provider.
+func maxTokensOrDefault(v int) int {
+	if v > 0 {
+		return v
+	}
+	return config.DefaultLLMMaxTokens
+}
