@@ -36,7 +36,6 @@ type Definition struct {
 	ID              string   `yaml:"id"`
 	Family          Family   `yaml:"family"`
 	Name            string   `yaml:"name"`
-	QueryModules    []string `yaml:"query_modules"`
 	RequiredTrustIR []string `yaml:"required_trustir"`
 }
 
@@ -80,9 +79,16 @@ func LoadDefinitions(path string) ([]Definition, error) {
 	return file.TWE, nil
 }
 
-// Validate checks a single Definition. It intentionally does not require
-// query_modules to resolve to a real file on disk — wiring those module names
-// to actual CodeQL packs is PR-05's responsibility, not this catalog's.
+// Validate checks a single Definition.
+//
+// It no longer requires query_modules: that field named a .ql file per entry,
+// was validated non-empty, and was read by nothing else — while all twenty
+// distinct filenames across the nineteen entries pointed at queries that
+// exist only in the sibling tee-audit rust/javascript/go trees. Validating
+// the presence of a value that was never once correct bought nothing and
+// forced the wrong list to be maintained. The real binding from a TWE to an
+// executable query is trustirfacts.OperationForTWE, checked in both
+// directions against the query registry.
 func (d Definition) Validate() error {
 	if strings.TrimSpace(d.ID) == "" {
 		return fmt.Errorf("id is required")
@@ -95,9 +101,6 @@ func (d Definition) Validate() error {
 	}
 	if !ValidFamilies[d.Family] {
 		return fmt.Errorf("%s: unknown family %q", d.ID, d.Family)
-	}
-	if len(d.QueryModules) == 0 {
-		return fmt.Errorf("%s: query_modules must be non-empty", d.ID)
 	}
 	if len(d.RequiredTrustIR) == 0 {
 		return fmt.Errorf("%s: required_trustir must be non-empty", d.ID)

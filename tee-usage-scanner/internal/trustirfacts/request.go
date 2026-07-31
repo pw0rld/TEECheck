@@ -30,6 +30,35 @@ var operationQueries = map[Operation]string{
 	OperationRollbackVersionPropagation: "state/RollbackVersionNotPropagated.ql",
 }
 
+// tweOperations binds a TWE id to the operation that answers it. This is the
+// bridge the catalog's query_modules field was supposed to be: internal/twe
+// declared that field, validated it non-empty, and nothing else read it,
+// while all nineteen values named .ql files that exist only in the sibling
+// tee-audit rust/javascript/go trees. The real vocabulary was here, in
+// operationQueries, with no connection between the two — so the only way the
+// fact layer got invoked was a model choosing it unprompted, which across
+// four runs on CVE-2026-44362 happened once.
+//
+// The binding lives in this package rather than internal/twe because
+// trustirfacts already imports twe (for the enum registry); the reverse would
+// be an import cycle. It also belongs next to operationQueries: an entry here
+// is a promise that Run will not report unsupported, and the two maps are
+// checked against each other in both directions by twebinding_test.go —
+// every bound operation must be executable, and every executable operation
+// must be bound, because a query no TWE points at cannot be reached from the
+// knowledge layer at all.
+var tweOperations = map[string]Operation{
+	"TWE-STATE-001": OperationRollbackVersionPropagation,
+}
+
+// OperationForTWE returns the fact-layer operation that answers tweID. The
+// false return is a real answer — "this family has no executable query yet" —
+// and callers must not substitute a guess for it.
+func OperationForTWE(tweID string) (Operation, bool) {
+	op, ok := tweOperations[tweID]
+	return op, ok
+}
+
 // DefaultQueryPackDir is the checked-in query pack's conventional location,
 // relative to the tee-usage-scanner module root. Request.QueryPackDir is
 // required rather than defaulted internally (this package makes no
