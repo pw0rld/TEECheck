@@ -428,6 +428,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		manifest.RepoURL, manifest.Commit, invs,
 		executor.Bind(exec, executor.Binding{RunID: manifest.RunID, Agent: "fact-prefetch"}),
 		trustirfacts.RunAndPersist)
+	prefetchedRefs := make([]string, 0, len(prefetched))
+	for _, pf := range prefetched {
+		prefetchedRefs = append(prefetchedRefs, pf.Ref)
+	}
 
 	samples := cfg.Samples
 	if samples <= 0 {
@@ -471,7 +475,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			TWEContext:             string(tweText),
 			Architecture:           archPtr,
 			Invariants:             invs,
-			PrefetchedToolFactRefs: prefetched,
+			PrefetchedToolFactRefs: prefetchedRefs,
 			// §24 Case Pack: common_defenses / common_false_positives per
 			// TWE, consumed when a done.investigations entry builds a Case
 			// Pack for the Challenger (internal/challenger/phase1.go).
@@ -573,7 +577,10 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// legacy HotspotIndex + RepoMap shim that used to run at this point is
 	// gone — downstream consumes these packs directly instead of
 	// re-deriving them from a synthesized 02_hotspots/01_repo_map pair.
-	final := planner.DedupePacks(allPacks)
+	// After dedup, not before: a fact attached to a pack that dedup then
+	// drops reaches nobody, which is how the 2026-07-31 run collected the
+	// right ToolFact and delivered it to no agent.
+	final := attachPrefetchedFacts(planner.DedupePacks(allPacks), prefetched)
 	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
 		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
 		final = final[:cfg.MaxCases]

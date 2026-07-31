@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
@@ -40,6 +41,56 @@ func planTWEOperations(invariants []artifacts.ProjectInvariant) []trustirfacts.O
 // in internal/trustirfacts and do not need re-running here.
 type factRunner func(context.Context, trustirfacts.Engine, trustirfacts.Request) (artifacts.ToolFact, string, error)
 
+// prefetchedFact is a collected ToolFact and the files it flagged. Paths is
+// empty for a query that matched nothing — a statement about the whole tree
+// at this commit rather than about any one file.
+type prefetchedFact struct {
+	Ref   string
+	Paths []string
+}
+
+// attachPrefetchedFacts puts each collected fact on the Case Packs it is
+// evidence for. CasePack.ToolFactRefs is what expert, challenger, verifier and
+// arbiter actually read, and reaching the investigation is not enough: an
+// investigation that located no roles yields a pack with no target files, and
+// DedupePacks drops those deliberately — handing an agent a case with nothing
+// to read asks it to hypothesise about nothing. On 2026-07-31 that is exactly
+// what happened: the fact was collected, both investigations carried it, both
+// of their packs were dropped, and the surviving candidate-derived pack
+// carried nothing.
+//
+// A fact with locations goes to the packs whose targets include a flagged
+// file. A fact with none goes to every pack: "we ran this and matched nothing
+// anywhere" is evidence for any case in the run, and it is precisely what the
+// fixed half of a differential should produce.
+func attachPrefetchedFacts(packs []artifacts.CasePack, facts []prefetchedFact) []artifacts.CasePack {
+	if len(facts) == 0 {
+		return packs
+	}
+	for i := range packs {
+		targets := make(map[string]bool, len(packs[i].TargetFiles))
+		for _, f := range packs[i].TargetFiles {
+			targets[f] = true
+		}
+		for _, fact := range facts {
+			relevant := len(fact.Paths) == 0
+			for _, p := range fact.Paths {
+				if targets[p] {
+					relevant = true
+					break
+				}
+			}
+			if !relevant {
+				continue
+			}
+			if !slices.Contains(packs[i].ToolFactRefs, fact.Ref) {
+				packs[i].ToolFactRefs = append(packs[i].ToolFactRefs, fact.Ref)
+			}
+		}
+	}
+	return packs
+}
+
 // prefetchFactLayer collects the deterministic evidence this run's invariants
 // call for, before the planner starts, and returns the persisted ToolFact
 // paths.
@@ -67,13 +118,13 @@ func prefetchFactLayer(
 	invariants []artifacts.ProjectInvariant,
 	exec executor.Executor,
 	run factRunner,
-) []string {
+) []prefetchedFact {
 	ops := planTWEOperations(invariants)
 	if len(ops) == 0 {
 		return nil
 	}
 
-	var refs []string
+	var refs []prefetchedFact
 	for _, op := range ops {
 		fact, path, err := run(ctx, eng, trustirfacts.Request{
 			RunDir:       runDir,
@@ -97,7 +148,13 @@ func prefetchFactLayer(
 			continue
 		}
 		fmt.Printf("Fact layer prefetch %s: %d location(s) -> %s\n", op, len(fact.Locations), path)
-		refs = append(refs, path)
+		pf := prefetchedFact{Ref: path}
+		for _, loc := range fact.Locations {
+			if !slices.Contains(pf.Paths, loc.Path) {
+				pf.Paths = append(pf.Paths, loc.Path)
+			}
+		}
+		refs = append(refs, pf)
 	}
 	return refs
 }
