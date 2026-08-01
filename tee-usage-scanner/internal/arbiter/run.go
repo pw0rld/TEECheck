@@ -402,6 +402,10 @@ citation-validated. Validated items are the basis for any
 				ToAgent:   q.ToAgent,
 				Kind:      q.Kind,
 				Question:  q.Question,
+				// A bus agent has no file access and no tools. Hand it the
+				// same anchored evidence this stage reasons from, or the only
+				// answer it can give is invented — see agentbus.NewLLMHandler.
+				Evidence: busEvidence(pack, caseCtx),
 			})
 			if err != nil {
 				queryResults = append(queryResults, fmt.Sprintf("Query to %s failed: %v", q.ToAgent, err))

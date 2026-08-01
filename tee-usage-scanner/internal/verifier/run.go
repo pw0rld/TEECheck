@@ -328,6 +328,7 @@ Static check findings (%d total):
 				ToAgent:   q.ToAgent,
 				Kind:      q.Kind,
 				Question:  q.Question,
+				Evidence:  busEvidence(pack, caseCtx),
 			})
 			if err != nil {
 				queryResults = append(queryResults, fmt.Sprintf("Query to %s failed: %v", q.ToAgent, err))

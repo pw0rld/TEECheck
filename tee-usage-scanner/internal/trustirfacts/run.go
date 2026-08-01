@@ -236,7 +236,7 @@ func coverageGaps(dbReused, llmSourced bool) []string {
 		factTableGap,
 		"only the STATE/rollback family (TWE-STATE-001) is implemented; the other six TWE families are unsupported",
 		"database built with --build-mode=none: macro/#ifdef branches resolve to source defaults, not a real build (§23.5)",
-		"finding locations do not include a resolved symbol name (SARIF related-location parsing not implemented)",
+		"path/line only for the primary location; a finding's named sites carry resolved symbols, other locations do not",
 	}
 	if dbReused {
 		gaps = append(gaps, "database reused from a prior build in this run directory (cache hit on repository+commit)")

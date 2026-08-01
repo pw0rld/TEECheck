@@ -248,6 +248,10 @@ Existing wiki pages:
 				ToAgent:   q.ToAgent,
 				Kind:      q.Kind,
 				Question:  q.Question,
+				// The curator's bus agents get the human verdict and the
+				// finding it was passed on. They have no file access, and
+				// agentbus refuses a query with nothing to reason from.
+				Evidence: curatorBusEvidence(rec, finding),
 			})
 			if err != nil {
 				queryResults = append(queryResults, fmt.Sprintf("Query to %s failed: %v", q.ToAgent, err))
@@ -314,4 +318,24 @@ func curatorTruncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// curatorBusEvidence renders what a bus agent may reason from during
+// curation: the human's verdict and the finding it applies to. A bus agent
+// has no file access and no tools, so this is the whole of its world.
+func curatorBusEvidence(rec artifacts.ReviewRecord, finding artifacts.FindingItem) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Case %s / finding %s\n", rec.CaseID, rec.FindingID)
+	fmt.Fprintf(&b, "human verdict: %s (severity %s)\n", rec.Verdict, rec.EffectiveSeverity())
+	if rec.Notes != "" {
+		fmt.Fprintf(&b, "reviewer notes: %s\n", rec.Notes)
+	}
+	fmt.Fprintf(&b, "\nFinding status: %s\nsummary: %s\n", finding.Status, finding.Summary)
+	if len(finding.Files) > 0 {
+		fmt.Fprintf(&b, "files: %s\n", strings.Join(finding.Files, ", "))
+	}
+	for _, e := range finding.Evidence {
+		fmt.Fprintf(&b, "- %s\n", e)
+	}
+	return b.String()
 }

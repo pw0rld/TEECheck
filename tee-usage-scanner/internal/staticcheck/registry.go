@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 type Registry struct {
@@ -41,6 +42,7 @@ func (r *Registry) Available() []string {
 
 func (r *Registry) RunAll(ctx context.Context, req CheckRequest) ([]CheckFinding, error) {
 	var all []CheckFinding
+	var failures []string
 	for _, name := range r.order {
 		a := r.adapters[name]
 		if !a.Available() {
@@ -48,9 +50,18 @@ func (r *Registry) RunAll(ctx context.Context, req CheckRequest) ([]CheckFinding
 		}
 		findings, err := a.Run(ctx, req)
 		if err != nil {
-			return all, fmt.Errorf("adapter %s: %w", name, err)
+			// Keep going. One adapter that cannot run is not a reason to
+			// discard what the others found: RunAll used to return on the
+			// first error, so scanner-001 answered "adapter codeql: a
+			// prebuilt database is required" and threw grep's hits away with
+			// it. The caller gets both the partial results and every failure.
+			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+			continue
 		}
 		all = append(all, findings...)
+	}
+	if len(failures) > 0 {
+		return all, fmt.Errorf("adapter %s", strings.Join(failures, "; adapter "))
 	}
 	return all, nil
 }

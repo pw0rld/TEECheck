@@ -270,23 +270,41 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// agent as the query that provoked it.
 	scReg := scall.NewDefaultRegistryWithExecutor(executor.Bind(exec,
 		executor.Binding{RunID: runID, Agent: "scanner-001"}))
+	// The CodeQL adapter needs a prebuilt database and a query set — this run
+	// built one during l3_planner's fact-layer prefetch, and without wiring it
+	// through, scanner-001 answered every query with "a prebuilt database is
+	// required" while the database sat in the same run directory. On
+	// 2026-08-01 both of the arbiter's queries to it failed that way and it
+	// fell back to an agent with no tools at all.
+	scannerExtra := map[string]string{}
+	if db := findBuiltCodeQLDB(runDir); db != "" {
+		scannerExtra["database"] = db
+		scannerExtra["queries"] = filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
+	}
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
 		req := staticcheck.CheckRequest{
-			RepoRoot: fetch.LocalPath,
-			Keywords: strings.Fields(q.Question),
+			RepoRoot:  fetch.LocalPath,
+			Keywords:  strings.Fields(q.Question),
+			ExtraArgs: scannerExtra,
 		}
+		// A partial result is still a result: RunAll now reports every
+		// adapter failure while keeping what the working ones found.
 		findings, runErr := scReg.RunAll(ctx, req)
-		if runErr != nil {
+		if runErr != nil && len(findings) == 0 {
 			return agentbus.Response{}, runErr
 		}
 		var facts []string
 		for _, f := range findings {
 			facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
 		}
+		answer := fmt.Sprintf("Found %d results", len(findings))
+		if runErr != nil {
+			answer += fmt.Sprintf(" (some adapters unavailable: %v)", runErr)
+		}
 		return agentbus.Response{
 			QueryID:   q.QueryID,
 			FromAgent: "scanner-001",
-			Answer:    fmt.Sprintf("Found %d results", len(findings)),
+			Answer:    answer,
 			Facts:     facts,
 		}, nil
 	}))
@@ -620,4 +638,15 @@ func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
 // detect "this pass added nothing new so stop".
 func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
 	return len(DedupeCandidates(bundles))
+}
+
+// findBuiltCodeQLDB returns the CodeQL database this run's fact layer built,
+// or "" if none. trustirfacts writes it under 02_tool_facts/trustir/db/<hash>
+// and marks completion with .trustirfacts-db-built.
+func findBuiltCodeQLDB(runDir string) string {
+	matches, err := filepath.Glob(filepath.Join(runDir, "02_tool_facts", "trustir", "db", "*", ".trustirfacts-db-built"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return filepath.Dir(matches[0])
 }

@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -199,4 +200,24 @@ func renderToolFacts(facts []artifacts.ToolFact, missing []string) string {
 		lines = append(lines, "- (unavailable) "+ref)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// busEvidence renders what a bus agent is allowed to reason from. It has no
+// file access and no tools, so this is the whole of its world; agentbus
+// refuses a query that arrives without it.
+func busEvidence(pack artifacts.CasePack, ctx caseContext) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Case %s\ntarget files: %s\n", pack.CaseID, strings.Join(pack.TargetFiles, ", "))
+	if len(pack.TargetSymbols) > 0 {
+		fmt.Fprintf(&b, "target symbols: %s\n", strings.Join(pack.TargetSymbols, ", "))
+	}
+	b.WriteString("\nToolFacts (immutable):\n")
+	b.WriteString(renderToolFacts(ctx.toolFacts, ctx.missingToolFacts))
+	if len(pack.Snippets) > 0 {
+		b.WriteString("\n\nSource snippets:\n")
+		for _, sn := range pack.Snippets {
+			fmt.Fprintf(&b, "--- %s:%d-%d\n%s\n", sn.Path, sn.StartLine, sn.EndLine, sn.Content)
+		}
+	}
+	return b.String()
 }

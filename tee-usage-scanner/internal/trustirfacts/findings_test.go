@@ -1,6 +1,7 @@
 package trustirfacts
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
@@ -41,5 +42,23 @@ func TestToolFindings_CarriesMessageAndRelated(t *testing.T) {
 func TestToolFindings_EmptyResults(t *testing.T) {
 	if got := toolFindings(nil); got != nil {
 		t.Fatalf("findings = %+v, want nil", got)
+	}
+}
+
+// A ToolFact's coverage_gaps are read by every agent alongside the evidence
+// they qualify. They must describe the tool as it is now.
+//
+// "SARIF related-location parsing not implemented" and "finding locations do
+// not include a resolved symbol name" were both true when written and both
+// false once related locations were parsed — so p7's arbiter read the
+// resolved symbol check_update_version and, in the same block, a disclaimer
+// saying symbols are not resolved.
+func TestCoverageGaps_DoNotDisclaimWhatIsNowImplemented(t *testing.T) {
+	for _, gap := range coverageGaps(false, false) {
+		for _, stale := range []string{"related-location parsing not implemented", "do not include a resolved symbol name"} {
+			if strings.Contains(gap, stale) {
+				t.Errorf("coverage gap still disclaims an implemented capability: %q", gap)
+			}
+		}
 	}
 }

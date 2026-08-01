@@ -29,6 +29,10 @@ func TestNewLLMHandler(t *testing.T) {
 		ToAgent:   "expert-001",
 		Kind:      "clarify",
 		Question:  "Why is attestation missing?",
+		// Evidence is required now: a bus agent has no file access and no
+		// tools, so a query without it can only be answered by invention.
+		// This test previously asserted the opposite behaviour.
+		Evidence: "CasePack: src/verify.rs\nToolFacts: (none)",
 	})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)

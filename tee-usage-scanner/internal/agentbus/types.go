@@ -6,7 +6,17 @@ type Query struct {
 	ToAgent   string `json:"to_agent"`
 	Kind      string `json:"kind"`
 	Question  string `json:"question"`
-	Context   any    `json:"context,omitempty"`
+
+	// Evidence is everything the answering agent is allowed to reason from:
+	// the case pack slice, the ToolFacts, whatever the caller can vouch for.
+	// It is not optional decoration — NewLLMHandler refuses a query that
+	// arrives without it. A bus agent has no file access and no tools, so an
+	// empty Evidence means the only possible answer is invented, and on
+	// 2026-08-01 one such answer overrode a CodeQL ToolFact and turned a
+	// vulnerable-side run into no_issue_observed.
+	Evidence string `json:"evidence,omitempty"`
+
+	Context any `json:"context,omitempty"`
 }
 
 type Response struct {

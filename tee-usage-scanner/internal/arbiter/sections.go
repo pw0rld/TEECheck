@@ -269,3 +269,27 @@ func dedupeStrings(values []string) []string {
 	}
 	return out
 }
+
+// busEvidence renders what a bus agent is allowed to reason from. It has no
+// file access and no tools, so this is the whole of its world; agentbus
+// refuses a query that arrives without it.
+func busEvidence(pack artifacts.CasePack, caseCtx caseContext) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Case %s\ntarget files: %s\n", pack.CaseID, strings.Join(pack.TargetFiles, ", "))
+	if len(pack.TargetSymbols) > 0 {
+		fmt.Fprintf(&b, "target symbols: %s\n", strings.Join(pack.TargetSymbols, ", "))
+	}
+	b.WriteString("\nToolFacts (immutable):\n")
+	if facts := renderAnchoredToolFacts(caseCtx); len(facts) > 0 {
+		b.WriteString(strings.Join(facts, "\n"))
+	} else {
+		b.WriteString("(none)")
+	}
+	if len(pack.Snippets) > 0 {
+		b.WriteString("\n\nSource snippets:\n")
+		for _, sn := range pack.Snippets {
+			fmt.Fprintf(&b, "--- %s:%d-%d\n%s\n", sn.Path, sn.StartLine, sn.EndLine, sn.Content)
+		}
+	}
+	return b.String()
+}
