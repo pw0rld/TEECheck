@@ -104,7 +104,7 @@ func RunWithBus(cfg config.Config, client llm.Client, w io.Writer, bus *agentbus
 	for idx, rec := range records {
 		finding := findingsMap[rec.FindingID]
 
-		bus.ResetDialog(rec.CaseID)
+		bus.ResetDialog(rec.CaseID, cfg.AgentID)
 		result, err := curateLLM(context.Background(), client, bus, rec, finding, pageSummary, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			fmt.Fprintf(w, "Warning: curator LLM failed for %s: %v, falling back to deterministic archive\n", rec.CaseID, err)
@@ -141,7 +141,7 @@ func RunWithBus(cfg config.Config, client llm.Client, w io.Writer, bus *agentbus
 			}
 		}
 
-		if dialog := bus.GetDialog(rec.CaseID); dialog != nil && len(dialog.Rounds) > 0 {
+		if dialog := bus.GetDialog(rec.CaseID, cfg.AgentID); dialog != nil && len(dialog.Rounds) > 0 {
 			dialogPath := filepath.Join(runfs.CuratorDir(cfg.RunDir), fmt.Sprintf("dialog-%03d.jsonl", idx+1))
 			if err := curatorWriteDialog(dialogPath, dialog); err != nil {
 				fmt.Fprintf(w, "Warning: failed to write curator dialog: %v\n", err)

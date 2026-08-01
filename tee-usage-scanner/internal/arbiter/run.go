@@ -180,7 +180,7 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
 		independentView := loadIndependentView(challenge.IndependentViewPath)
 
-		bus.ResetDialog(pack.CaseID)
+		bus.ResetDialog(pack.CaseID, cfg.AgentID)
 		item, packet, err := arbitrateLLM(context.Background(), client, bus, pack, hypothesis, challenge, memo, caseCtx, independentView, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			return fmt.Errorf("arbiter llm for %s: %w", pack.CaseID, err)
@@ -194,7 +194,7 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 			return fmt.Errorf("write arbiter packet: %w", err)
 		}
 
-		if dialog := bus.GetDialog(pack.CaseID); dialog != nil && len(dialog.Rounds) > 0 {
+		if dialog := bus.GetDialog(pack.CaseID, cfg.AgentID); dialog != nil && len(dialog.Rounds) > 0 {
 			dialogPath := filepath.Join(runfs.ArbiterDir(cfg.RunDir), fmt.Sprintf("dialog-%03d.jsonl", idx+1))
 			if err := writeDialogJSONL(dialogPath, dialog); err != nil {
 				fmt.Printf("Warning: failed to write arbiter dialog: %v\n", err)

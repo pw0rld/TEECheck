@@ -91,11 +91,17 @@ func (b *Bus) Ask(ctx context.Context, q Query) (Response, error) {
 }
 
 func (b *Bus) AskForCase(ctx context.Context, caseID string, q Query) (Response, error) {
+	// The quota is per (case, asking agent). Keyed on the case alone, the
+	// verifier, arbiter and curator drew from one shared budget: once
+	// scanner-001 started answering, the verifier spent it and the arbiter
+	// hit the limit before reaching the rollback question at all — it said so
+	// in its own finding. One agent running out must not silence the next.
+	key := dialogKey(caseID, q.FromAgent)
 	b.mu.Lock()
-	dialog, exists := b.dialogs[caseID]
+	dialog, exists := b.dialogs[key]
 	if !exists {
 		dialog = &Dialog{CaseID: caseID}
-		b.dialogs[caseID] = dialog
+		b.dialogs[key] = dialog
 	}
 	if len(dialog.Rounds) >= b.maxRounds {
 		b.mu.Unlock()
@@ -123,20 +129,28 @@ func (b *Bus) AskForCase(ctx context.Context, caseID string, q Query) (Response,
 	return resp, nil
 }
 
-func (b *Bus) GetDialog(caseID string) *Dialog {
+// dialogKey scopes a dialog to one case AND one asking agent. Keyed on the
+// case alone, the three stages that use the bus shared a single budget and a
+// single history — so ResetDialog from one stage wiped another's transcript,
+// and the first stage to spend the quota silenced the rest.
+func dialogKey(caseID, fromAgent string) string { return caseID + "\x00" + fromAgent }
+
+// GetDialog returns fromAgent's transcript for this case.
+func (b *Bus) GetDialog(caseID, fromAgent string) *Dialog {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	d, ok := b.dialogs[caseID]
+	d, ok := b.dialogs[dialogKey(caseID, fromAgent)]
 	if !ok {
 		return nil
 	}
 	return d
 }
 
-func (b *Bus) ResetDialog(caseID string) {
+// ResetDialog clears fromAgent's budget and transcript for this case.
+func (b *Bus) ResetDialog(caseID, fromAgent string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	delete(b.dialogs, caseID)
+	delete(b.dialogs, dialogKey(caseID, fromAgent))
 }
 
 func (b *Bus) MaxRounds() int {

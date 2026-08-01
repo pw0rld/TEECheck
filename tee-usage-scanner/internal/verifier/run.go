@@ -104,7 +104,7 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 		// tags so it can weight expert claims accordingly.
 		expertValidation := citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
 
-		bus.ResetDialog(pack.CaseID)
+		bus.ResetDialog(pack.CaseID, cfg.AgentID)
 		memo, err := buildMemoLLM(context.Background(), client, bus, manifest.LocalPath, pack, hypothesis, challenge, caseCtx, cfg.AgentID, cfg.LLMTemp, scFindings, expertValidation)
 		if err != nil {
 			return fmt.Errorf("verifier llm for %s: %w", pack.CaseID, err)
@@ -130,7 +130,7 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 			emitVerifierClaimEvents(rec, manifest.RunID, cfg.AgentID, memo)
 		}
 
-		if dialog := bus.GetDialog(pack.CaseID); dialog != nil && len(dialog.Rounds) > 0 {
+		if dialog := bus.GetDialog(pack.CaseID, cfg.AgentID); dialog != nil && len(dialog.Rounds) > 0 {
 			dialogPath := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("dialog-%03d.jsonl", idx+1))
 			if err := writeDialogJSONL(dialogPath, dialog); err != nil {
 				fmt.Printf("Warning: failed to write dialog: %v\n", err)

@@ -87,7 +87,7 @@ func TestBusDialogPersistence(t *testing.T) {
 		QueryID: "q-1", FromAgent: "caller", ToAgent: "target", Kind: "clarify", Question: "q1",
 	})
 
-	dialog := bus.GetDialog("case-001")
+	dialog := bus.GetDialog("case-001", "caller")
 	if dialog == nil {
 		t.Fatal("expected dialog for case-001")
 	}
@@ -98,8 +98,8 @@ func TestBusDialogPersistence(t *testing.T) {
 		t.Fatalf("unexpected question: %s", dialog.Rounds[0].Query.Question)
 	}
 
-	bus.ResetDialog("case-001")
-	dialog = bus.GetDialog("case-001")
+	bus.ResetDialog("case-001", "caller")
+	dialog = bus.GetDialog("case-001", "caller")
 	if dialog != nil && len(dialog.Rounds) != 0 {
 		t.Fatal("expected empty dialog after reset")
 	}

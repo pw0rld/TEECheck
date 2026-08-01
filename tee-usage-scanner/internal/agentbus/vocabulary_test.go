@@ -125,3 +125,62 @@ func TestBus_NilRecorderIsSafe(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+// The dialog quota is per asking agent, not shared across the run.
+//
+// It used to be keyed on caseID alone, so verifier, arbiter and curator drew
+// from the same three rounds. Once scanner-001 was wired up and started
+// answering, the verifier spent the budget and the arbiter hit "dialog round
+// limit (3) reached" before it could ask about the rollback path at all — it
+// said so in its own finding.
+func TestBus_QuotaIsPerAskingAgent(t *testing.T) {
+	b := New(2)
+	b.Register("scanner-001", okHandler)
+	ask := func(from string) error {
+		_, err := b.AskForCase(context.Background(), "case-001",
+			Query{FromAgent: from, ToAgent: "scanner-001", Question: "?", Evidence: "e"})
+		return err
+	}
+
+	// The verifier spends its whole budget.
+	if err := ask("verifier-001"); err != nil {
+		t.Fatalf("verifier round 1: %v", err)
+	}
+	if err := ask("verifier-001"); err != nil {
+		t.Fatalf("verifier round 2: %v", err)
+	}
+	if err := ask("verifier-001"); err == nil {
+		t.Fatal("verifier round 3 must exceed its own quota")
+	}
+
+	// The arbiter's is untouched.
+	if err := ask("arbiter-001"); err != nil {
+		t.Fatalf("the arbiter must have its own budget, got: %v", err)
+	}
+	if err := ask("arbiter-001"); err != nil {
+		t.Fatalf("arbiter round 2: %v", err)
+	}
+	if err := ask("arbiter-001"); err == nil {
+		t.Fatal("arbiter round 3 must exceed its own quota")
+	}
+}
+
+// Different cases stay independent too.
+func TestBus_QuotaIsPerCase(t *testing.T) {
+	b := New(1)
+	b.Register("scanner-001", okHandler)
+	ask := func(caseID string) error {
+		_, err := b.AskForCase(context.Background(), caseID,
+			Query{FromAgent: "arbiter-001", ToAgent: "scanner-001", Question: "?", Evidence: "e"})
+		return err
+	}
+	if err := ask("case-001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ask("case-001"); err == nil {
+		t.Fatal("second round on the same case must be refused")
+	}
+	if err := ask("case-002"); err != nil {
+		t.Fatalf("a different case must have its own budget: %v", err)
+	}
+}
