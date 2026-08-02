@@ -3,6 +3,12 @@
 > 快照日期：2026-07-31（前一版 2026-07-23）
 > 分支：`merge/tee-audit-integration`（领先 main 193 提交，41 个包全绿）
 > 用途：汇报当前架构与进度。数据取自代码库实测，进度如实标注。
+>
+> **历史快照说明（2026-08-02）**：本文保留 2026-07-31 已实现流水线，便于理解现有代码，
+> 其中 `Fingerprint → Architecture → ProjectInvariant → Planner` 不再是目标设计。
+> BUG-003 确立的新目标是 `Program Index/ProjectMap → Planner AuditLead/Evidence →
+> CaseInvariant/SecurityArchitecture`。正式目标架构见
+> [tee-usage-scanner/docs/ARCHITECTURE.md](../tee-usage-scanner/docs/ARCHITECTURE.md)。
 
 ---
 
