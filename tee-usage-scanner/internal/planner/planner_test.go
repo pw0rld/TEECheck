@@ -118,7 +118,7 @@ func TestPlannerRun_HappyPath4Rounds(t *testing.T) {
 		RunID:       "test-happy",
 		RepoRoot:    repoRoot,
 		RunDir:      runDir,
-		Profile:     planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Profile:     planner.PromptProfile{Focus: "tee"},
 		Client:      client,
 		Registry:    reg,
 		Budget:      defaultTestBudget(),

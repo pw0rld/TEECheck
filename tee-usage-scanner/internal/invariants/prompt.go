@@ -61,9 +61,8 @@ Respond with a single JSON object: { "invariants": [ ... ] }. Each entry:
     "evidence": [ { "kind": "source", "file": "...", "start_line": N,
                      "end_line": N, "note": "<symbol this cites>" } ] }`
 
-// buildUserPrompt renders the per-run context: TWE prior knowledge, the
-// already-validated ArchitectureModel (condensed), and ProjectProfile
-// evidence — the three inputs §7.4 names.
+// buildUserPrompt renders the per-run context: TWE prior knowledge and the
+// already-validated ArchitectureModel (condensed).
 func buildUserPrompt(in Input) string {
 	return fmt.Sprintf(`## TWE prior knowledge
 
@@ -73,18 +72,13 @@ func buildUserPrompt(in Input) string {
 
 %s
 
-## Project profile (condensed)
-
-%s
-
 ## Instructions
 
 Derive a small set of project-specific invariants by instantiating the
 TWE scenarios above against this specific architecture. Every invariant
 is proposed only — see the rules in the system prompt.`,
 		nonEmpty(in.TWEContext, "(no TWE prior knowledge context available for this run)"),
-		marshalCondensed(in.Model, 8000),
-		marshalCondensed(in.Profile, 4000))
+		marshalCondensed(in.Model, 8000))
 }
 
 func nonEmpty(value, fallback string) string {

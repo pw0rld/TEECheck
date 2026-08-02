@@ -16,33 +16,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/schema"
 )
 
-func TestSchemaProjectProfileV2(t *testing.T) {
-	profile := ProjectProfileV2{
-		SchemaVersion: SchemaVersionProjectProfileV2,
-		RunID:         "run-1",
-		Repo:          RepoRef{URL: "git@example.com:acme/repo.git", Commit: "abc123"},
-		Languages:     []string{"rust"},
-		TEEPlatforms: []ProfileSignal{{
-			ID: "platform:sgx", Kind: "tee_platform", Name: "SGX",
-			Status:   "observed",
-			Evidence: []EvidenceReference{{Kind: "code_or_config", File: "src/lib.rs", StartLine: 1}},
-		}},
-	}
-	data := marshalJSON(t, profile)
-	if err := schema.Validate(schema.ProjectProfileV2, data); err != nil {
-		t.Fatalf("valid ProjectProfileV2 rejected: %v", err)
-	}
-
-	if err := schema.Validate(schema.ProjectProfileV2, withoutField(t, data, "run_id")); err == nil {
-		t.Fatal("expected missing run_id to be rejected")
-	}
-	// repo.commit is required by $defs/repo; drop it to prove nested
-	// requiredness is enforced, not just top-level.
-	if err := schema.Validate(schema.ProjectProfileV2, withoutField(t, data, "repo", "commit")); err == nil {
-		t.Fatal("expected missing repo.commit to be rejected")
-	}
-}
-
 func TestSchemaArchitectureV1(t *testing.T) {
 	model := ArchitectureModel{
 		SchemaVersion: SchemaVersionArchitectureV1,

@@ -8,7 +8,6 @@ import (
 func TestContextPathsStayUnderRunDir(t *testing.T) {
 	runDir := filepath.Join("tmp", "runs", "run-1")
 	wants := map[string]string{
-		ContextProjectProfilePath(runDir): filepath.Join(runDir, "01_context", "project_profile.v2.json"),
 		ArchitectureModelPath(runDir):     filepath.Join(runDir, "01_context", "architecture.v1.json"),
 		ArchitectureDossierPath(runDir):   filepath.Join(runDir, "01_context", "architecture_dossier.md"),
 		ProjectInvariantsPath(runDir):     filepath.Join(runDir, "01_context", "project_invariants.v1.json"),

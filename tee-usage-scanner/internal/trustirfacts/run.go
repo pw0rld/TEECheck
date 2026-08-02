@@ -83,7 +83,7 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 	}
 
 	dbPath := databaseDir(req.RunDir, req.Repository, req.Commit)
-	reused, err := ensureDatabase(ctx, eng, req.Exec, dbPath, req.Repository, req.Commit, req.ExtraPATH)
+	reused, err := ensureDatabase(ctx, eng, req.Exec, dbPath, req.RunDir, req.Repository, req.Commit, req.ExtraPATH)
 	if err != nil {
 		return unresolvedFact(base, fmt.Sprintf("database build failed: %v", err)), nil
 	}

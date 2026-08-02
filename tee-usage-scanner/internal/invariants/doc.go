@@ -1,7 +1,7 @@
 // Package invariants implements the Invariant Agent (§7.4, §22 of the merge
 // design). It takes the full TWE prior-knowledge context, the
 // ArchitectureModel the Architecture Agent already produced and validated,
-// and ProjectProfile evidence, and instantiates general TWE scenarios into
+// and instantiates general TWE scenarios into
 // project-specific ProjectInvariant obligations — each with status
 // "proposed" and a concrete verification_plan.
 //

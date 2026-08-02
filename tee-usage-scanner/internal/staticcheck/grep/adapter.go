@@ -2,8 +2,10 @@ package grep
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,10 +84,31 @@ func uniqueKeywords(values []string) []string {
 	return out
 }
 
+// skippedDirs are directories that hold no source to audit. Walking them is
+// not merely wasteful: .git/index and the pack files embed source paths as
+// plain strings inside binary records, so a keyword search matches them and
+// returns raw bytes as evidence. On 2026-08-02, 96 such "findings" — NUL
+// bytes and all — reached the verifier's and arbiter's prompts.
+//
+// This mattered only once the scanner was pointed at a real checkout. Before
+// that its root was a benchmark fixture holding a single .c file, with no
+// .git to walk, and the walk's complete lack of filtering was invisible.
+var skippedDirs = map[string]bool{
+	".git": true, ".hg": true, ".svn": true,
+	"node_modules": true, "vendor": true,
+	"out": true, "build": true, "target": true,
+}
+
 func walkDir(ctx context.Context, dir, repoRoot string, keywords []string, category string) ([]staticcheck.CheckFinding, error) {
 	var findings []staticcheck.CheckFinding
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skippedDirs[info.Name()] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		select {
@@ -99,12 +122,43 @@ func walkDir(ctx context.Context, dir, repoRoot string, keywords []string, categ
 	return findings, err
 }
 
+// binarySniffBytes is how much of a file is examined for NUL. git and
+// ripgrep both decide the same way and at a similar depth; a text file with
+// a NUL in its first 8 KiB is not a file this scanner can report lines from.
+const binarySniffBytes = 8192
+
+// looksBinary reports whether the opened file appears to be binary, by the
+// same rule git and ripgrep use: a NUL byte near the start.
+//
+// A directory blocklist alone cannot be right — it is a list of the places
+// binaries were last found, and the checkout also carries keys/, images and
+// build artefacts. NUL detection needs no list and stays correct for files
+// nobody thought of.
+func looksBinary(f *os.File) (bool, error) {
+	buf := make([]byte, binarySniffBytes)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	if _, serr := f.Seek(0, io.SeekStart); serr != nil {
+		return false, serr
+	}
+	return bytes.IndexByte(buf[:n], 0) >= 0, nil
+}
+
 func searchFile(fullPath, repoRoot string, keywords []string, category string) []staticcheck.CheckFinding {
 	f, err := os.Open(fullPath)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+
+	// A binary file has no lines to report. Its bytes would arrive
+	// downstream as quoted "evidence" with a path and a line number on them,
+	// indistinguishable in shape from a real citation.
+	if binary, berr := looksBinary(f); berr != nil || binary {
+		return nil
+	}
 
 	rel, err := filepath.Rel(repoRoot, fullPath)
 	if err != nil {

@@ -76,12 +76,6 @@ func setupPlannerRun(t *testing.T, repoFiles ...string) (repoRoot, runDir string
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runfs.WriteJSON(runfs.ProjectProfilePath(runDir), artifacts.ProjectProfile{
-		SchemaVersion: "teecheck.project_profile.v1",
-		Languages:     []string{"c"},
-	}); err != nil {
-		t.Fatal(err)
-	}
 	return repoRoot, runDir
 }
 

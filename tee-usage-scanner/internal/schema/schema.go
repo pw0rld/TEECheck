@@ -1,7 +1,7 @@
 // Package schema binds the eight canonical TEECheck data contracts (§9 of
 // the merge design) to their JSON Schema definitions and provides the one
 // runtime gate LLM-produced or otherwise untrusted JSON must pass before the
-// rest of the Go pipeline treats it as a ProjectProfile, ArchitectureModel,
+// rest of the Go pipeline treats it as an ArchitectureModel,
 // ProjectInvariant, TWEKnowledgeManifest, TWEPlaybook, ToolFact,
 // TWEInvestigation, or UnifiedFinding.
 //
@@ -36,7 +36,6 @@ var embedded embed.FS
 type Name string
 
 const (
-	ProjectProfileV2       Name = "project-profile.v2"
 	ArchitectureV1         Name = "architecture.v1"
 	ProjectInvariantV1     Name = "project-invariant.v1"
 	TWEKnowledgeManifestV1 Name = "twe-knowledge-manifest.v1"
@@ -50,7 +49,6 @@ const (
 // against. Keep in sync with the eight schema files under schemas/ — a
 // mismatch is caught by TestEmbeddedSchemasMatchCanonical.
 var All = []Name{
-	ProjectProfileV2,
 	ArchitectureV1,
 	ProjectInvariantV1,
 	TWEKnowledgeManifestV1,

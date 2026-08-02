@@ -141,6 +141,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		runID = manifest.RunID
 	}
 	_ = rec.Emit(events.RunStarted(runID, cfg.Target, cfg.Mode, cfg.Focus))
+	_ = rec.Emit(events.RunConfig(runID, processCommand()))
 	defer func() {
 		reason := "completed"
 		errMsg := ""
@@ -195,6 +196,33 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// be traced to a stage is noise.
 	exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
 
+	// Acquire the tree the whole run reads, before the first stage. See
+	// acquireSourceScope: every stage from here on resolves paths against
+	// this one root, so the models, the tools and the fact layer describe
+	// the same revision.
+	srcRoot, pinned := acquireSourceScope(context.Background(),
+		executor.Bind(exec, executor.Binding{RunID: runID, Agent: "source-acquire"}),
+		runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
+	scopeReason := "target directory; no pinned checkout"
+	if pinned {
+		scopeReason = fmt.Sprintf("pinned checkout of %s@%s", cfg.RepoURL, truncate(cfg.Commit, 12))
+	}
+	fmt.Printf("Source scope: %s (%s)\n", srcRoot, scopeReason)
+	_ = rec.Emit(events.SourceScopeResolved(runID, srcRoot, scopeReason))
+	stageCfg.LocalPath = srcRoot
+	// The manifest is the run's single statement of what was scanned, and
+	// most stages read the tree from it rather than from their own config:
+	// preprocess walks manifest.LocalPath, and invariants, expert and
+	// verifier resolve every citation against it. Leaving it at the target
+	// directory while the tools read the checkout would put the two scopes
+	// back — the same split BUG-002 is about, only harder to see because
+	// nothing would print it. runinit writes the manifest before this point
+	// (the checkout needs the run directory to live in), so it is corrected
+	// here rather than pre-computed.
+	if err := recordScannedRoot(runDir, srcRoot); err != nil {
+		return runDir, fmt.Errorf("record scanned root: %w", err)
+	}
+
 	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
 	}
@@ -228,7 +256,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
+		return runL3Planner(stageCfg, client, srcRoot, runDir, rec, blobs, exec)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -259,6 +287,9 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// queries failed (agents unavailable)" — appears nowhere in the run
 	// record; it survived only inside an LLM prompt blob.
 	bus.SetRecorder(rec, runID)
+	// Somewhere to keep the full body of an answer the bus had to cap, so the
+	// preview notice in the prompt names a location a reader can open.
+	bus.SetBlobs(blobs)
 
 	// Bus tool registrations stay under TOOL identities; they
 	// represent capability endpoints (a static-check tool, a
@@ -281,10 +312,29 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		scannerExtra["database"] = db
 		scannerExtra["queries"] = filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
 	}
+	// The one tool-backed bus agent searches the same pinned checkout the
+	// planner reads and the facts came from, when the fact layer produced
+	// one. Pointed at the scanned directory it could only ever answer about
+	// the fixture: on 2026-08-01 the verifier asked it eight times for
+	// signed_hdr.h and for callers of shdr_verify_signature, and eight times
+	// it returned the lines of core/crypto/signed_hdr.c — the only file it
+	// could see. See BUG-002 §3.2.
+	scannerRoot := srcRoot
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
+		// Search for what the question names, not for every word in it. See
+		// searchTerms: strings.Fields put "the" and "of" into the keyword
+		// list, which matched most of the checkout.
+		terms := searchTerms(q.Question)
+		if len(terms) == 0 {
+			return agentbus.Response{
+				QueryID:   q.QueryID,
+				FromAgent: "scanner-001",
+				Answer:    noSearchableTerm,
+			}, nil
+		}
 		req := staticcheck.CheckRequest{
-			RepoRoot:  fetch.LocalPath,
-			Keywords:  strings.Fields(q.Question),
+			RepoRoot:  scannerRoot,
+			Keywords:  terms,
 			ExtraArgs: scannerExtra,
 		}
 		// A partial result is still a result: RunAll now reports every
@@ -297,7 +347,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		for _, f := range findings {
 			facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
 		}
-		answer := fmt.Sprintf("Found %d results", len(findings))
+		answer := fmt.Sprintf("Found %d results for %s", len(findings), strings.Join(terms, ", "))
 		if runErr != nil {
 			answer += fmt.Sprintf(" (some adapters unavailable: %v)", runErr)
 		}
@@ -383,12 +433,7 @@ func truncate(s string, n int) string {
 // Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
-	var profile artifacts.ProjectProfile
-	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
-		return fmt.Errorf("load profile: %w", err)
-	}
-
+func runL3Planner(cfg config.Config, client llm.Client, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -456,12 +501,29 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		samples = 1
 	}
 
+	// The fact layer just checked out the pinned revision to build its
+	// database from, and that checkout is now kept. Read the source from it.
+	//
+	// Until now the planner's tools resolved paths against the scanned
+	// directory, which for a benchmark case is a fixture holding only the
+	// patched file. Both scopes claim to be repository@commit, so a tool's
+	// negative result in the narrow one was indistinguishable from a fact
+	// about the wide one — on CVE-2026-44362 reverse_trace reported
+	// "(no callers found)" for a function whose caller the fact layer had
+	// already located in core/kernel/ree_fs_ta.c, and the Challenger read
+	// that as the delegation path being dead code. See BUG-002 §3.2/§3.3.
+	//
+	// The fixture stays the run's identity and the understanding layer's
+	// input; only the tools widen. That is safe precisely because the two
+	// trees agree on the file under audit: the fixture's copy is
+	// byte-identical to the revision's (the benchmark oracle pins its
+	// sha256), so architecture evidence and invariants written against the
+	// fixture keep their line numbers here.
 	promptProfile := planner.PromptProfile{
-		RepoURL:        manifest.RepoURL,
-		Commit:         manifest.Commit,
-		Focus:          cfg.Focus,
-		Languages:      profile.Languages,
-		FrameworkHints: profile.FrameworkHints,
+		RepoURL: manifest.RepoURL,
+		Commit:  manifest.Commit,
+		Focus:   cfg.Focus,
+		Hint:    cfg.Hint,
 	}
 
 	var bundles []*artifacts.EvidenceBundle
@@ -474,7 +536,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 		}
 		result := planner.Run(context.Background(), planner.RunConfig{
 			RunID:         manifest.RunID,
-			RepoRoot:      repoRoot,
+			RepoRoot:      srcRoot,
 			RunDir:        runDir,
 			Profile:       promptProfile,
 			Client:        client,

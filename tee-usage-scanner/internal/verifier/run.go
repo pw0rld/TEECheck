@@ -184,6 +184,14 @@ treat each expert fact according to its tag:
   [unresolved] live repo not available; you cannot verify; note
                this in your output rather than guessing`
 
+	// to_agent is a closed vocabulary and this prompt never published it.
+	// The arbiter's did; the verifier's did not, and on run 44362-vuln-p9
+	// the verifier spent all four of its bus queries on "fact-layer" — an
+	// endpoint that does not exist. All four were refused
+	// (bus_query_failed in that run's events.jsonl) and the dispute they
+	// were meant to settle went unanswered.
+	systemPrompt += bus.VocabularyNote()
+
 	userMsg := fmt.Sprintf(`Case: %s (category: %s, priority: %s)
 Target files: %s
 Target symbols: %s

@@ -25,7 +25,7 @@ const schemaVersionProjectInvariantsCollection = "teecheck.project_invariants.v1
 
 // Run is the standalone entry point for the Invariant Agent stage: it reads
 // the ArchitectureModel a prior architecture.Run already validated, the
-// ProjectProfileV2, and the compiled TWE prior-knowledge context, builds
+// and the compiled TWE prior-knowledge context, builds
 // ProjectInvariant[], runs each through Validate, schema-validates each one
 // individually (project-invariant.v1.json describes a single invariant, not
 // the collection — see the doc comment on artifacts.ProjectInvariants), and
@@ -41,17 +41,12 @@ func Run(cfg config.Config, client llm.Client) error {
 		return fmt.Errorf("load architecture model: %w", err)
 	}
 
-	var profile artifacts.ProjectProfileV2
-	if err := runfs.ReadJSON(runfs.ContextProjectProfilePath(cfg.RunDir), &profile); err != nil {
-		return fmt.Errorf("load project profile v2: %w", err)
-	}
-
 	tweContext := ""
 	if data, err := os.ReadFile(runfs.TWEAgentContextPath(cfg.RunDir)); err == nil {
 		tweContext = string(data)
 	}
 
-	in := Input{RunID: manifest.RunID, Model: model, Profile: profile, TWEContext: tweContext}
+	in := Input{RunID: manifest.RunID, Model: model, TWEContext: tweContext}
 	built, err := BuildLLM(context.Background(), client, in, cfg.LLMTemp)
 	if err != nil {
 		return fmt.Errorf("build invariants: %w", err)

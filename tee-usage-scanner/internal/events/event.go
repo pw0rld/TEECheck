@@ -33,7 +33,11 @@ const (
 	TypeStageCompleted        = "stage_completed"
 	TypeClaimEmitted          = "claim_emitted"
 	TypeValueNormalized       = "value_normalized"
+	TypeBusQuery              = "bus_query"
 	TypeBusQueryFailed        = "bus_query_failed"
+	TypeBusResponseTruncated  = "bus_response_truncated"
+	TypeRunConfig             = "run_config"
+	TypeSourceScopeResolved   = "source_scope_resolved"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -92,6 +96,12 @@ type Event struct {
 	TimeoutMs      int64  `json:"timeout_ms,omitempty"`
 	MaxOutputBytes int    `json:"max_output_bytes,omitempty"`
 
+	// bus_response_truncated. OriginalBytes is what the handler produced
+	// before the cap; MaxOutputBytes above is the cap it hit. Both are
+	// needed: "we cut something" is not the question — "how much, and was
+	// it worth reading" is, and that cannot be answered from a boolean.
+	OriginalBytes int `json:"original_bytes,omitempty"`
+
 	// planner_round_completed
 	ActionCount      int `json:"action_count,omitempty"`
 	ObservationCount int `json:"observation_count,omitempty"`
@@ -125,6 +135,19 @@ type Event struct {
 	Field     string `json:"field,omitempty"`
 	FromValue string `json:"from_value,omitempty"`
 	ToValue   string `json:"to_value,omitempty"`
+
+	// bus_query. QueryID is the join key to the stage's own dialog-*.jsonl
+	// transcript; Kind and Question are inline so `grep bus_query` answers
+	// "what did the agents actually ask each other" without opening a blob.
+	QueryID  string `json:"query_id,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Question string `json:"question,omitempty"`
+
+	// run_config. The process argv that produced this run, with any API key
+	// value replaced. Everything else in the stream describes what the run
+	// did; without this, nothing describes what it was asked to do — run-b's
+	// scope had to be reconstructed by inference from the manifest.
+	Command string `json:"command,omitempty"`
 }
 
 // Constructors — keep callers from misfiling event-type-specific
@@ -138,6 +161,39 @@ func RunStarted(runID, target, mode, focus string) Event {
 		Target: target,
 		Mode:   mode,
 		Focus:  focus,
+	}
+}
+
+// RunConfig records the command line that started the run.
+//
+// It exists because run-b's launch command was recoverable only by inference:
+// the manifest carried a repository and a commit that git could not have
+// detected for the scanned directory, so --repo-url and --commit must have
+// been passed — but which target, which run-id, which hint, and whether the
+// LLM settings came from flags or the environment were all unrecorded. A run
+// that cannot say how it was invoked cannot be re-run.
+func RunConfig(runID, command string) Event {
+	return Event{
+		Type:    TypeRunConfig,
+		RunID:   runID,
+		Command: command,
+	}
+}
+
+// SourceScopeResolved records the one tree every stage of the run reads.
+//
+// run_started carries the target the user named, and must: it is emitted
+// before anything is fetched. But the scope is decided later, and when a
+// pinned checkout is used the two differ — run-b reported a benchmark fixture
+// directory as its target while every stage read a full optee_os checkout.
+// Reason distinguishes the pinned checkout from the fallback, because a run
+// that silently fell back is the failure this event is here to make visible.
+func SourceScopeResolved(runID, root, reason string) Event {
+	return Event{
+		Type:   TypeSourceScopeResolved,
+		RunID:  runID,
+		Target: root,
+		Reason: reason,
 	}
 }
 
@@ -310,6 +366,36 @@ func ClaimEmitted(runID, agent, caseID, claimID, claim string, cited []citations
 // because the target is not registered, or because its handler errored.
 // Both are refusals from the asking agent's point of view, and a registered
 // but broken agent must not be more invisible than an unregistered one.
+// BusQuery records an inter-agent query that was answered.
+//
+// Only the refusals and the over-long answers were recorded before this, so
+// the event stream held the bus's failures and none of its work. On run-b the
+// verifier and the arbiter exchanged 21 questions with scanner-001; eleven
+// truncation events were the only trace, and the questions themselves lived
+// in a separate per-stage transcript with no shared timeline. The reasoning
+// those four agents do IS the inter-agent dialogue, and it was the one part
+// of the run that could not be replayed from events.jsonl.
+//
+// AnswerBytes is the size the asking agent was shown, after any cap — pair it
+// with the bus_response_truncated event on the same query to see what a cut
+// cost. QueryBlob and ResponseBlob carry the full bodies.
+func BusQuery(runID, fromAgent, toAgent, caseID, queryID, kind, question string, answerBytes int, durationMs int64, queryBlob, responseBlob string) Event {
+	return Event{
+		Type:           TypeBusQuery,
+		RunID:          runID,
+		Agent:          fromAgent,
+		ToAgent:        toAgent,
+		CaseID:         caseID,
+		QueryID:        queryID,
+		Kind:           kind,
+		Question:       question,
+		OriginalBytes:  answerBytes,
+		ToolDurationMs: durationMs,
+		ToolArgsBlob:   queryBlob,
+		ToolOutputBlob: responseBlob,
+	}
+}
+
 func BusQueryFailed(runID, fromAgent, toAgent, caseID, reason string) Event {
 	return Event{
 		Type:    TypeBusQueryFailed,
@@ -318,6 +404,28 @@ func BusQueryFailed(runID, fromAgent, toAgent, caseID, reason string) Event {
 		ToAgent: toAgent,
 		CaseID:  caseID,
 		Reason:  reason,
+	}
+}
+
+// BusResponseTruncated records an inter-agent answer that exceeded its cap
+// and was cut down before reaching the asking agent's prompt.
+//
+// It exists so the cost of capping is measurable instead of assumed. A cap
+// that silently trims relevant evidence and a cap that trims a handler's
+// noise look identical from the outside; the only way to tell them apart is
+// to record every cut with its size and go read the ones that mattered. The
+// full body is at Blob.
+func BusResponseTruncated(runID, fromAgent, toAgent, caseID string, originalBytes, limit int, blob string) Event {
+	return Event{
+		Type:           TypeBusResponseTruncated,
+		RunID:          runID,
+		Agent:          fromAgent,
+		ToAgent:        toAgent,
+		CaseID:         caseID,
+		OriginalBytes:  originalBytes,
+		MaxOutputBytes: limit,
+		Truncated:      true,
+		ToolOutputBlob: blob,
 	}
 }
 

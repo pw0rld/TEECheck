@@ -54,6 +54,14 @@ type retryingClient struct {
 }
 
 func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+	// Refuse an impossible request before the first attempt, not after the
+	// third. An oversized prompt fails as a timeout waiting for response
+	// headers, which IsTransient cannot tell from a network fault — so it
+	// gets retried, at full timeout each time, and the record blames the
+	// provider. See MaxRequestBytes.
+	if err := checkRequestSize(req); err != nil {
+		return GenerateResponse{}, err
+	}
 	var lastErr error
 	for attempt := 1; attempt <= r.cfg.MaxAttempts; attempt++ {
 		if ctx.Err() != nil {

@@ -2,6 +2,7 @@ package agentbus
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
@@ -30,6 +31,36 @@ func TestBus_NamesListsRegisteredAgentsSorted(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("Names() = %v, want %v (sorted)", got, want)
 		}
+	}
+}
+
+// VocabularyNote is the sentence the asking agents' prompts append. Its
+// whole job is to name the legal to_agent values, so it must contain every
+// registered one.
+func TestBus_VocabularyNoteNamesEveryRegisteredAgent(t *testing.T) {
+	b := New(3)
+	b.Register("expert-001", okHandler)
+	b.Register("scanner-001", okHandler)
+
+	note := b.VocabularyNote()
+	for _, want := range []string{"expert-001", "scanner-001"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("VocabularyNote() = %q, want it to name %q", note, want)
+		}
+	}
+	// The two endpoints agents actually invented across runs. Saying only
+	// what IS legal left "fact-layer" looking plausible.
+	if !strings.Contains(note, "no fact layer") {
+		t.Errorf("VocabularyNote() = %q, want it to deny the endpoints agents invent", note)
+	}
+}
+
+// An empty bus must render nothing, so a caller can append unconditionally
+// rather than each one re-deciding — which is how the verifier came to have
+// no vocabulary sentence at all.
+func TestBus_VocabularyNoteIsEmptyWithNoAgents(t *testing.T) {
+	if note := New(3).VocabularyNote(); note != "" {
+		t.Errorf("VocabularyNote() = %q, want empty for a bus with no handlers", note)
 	}
 }
 

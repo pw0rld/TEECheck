@@ -9,17 +9,15 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
-// PromptProfile is the minimal view of the project profile the
-// planner injects into the round prompt. It is a subset of
-// artifacts.ProjectProfile to keep the prompt small and decoupled
-// from upstream schema changes.
+// PromptProfile is the repository identity and caller intent the planner
+// injects into the round prompt.
 type PromptProfile struct {
-	RepoURL        string
-	Commit         string
-	Focus          string
-	Languages      []string
-	FrameworkHints []string
-	FileCount      int
+	RepoURL string
+	Commit  string
+	Focus   string
+	// Hint is the caller's free-text concern. Optional; empty renders nothing.
+	Hint      string
+	FileCount int
 }
 
 // PriorKnowledge is everything from the project-understanding and TWE
@@ -260,11 +258,16 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	if profile.Focus != "" {
 		fmt.Fprintf(&b, "focus: %s\n", profile.Focus)
 	}
-	if len(profile.Languages) > 0 {
-		fmt.Fprintf(&b, "languages: %s\n", strings.Join(profile.Languages, ", "))
-	}
-	if len(profile.FrameworkHints) > 0 {
-		fmt.Fprintf(&b, "frameworks: %s\n", strings.Join(profile.FrameworkHints, ", "))
+	if profile.Hint != "" {
+		// The caller's own concern, verbatim. It orders the work; it does not
+		// settle it. A reviewer who says "I suspect the TA loading path" is
+		// reporting a suspicion, not evidence, and a run that returns the
+		// suspicion restated is worth nothing — so the instruction is to
+		// investigate it first and to say plainly when it does not hold up.
+		fmt.Fprintf(&b, "\ncaller's stated concern (investigate this first; it is a"+
+			" priority, NOT a finding — report honestly if the evidence does not"+
+			" support it, and keep investigating anything else the evidence points"+
+			" to):\n%s\n\n", profile.Hint)
 	}
 	if profile.FileCount > 0 {
 		fmt.Fprintf(&b, "files: %d\n", profile.FileCount)

@@ -101,6 +101,27 @@ const (
 	counterEvidenceHeader = "Counter-evidence the Investigator already found ("
 )
 
+// The vocabulary sentence moved to agentbus so the verifier could share it
+// (it had none, and spent every bus query on the nonexistent "fact-layer").
+// Nothing covered the arbiter's copy either, so the move could have dropped
+// it here without a single test noticing.
+func TestArbitrateLLM_PromptPublishesTheAgentVocabulary(t *testing.T) {
+	stub := &stubLLM{responseJSON: arbiterResponseJSON}
+	bus := agentbus.New(1)
+	bus.Register("expert-001", func(context.Context, agentbus.Query) (agentbus.Response, error) {
+		return agentbus.Response{}, nil
+	})
+
+	if _, _, err := arbitrateLLM(context.Background(), stub, bus, artifacts.CasePack{CaseID: "case-001"},
+		artifacts.Hypothesis{}, artifacts.Challenge{}, artifacts.VerificationMemo{},
+		caseContext{}, artifacts.ChallengerIndependentView{}, "arbiter-001", 0); err != nil {
+		t.Fatalf("arbitrateLLM: %v", err)
+	}
+	if sys := stub.gotRequest.SystemPrompt; !strings.Contains(sys, "expert-001") {
+		t.Errorf("system prompt must name the registered agent:\n%s", sys)
+	}
+}
+
 // The Arbiter's own mechanical gate (attackChainComplete) decides whether
 // "confirmed" wording is allowed, and its prompt asks the model to judge
 // the same chain. Handing it the traced path and the Planner's

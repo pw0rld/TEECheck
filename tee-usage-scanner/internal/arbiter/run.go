@@ -308,11 +308,7 @@ citation-validated. Validated items are the basis for any
 	// "fact-layer", "Investigator" and "CryptoAnalyzer", and missing the
 	// registered expert-001 by writing "Expert". Appended after the Sprintf
 	// so the agent list needs no placeholder in the format string.
-	if names := bus.Names(); len(names) > 0 {
-		systemPrompt += "\n\nto_agent MUST be exactly one of: " + strings.Join(names, ", ") +
-			". Any other value is refused and the query is lost — there is no fact layer, " +
-			"investigator or shell tool reachable this way."
-	}
+	systemPrompt += bus.VocabularyNote()
 
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
@@ -371,6 +367,7 @@ citation-validated. Validated items are the basis for any
 				Severity:   parsed.Severity,
 				Confidence: parsed.Confidence,
 				Files:      pack.TargetFiles,
+				Locations:  findingLocations(caseCtx),
 				Summary:    parsed.Summary,
 				Evidence:   evidence,
 				Sections:   &sections,
@@ -427,8 +424,13 @@ citation-validated. Validated items are the basis for any
 		Severity:   severityForCategory(pack.Category),
 		Confidence: "low",
 		Files:      pack.TargetFiles,
-		Summary:    "Reached maximum dialog rounds without final arbiter judgment",
-		Sections:   &sections,
+		// Deterministic evidence does not depend on the dialog reaching a
+		// judgment: the fact layer already resolved these lines, and a
+		// round-limit finding is exactly the case a reader most needs to be
+		// able to jump straight into.
+		Locations: findingLocations(caseCtx),
+		Summary:   "Reached maximum dialog rounds without final arbiter judgment",
+		Sections:  &sections,
 	}
 	return item, buildPacket(pack, hypothesis, challenge, memo, item, sections), nil
 }

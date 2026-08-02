@@ -56,21 +56,17 @@ func TestBuildRoundPrompt_IncludesProfile(t *testing.T) {
 	budget := planner.NewDefaultBudget()
 	budget.Start()
 	profile := planner.PromptProfile{
-		RepoURL:        "https://github.com/example/foo",
-		Languages:      []string{"rust"},
-		FrameworkHints: []string{"sgx"},
-		FileCount:      1234,
+		RepoURL:   "https://github.com/example/foo",
+		Commit:    "a9386bf987d9",
+		Focus:     "tee",
+		FileCount: 1234,
 	}
 
 	prompt := planner.BuildRoundPrompt(state, profile, budget, nil)
-	if !strings.Contains(prompt, "rust") {
-		t.Error("round prompt missing language")
-	}
-	if !strings.Contains(prompt, "sgx") {
-		t.Error("round prompt missing framework hint")
-	}
-	if !strings.Contains(prompt, "1234") {
-		t.Error("round prompt missing file count")
+	for _, want := range []string{"https://github.com/example/foo", "a9386bf987d9", "tee", "1234"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("round prompt missing %q", want)
+		}
 	}
 }
 

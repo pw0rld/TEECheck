@@ -44,6 +44,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 		LocalPath:     cfg.LocalPath,
 		Commit:        cfg.Commit,
 		Focus:         cfg.Focus,
+		Hint:          cfg.Hint,
 		CreatedAt:     now.Format(time.RFC3339),
 		ToolVersions: map[string]string{
 			"teecheck": "harness-prototype",

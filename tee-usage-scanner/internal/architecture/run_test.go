@@ -36,8 +36,8 @@ const manifestComponentWireJSON = `{
 }`
 
 // TestRun_LLMEndToEnd exercises the full Run(cfg, client) path against a
-// throwaway run dir + repo checkout: manifest -> ProjectProfileV2 read,
-// BuildLLM (via a fake client), NormalizeStates, ApplyCoverageGuards,
+// throwaway run dir + repo checkout: manifest read,
+// BuildLLM (via a fake client), NormalizeStates,
 // ValidateAndDowngrade, schema.Validate, and both output files written.
 func TestRun_LLMEndToEnd(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -53,19 +53,6 @@ func TestRun_LLMEndToEnd(t *testing.T) {
 	if err := runfs.WriteJSON(runfs.ManifestPath(runDir), manifest); err != nil {
 		t.Fatal(err)
 	}
-	profile := artifacts.ProjectProfileV2{
-		SchemaVersion: artifacts.SchemaVersionProjectProfileV2, RunID: "run-arch-test",
-		Repo: artifacts.RepoRef{URL: "local", Commit: "abc123"},
-		Manifests: []artifacts.ProfileSignal{{
-			ID: "manifest:enclave.config.xml", Kind: "manifest", Name: "SGX enclave configuration",
-			Scope:    "enclave.config.xml",
-			Evidence: []artifacts.EvidenceReference{{Kind: "manifest", File: "enclave.config.xml"}},
-		}},
-	}
-	if err := runfs.WriteJSON(runfs.ContextProjectProfilePath(runDir), profile); err != nil {
-		t.Fatal(err)
-	}
-
 	cfg := config.Config{RunDir: runDir}
 	fake := &llmtest.FakeClient{Responses: []string{manifestComponentWireJSON}}
 	if err := Run(cfg, fake); err != nil {
@@ -120,19 +107,6 @@ func TestRun_DowngradesFabricatedManifestCitation(t *testing.T) {
 	if err := runfs.WriteJSON(runfs.ManifestPath(runDir), manifest); err != nil {
 		t.Fatal(err)
 	}
-	profile := artifacts.ProjectProfileV2{
-		SchemaVersion: artifacts.SchemaVersionProjectProfileV2, RunID: "run-arch-test-2",
-		Repo: artifacts.RepoRef{URL: "local", Commit: "abc123"},
-		Manifests: []artifacts.ProfileSignal{{
-			ID: "manifest:enclave.config.xml", Kind: "manifest", Name: "SGX enclave configuration",
-			Scope:    "enclave.config.xml",
-			Evidence: []artifacts.EvidenceReference{{Kind: "manifest", File: "enclave.config.xml"}},
-		}},
-	}
-	if err := runfs.WriteJSON(runfs.ContextProjectProfilePath(runDir), profile); err != nil {
-		t.Fatal(err)
-	}
-
 	cfg := config.Config{RunDir: runDir}
 	fake := &llmtest.FakeClient{Responses: []string{manifestComponentWireJSON}}
 	if err := Run(cfg, fake); err != nil {

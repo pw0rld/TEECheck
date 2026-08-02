@@ -5,10 +5,10 @@ import "fmt"
 // architectureSystemPrompt encodes the §22 prompt constraints this package
 // cannot enforce mechanically (see the package doc comment and this PR's
 // final report for which constraints ARE mechanically enforced downstream
-// by ValidateAndDowngrade/ApplyCoverageGuards, vs. which live only here as
-// instructions to a model that may or may not follow them).
-const architectureSystemPrompt = `You are the Architecture Agent in TEECheck (§7.3). You read a repository's
-deterministic Fingerprint and TWE prior knowledge and produce a structured
+// by ValidateAndDowngrade, vs. which live only here as instructions to a
+// model that may or may not follow them).
+const architectureSystemPrompt = `You are the Architecture Agent in TEECheck (§7.3). You read TWE prior
+knowledge and the repository's identity, and produce a structured
 ArchitectureModel: parties, components, roles, assets, trust zones,
 boundaries, entrypoints, data flows, state lifecycles, trust/deployment
 assumptions, and unknowns.
@@ -59,33 +59,26 @@ Each of boundaries/data_flows/state_lifecycles is an array of objects with
 the same shape plus "from" and "to" (element IDs) instead of "name"/"role"/
 "zone".`
 
-// buildUserPrompt renders the per-run context: TWE prior knowledge,
-// condensed ProjectProfileV2, and top-level repo structure — the same three
-// inputs tee-audit's dossier.md prompt used (fingerprint + repo_structure),
-// plus the TWE knowledge context §7.3 adds on top.
+// buildUserPrompt renders the per-run context: TWE prior knowledge and the
+// repository identity the model is reasoning about.
 func buildUserPrompt(in Input) string {
 	return fmt.Sprintf(`## TWE prior knowledge
 
 %s
 
-## Repository fingerprint (ProjectProfileV2, condensed)
+## Repository under review
 
-%s
-
-## Repository top-level layout
-
-%s
+%s at %s
 
 ## Instructions
 
 Produce the ArchitectureModel JSON object described in the system prompt.
-Stay grounded in the fingerprint evidence above — do not speculate beyond
-what it shows. If the fingerprint is sparse (few or no manifests, few
-signals), say so via unknowns entries rather than filling gaps with
-assumptions about a "typical" TEE project.`,
+This run carries no repository fingerprint, so there is no scan evidence to
+ground against: record what you cannot establish as unknowns entries rather
+than filling the gaps with assumptions about a "typical" TEE project.`,
 		nonEmpty(in.TWEContext, "(no TWE prior knowledge context available for this run)"),
-		marshalCondensed(in.Profile, 6000),
-		formatTopLevelDirs(in.Profile.TopLevelDirs))
+		nonEmpty(in.Repo.URL, "(repository not identified)"),
+		nonEmpty(in.Repo.Commit, "(commit not identified)"))
 }
 
 func nonEmpty(value, fallback string) string {
@@ -93,15 +86,4 @@ func nonEmpty(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func formatTopLevelDirs(dirs []string) string {
-	if len(dirs) == 0 {
-		return "(no top-level directories recorded)"
-	}
-	out := ""
-	for _, d := range dirs {
-		out += "- " + d + "\n"
-	}
-	return out
 }

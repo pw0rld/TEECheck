@@ -11,11 +11,9 @@ import (
 
 // Input is everything the Invariant Agent reads per §7.4: the full TWE
 // prior-knowledge context, the already-validated ArchitectureModel, and
-// ProjectProfile evidence.
 type Input struct {
 	RunID      string
 	Model      artifacts.ArchitectureModel
-	Profile    artifacts.ProjectProfileV2
 	TWEContext string
 }
 

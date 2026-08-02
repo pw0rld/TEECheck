@@ -49,11 +49,6 @@ func TestRun_LLMEndToEnd(t *testing.T) {
 	if err := runfs.WriteJSON(runfs.ArchitectureModelPath(runDir), model); err != nil {
 		t.Fatal(err)
 	}
-	profile := artifacts.ProjectProfileV2{SchemaVersion: artifacts.SchemaVersionProjectProfileV2, RunID: "run-inv-test"}
-	if err := runfs.WriteJSON(runfs.ContextProjectProfilePath(runDir), profile); err != nil {
-		t.Fatal(err)
-	}
-
 	cfg := config.Config{RunDir: runDir}
 	fake := &llmtest.FakeClient{Responses: []string{invariantWireJSON}}
 	if err := Run(cfg, fake); err != nil {

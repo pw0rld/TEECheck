@@ -13,10 +13,6 @@ func ManifestPath(runDir string) string {
 	return filepath.Join(runDir, "00_manifest.json")
 }
 
-func ProjectProfilePath(runDir string) string {
-	return filepath.Join(runDir, "01_profile", "project_profile.json")
-}
-
 func RepoMapPath(runDir string) string {
 	return filepath.Join(runDir, "01_repo_map", "repo_map.json")
 }

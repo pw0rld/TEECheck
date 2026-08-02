@@ -11,7 +11,6 @@ import (
 // from a file's name or path — see internal/schema for the validator that
 // checks a decoded artifact's own field against these values.
 const (
-	SchemaVersionProjectProfileV2       = "teecheck.project_profile.v2"
 	SchemaVersionArchitectureV1         = "teecheck.architecture.v1"
 	SchemaVersionProjectInvariantV1     = "teecheck.project_invariant.v1"
 	SchemaVersionTWEKnowledgeManifestV1 = "teecheck.twe_knowledge_manifest.v1"
@@ -73,40 +72,6 @@ func (e EvidenceReference) CitedBytes() citations.CitedBytes {
 		end = e.StartLine
 	}
 	return citations.CitedBytes{File: e.File, StartLine: e.StartLine, EndLine: end}
-}
-
-// ProfileSignal is a deterministic fingerprint observation. Candidate role
-// signals remain candidates until the Architecture Agent grounds them.
-type ProfileSignal struct {
-	ID         string              `json:"id"`
-	Kind       string              `json:"kind"`
-	Name       string              `json:"name"`
-	Status     string              `json:"status,omitempty"`
-	Detector   string              `json:"detector,omitempty"`
-	Scope      string              `json:"scope,omitempty"`
-	Confidence string              `json:"confidence,omitempty"`
-	Evidence   []EvidenceReference `json:"evidence,omitempty"`
-}
-
-// ProjectProfileV2 is the canonical merged fingerprint contract. It is kept
-// alongside the legacy ProjectProfile during migration so historical runs and
-// consumers continue to decode unchanged.
-type ProjectProfileV2 struct {
-	SchemaVersion    string          `json:"schema_version"`
-	RunID            string          `json:"run_id"`
-	Repo             RepoRef         `json:"repo"`
-	Languages        []string        `json:"languages,omitempty"`
-	BuildSystems     []string        `json:"build_systems,omitempty"`
-	TEEPlatforms     []ProfileSignal `json:"tee_platforms,omitempty"`
-	CandidateRoles   []ProfileSignal `json:"candidate_roles,omitempty"`
-	TrustArtifacts   []ProfileSignal `json:"trust_artifacts,omitempty"`
-	Manifests        []ProfileSignal `json:"manifests,omitempty"`
-	BoundarySignals  []ProfileSignal `json:"boundary_signals,omitempty"`
-	StateSignals     []ProfileSignal `json:"state_signals,omitempty"`
-	SensitivePaths   []string        `json:"sensitive_paths,omitempty"`
-	TopLevelDirs     []string        `json:"top_level_dirs,omitempty"`
-	FrameworkHints   []string        `json:"framework_hints,omitempty"`
-	CoverageWarnings []string        `json:"coverage_warnings,omitempty"`
 }
 
 // ArchitectureElement is a party, component, role, asset, trust zone, or

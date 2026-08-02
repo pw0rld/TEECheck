@@ -10,13 +10,17 @@ import (
 )
 
 type Config struct {
-	Command         string
-	RunID           string
-	RunDir          string
-	RepoURL         string
-	LocalPath       string
-	Commit          string
-	Focus           string
+	Command   string
+	RunID     string
+	RunDir    string
+	RepoURL   string
+	LocalPath string
+	Commit    string
+	Focus     string
+	// Hint is the caller's free-text concern, passed through to the
+	// planner's system prompt. It biases what gets investigated; it never
+	// narrows what gets modelled or scanned.
+	Hint            string
 	OutputDir       string
 	KnowledgeRoot   string
 	GraphJSONPath   string
@@ -472,6 +476,7 @@ func parseRun(args []string) (Config, error) {
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
+	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	// Upstream identity overrides. Needed when the scanned directory is not
 	// the project it represents — a benchmark fixture is a subtree of the
