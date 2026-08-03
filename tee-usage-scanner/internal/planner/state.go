@@ -34,10 +34,11 @@ type PlannerState struct {
 	// PlaybookDetails holds the full text of every TWE playbook detail the
 	// Planner has pulled via the twe_playbook_detail action so far this run,
 	// in the order first pulled. A pulled detail otherwise reaches the LLM
-	// only through BuildRoundPrompt's RECENT ROUNDS rendering, which
-	// truncates at 1500 chars and keeps only the last 2 rounds — nowhere
-	// near enough for a detail block sized against the 3000-token budget
-	// (see twecontext.maxDetailContextTokens). Storing it here, mirroring
+	// only through BuildRoundPrompt's RECENT ROUNDS rendering, which keeps
+	// only the last 2 rounds and cuts everything but the newest to
+	// scrollbackBytes — so a detail block sized against the 3000-token
+	// budget (see twecontext.maxDetailContextTokens) survives one round and
+	// then scrolls out. Storing it here, mirroring
 	// Investigations, lets BuildRoundPrompt render it in full for every
 	// remaining round of the loop instead of letting it evaporate.
 	PlaybookDetails []PulledPlaybookDetail `json:"playbook_details,omitempty"`
