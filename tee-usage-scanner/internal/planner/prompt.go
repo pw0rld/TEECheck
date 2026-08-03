@@ -238,6 +238,23 @@ func renderInvariants(invs []artifacts.ProjectInvariant) string {
 // planner round. It includes the project profile, accumulated
 // candidates, the trailing window of recent observations, and the
 // remaining budget.
+// scrollbackBytes bounds an observation from a round that is no longer the
+// most recent one.
+//
+// It is deliberately NOT observationlimits.MaxBytes, and it is the only
+// place a second number is legitimate. The newest round's observations are
+// what the model is reasoning about now and arrive whole, at the budget the
+// action built them to; the round before it is context, and rendering two
+// full 32 KiB pages every round would cost more prompt than the reasoning
+// they support.
+//
+// The distinction matters because the failure it replaces was the opposite:
+// every observation was cut to 1500 bytes with a bare "(truncated)" marker,
+// so a page built to a 32 KiB budget reached the model as 1500 bytes with
+// nothing to say the rest existed. Here the marker says which round it is
+// from, how much was dropped, and how to get it back.
+const scrollbackBytes = 1500
+
 func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget, avoidPaths []string) string {
 	var b strings.Builder
 
@@ -345,24 +362,35 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	recent := state.LastRoundsForPrompt(2)
 	if len(recent) > 0 {
 		b.WriteString("=== RECENT ROUNDS ===\n")
-		for _, r := range recent {
+		for i, r := range recent {
+			newest := i == len(recent)-1
 			fmt.Fprintf(&b, "round %d:\n", r.Round)
 			if r.Thought != "" {
 				fmt.Fprintf(&b, "  thought: %s\n", r.Thought)
 			}
 			for _, obs := range r.Observations {
+				// The ref is what a lead cites. It has to be in the text
+				// the model reads or reason_fact_refs can only be
+				// invented.
+				id := ""
+				if obs.Ref != "" {
+					id = "  ref=" + obs.Ref
+				}
 				if obs.OK {
-					fmt.Fprintf(&b, "  [%s] OK\n", obs.Name)
+					fmt.Fprintf(&b, "  [%s] OK%s\n", obs.Name, id)
 				} else {
-					fmt.Fprintf(&b, "  [%s] ERROR: %s\n", obs.Name, obs.Error)
+					fmt.Fprintf(&b, "  [%s] ERROR: %s%s\n", obs.Name, obs.Error, id)
 				}
-				if obs.Output != "" {
-					trimmed := obs.Output
-					if len(trimmed) > 1500 {
-						trimmed = trimmed[:1500] + "\n... (truncated)"
-					}
-					fmt.Fprintf(&b, "    %s\n", strings.ReplaceAll(trimmed, "\n", "\n    "))
+				if obs.Output == "" {
+					continue
 				}
+				body := obs.Output
+				if !newest && len(body) > scrollbackBytes {
+					body = body[:scrollbackBytes] +
+						fmt.Sprintf("\n... (scrollback: %d of %d bytes; re-run this action to see the rest)",
+							scrollbackBytes, len(obs.Output))
+				}
+				fmt.Fprintf(&b, "    %s\n", strings.ReplaceAll(body, "\n", "\n    "))
 			}
 		}
 		b.WriteString("\n")

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 )
 
@@ -110,6 +111,85 @@ func TestBuildRoundPrompt_IncludesRecentObservations(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "read_file") {
 		t.Error("round prompt missing recent action name")
+	}
+}
+
+// The page the browsing actions build to observationlimits.MaxBytes has to
+// reach the model at that size. Before this, every observation was cut to
+// 1500 bytes on the way into the prompt, so the 32 KiB budget bought
+// nothing: a page sized for one limit arrived under another, and the model
+// had no way to know it was reading a fraction.
+func TestBuildRoundPrompt_TheNewestRoundsObservationArrivesWhole(t *testing.T) {
+	page := strings.Repeat("x", observationlimits.MaxBytes-len("THE_LAST_CARD")) + "THE_LAST_CARD"
+
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "list_functions", OK: true, Ref: "obs:0:1:0:aaa", Output: page},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, "THE_LAST_CARD") {
+		t.Errorf("a %d-byte page was cut on the way into the prompt", len(page))
+	}
+}
+
+// A round that has scrolled back is context rather than the thing being
+// reasoned about, and two full pages per round is more prompt than the
+// reasoning they support. Cutting it is fine; cutting it silently is not —
+// the marker has to say how much went and how to get it back.
+func TestBuildRoundPrompt_AScrolledBackObservationSaysWhatItDropped(t *testing.T) {
+	page := strings.Repeat("x", observationlimits.MaxBytes-len("THE_LAST_CARD")) + "THE_LAST_CARD"
+
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "list_functions", OK: true, Ref: "obs:0:1:0:aaa", Output: page},
+		},
+	})
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 2,
+		Observations: []artifacts.RoundObservation{
+			{Name: "read_file", OK: true, Ref: "obs:0:2:0:bbb", Output: "1: fn verify_quote() {}"},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if strings.Contains(prompt, "THE_LAST_CARD") {
+		t.Error("round 1 is no longer the newest round; rendering it whole doubles the prompt")
+	}
+	if !strings.Contains(prompt, "scrollback") {
+		t.Error("a dropped tail must say it was dropped — a bare cut reads as the whole answer")
+	}
+	if !strings.Contains(prompt, "re-run this action") {
+		t.Error("the marker must say how to get the rest back")
+	}
+	// Round 2 is the newest and must still arrive intact.
+	if !strings.Contains(prompt, "verify_quote") {
+		t.Error("the newest round's observation was cut")
+	}
+}
+
+// reason_fact_refs can only cite what the model was shown. A ref that never
+// reaches the prompt can only be invented.
+func TestBuildRoundPrompt_RendersEachObservationsRef(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "get_callers", OK: true, Ref: "obs:0:1:0:c0ffee123456", Output: "callers: none"},
+			{Name: "get_function_card", OK: false, Ref: "obs:0:1:1:deadbeef0000", Error: "unknown symbol_id"},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	for _, ref := range []string{"obs:0:1:0:c0ffee123456", "obs:0:1:1:deadbeef0000"} {
+		if !strings.Contains(prompt, ref) {
+			t.Errorf("ref %s never reaches the model, so nothing can cite it", ref)
+		}
 	}
 }
 

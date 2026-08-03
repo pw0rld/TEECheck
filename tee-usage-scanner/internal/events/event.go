@@ -25,19 +25,22 @@ const (
 	TypeRunCompleted          = "run_completed"
 	TypePlannerRoundStarted   = "planner_round_started"
 	TypePlannerRoundCompleted = "planner_round_completed"
-	TypeLLMCallStarted        = "llm_call_started"
-	TypeLLMCallCompleted      = "llm_call_completed"
-	TypeToolCallStarted       = "tool_call_started"
-	TypeToolCallCompleted     = "tool_call_completed"
-	TypeStageStarted          = "stage_started"
-	TypeStageCompleted        = "stage_completed"
-	TypeClaimEmitted          = "claim_emitted"
-	TypeValueNormalized       = "value_normalized"
-	TypeBusQuery              = "bus_query"
-	TypeBusQueryFailed        = "bus_query_failed"
-	TypeBusResponseTruncated  = "bus_response_truncated"
-	TypeRunConfig             = "run_config"
-	TypeSourceScopeResolved   = "source_scope_resolved"
+
+	TypePlannerObservationRecorded = "planner_observation_recorded"
+
+	TypeLLMCallStarted       = "llm_call_started"
+	TypeLLMCallCompleted     = "llm_call_completed"
+	TypeToolCallStarted      = "tool_call_started"
+	TypeToolCallCompleted    = "tool_call_completed"
+	TypeStageStarted         = "stage_started"
+	TypeStageCompleted       = "stage_completed"
+	TypeClaimEmitted         = "claim_emitted"
+	TypeValueNormalized      = "value_normalized"
+	TypeBusQuery             = "bus_query"
+	TypeBusQueryFailed       = "bus_query_failed"
+	TypeBusResponseTruncated = "bus_response_truncated"
+	TypeRunConfig            = "run_config"
+	TypeSourceScopeResolved  = "source_scope_resolved"
 )
 
 // Event is the single shape written to events.jsonl. Only fields
@@ -105,6 +108,22 @@ type Event struct {
 	// planner_round_completed
 	ActionCount      int `json:"action_count,omitempty"`
 	ObservationCount int `json:"observation_count,omitempty"`
+
+	// planner_observation_recorded. ObservationRef is the id a downstream
+	// claim cites; ToolOutputBlob (above) is both the body it resolves to and
+	// the join key back to the tool_call_completed that produced it.
+	//
+	// This is a separate event rather than a field on tool_call_completed
+	// because the ref is derived from the output body, so it exists only
+	// after the action returns — and for executor-backed actions the
+	// executor has already written tool_call_completed by then. A field
+	// cannot be added to an event that is on disk.
+	//
+	// SampleIndex disambiguates --samples passes, which all restart at round
+	// 1. It is omitempty, so sample 0 is absent; ObservationRef carries the
+	// index in every case.
+	ObservationRef string `json:"observation_ref,omitempty"`
+	SampleIndex    int    `json:"sample_index,omitempty"`
 
 	// stage_*. Stage is the pipeline stage name; DurationMs is wall
 	// clock on stage_completed. Reason (below) carries the outcome,
@@ -223,6 +242,33 @@ func PlannerRoundCompleted(runID, agent string, round, actionCount, observationC
 		Round:            round,
 		ActionCount:      actionCount,
 		ObservationCount: observationCount,
+	}
+}
+
+// PlannerObservationRecorded names one observation so a later claim can cite
+// it.
+//
+// It is emitted by the planner after every action, whoever emitted the tool
+// events for that action: an executor-backed handler has already written its
+// own tool_call_completed by the time the ref exists, and a ref derived from
+// the output body cannot exist before the body does. outputBlob is the join
+// key back to that tool_call_completed.
+//
+// ok follows the stream's existing convention for tool_ok — false is omitted
+// — so a reader asking "was this observation grounded" must test for true
+// rather than for presence. The authoritative per-observation record is
+// rounds.jsonl, where ok is always written.
+func PlannerObservationRecorded(runID, agent, action string, round, sampleIndex int, ok bool, ref, outputBlob string) Event {
+	return Event{
+		Type:           TypePlannerObservationRecorded,
+		RunID:          runID,
+		Agent:          agent,
+		Round:          round,
+		SampleIndex:    sampleIndex,
+		ToolName:       action,
+		ToolOK:         ok,
+		ObservationRef: ref,
+		ToolOutputBlob: outputBlob,
 	}
 }
 

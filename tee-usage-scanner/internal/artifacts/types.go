@@ -546,8 +546,25 @@ type RoundAction struct {
 }
 
 type RoundObservation struct {
-	Name       string `json:"name"`
-	OK         bool   `json:"ok"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Ref names this one observation: obs:<sample>:<round>:<index>:<hash>.
+	// It is what a downstream claim cites when it says where it looked. A
+	// reason that cites nothing is free text shaped like a citation, and an
+	// audit lead built on one is BUG-003 §3.3 with extra steps.
+	Ref string `json:"ref,omitempty"`
+	// OutputBlob resolves to the UNTRUNCATED body in the blob store. Output
+	// below is an excerpt; when the two differ, Truncated says so and this is
+	// where the rest lives.
+	OutputBlob string `json:"output_blob,omitempty"`
+	// ActionIndex is the position within the round's action list. Round alone
+	// does not identify an observation — a round runs up to MaxActionsPerRound
+	// of them.
+	ActionIndex int `json:"action_index"`
+	// Phase is the planner phase this observation was made in. Narrative
+	// only; it is deliberately absent from Ref, because two --samples passes
+	// both walk both phases and a ref built from the phase would collide.
+	Phase      string `json:"phase,omitempty"`
 	Output     string `json:"output,omitempty"`
 	Error      string `json:"error,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`

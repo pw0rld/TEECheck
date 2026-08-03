@@ -67,6 +67,12 @@ type RunConfig struct {
 	// AgentID is the identifier used in events. Defaults to
 	// DefaultPlannerAgentID.
 	AgentID string
+
+	// SampleIndex is which --samples pass this is. Every pass restarts at
+	// round 1, so (round, action index) repeats across passes and only this
+	// keeps their observation refs apart. Callers driving a single pass
+	// leave it at 0.
+	SampleIndex int
 	// Model is the model name reported in llm_call_* events. Empty
 	// is allowed; consumers may fall back to "unknown".
 	Model string
@@ -204,6 +210,12 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	// deterministic output of an action this loop executed; it does not
 	// depend on the model remembering to copy a string.
 	var executedToolFactRefs []string
+
+	// observations is what this sample actually saw, by ref. It is the only
+	// thing that can tell a cited fact from an invented one, and it is per
+	// sample rather than per run because two --samples passes are pointed at
+	// different code on purpose.
+	var observations ObservationSet
 
 loop:
 	for !cfg.Budget.Exhausted() {
@@ -383,10 +395,15 @@ loop:
 			})
 
 			if loopDet.ShouldReject(act.Name, argsStr) {
+				// No Ref: a ref names an observation, and a rejected
+				// action made none. ActionIndex still lands, so the
+				// observation list stays alignable with the action list
+				// that produced it.
 				roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{
-					Name:  act.Name,
-					OK:    false,
-					Error: "loop detector: repeating same (action, args) — try a different action or args",
+					Name:        act.Name,
+					OK:          false,
+					ActionIndex: i,
+					Error:       "loop detector: repeating same (action, args) — try a different action or args",
 				})
 				continue
 			}
@@ -420,26 +437,50 @@ loop:
 			})
 			loopDet.Record(act.Name, argsStr)
 
+			// The blob carries the UNTRUNCATED output. The round
+			// observation below keeps an excerpt so the next prompt
+			// stays affordable; that excerpt is what used to be the
+			// only surviving copy, which is how "the truncated read
+			// from round 5 didn't show lines 35-80" became an
+			// unanswerable question. Output is blobbed on the failure
+			// path too — a tool that errored is the one someone will
+			// be diagnosing.
+			//
+			// It is written whoever emits the tool events: the ref is
+			// derived from it, so an executor-backed action needs it
+			// here too. The store is content-addressed, so writing a
+			// body the executor already wrote costs a hash, not a copy.
+			outputBlob := events.BestEffortRef(cfg.Blobs, []byte(result.Output))
 			if !executorBacked {
-				// The blob carries the UNTRUNCATED output. The round
-				// observation below keeps a 4000-char excerpt so the
-				// next prompt stays affordable; that excerpt is what
-				// used to be the only surviving copy, which is how
-				// "the truncated read from round 5 didn't show lines
-				// 35-80" became an unanswerable question. Output is
-				// blobbed on the failure path too — a tool that
-				// errored is the one someone will be diagnosing.
-				outputBlob := events.BestEffortRef(cfg.Blobs, []byte(result.Output))
 				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, outputBlob, result.Error))
 			}
 
+			// Everything the model reads passes through one cap, and a
+			// cut says so. The 4000-character truncate that used to
+			// stand here had no marker at all, so a 32 KB page arrived
+			// as 4 KB that looked like the whole answer — and a model
+			// cannot ask for the rest of something it does not know was
+			// cut. Truncated is an OR: a handler may already have
+			// bounded its own output, and losing that flag here would
+			// report a doubly-cut observation as complete.
+			body, cutHere := excerpt(result.Output, outputBlob)
+
+			ref := MakeObservationRef(cfg.RunID, cfg.SampleIndex, roundNum, i, outputBlob)
+			observations.Record(ref, result.OK)
+			_ = cfg.Events.Emit(events.PlannerObservationRecorded(
+				cfg.RunID, cfg.AgentID, result.Name, roundNum, cfg.SampleIndex,
+				result.OK, ref, outputBlob))
+
 			roundRec.Observations = append(roundRec.Observations, artifacts.RoundObservation{
-				Name:       result.Name,
-				OK:         result.OK,
-				Output:     truncate(result.Output, 4000),
-				Error:      result.Error,
-				Truncated:  result.Truncated,
-				DurationMs: result.DurationMs,
+				Name:        result.Name,
+				OK:          result.OK,
+				Ref:         ref,
+				OutputBlob:  outputBlob,
+				ActionIndex: i,
+				Output:      body,
+				Error:       result.Error,
+				Truncated:   result.Truncated || cutHere,
+				DurationMs:  result.DurationMs,
 			})
 
 			// Track any repo-relative path the LLM has inspected, so
