@@ -57,6 +57,12 @@ type PriorKnowledge struct {
 // Keep entries terse (one line each). When a new action is added
 // to the registry, add a matching entry here.
 var actionArgSchemas = map[string]string{
+	"get_repository_card": `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
+	"list_modules":        `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
+	"list_functions":      `{"module": string (a path from list_modules), "page": int (0-based)}` + ` — one page of function cards. The reply names the next cursor; a module absent from the index is not a module without functions`,
+	"find_symbols":        `{"name": string (a function name), "page": int (0-based, optional)}` + ` — every indexed definition carrying that name, with its symbol_id. More than one is normal: two files can each define a static function of the same name, and choosing between them is yours to do, by id`,
+	"get_function_card":   `{"symbol_id": string (from find_symbols or list_functions)}` + ` — one definition's callers, callees and the struct fields it touches and writes, each with the scope of what that check can prove`,
+	"get_callers":         `{"symbol_id": string}` + ` — the resolved callers of one definition, together with the repository-wide counts of call sites this list cannot cover. An absent caller is not proof of unreachability`,
 	"list_dir":            `{"path": string (repo-relative), "depth": int (0-3)}`,
 	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
 	"ripgrep":             `{"pattern": string (regex), "globs": [string]} — these are the ONLY two arguments and any other is rejected. globs may be path-qualified relative to the repo root ("core/crypto/*.c") or bare ("*.c","*.h"). For a case-insensitive search put the flag in the pattern itself, e.g. "(?i)<pattern>". Zero matches is reported as "(no matches)", which means the search ran and found nothing — it is not evidence that the thing does not exist elsewhere`,
