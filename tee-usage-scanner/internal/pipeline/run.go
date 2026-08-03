@@ -26,7 +26,9 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/projectmap"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repoindex"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
@@ -201,15 +203,27 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// acquireSourceScope: every stage from here on resolves paths against
 	// this one root, so the models, the tools and the fact layer describe
 	// the same revision.
-	// One database manager for the whole run. Engine and provider are peer
-	// dependencies: the engine runs queries, the manager owns the database's
-	// and the checkout's lifecycle. Threading one value to every consumer is
-	// what makes "built once per run" a property of the wiring rather than a
-	// coincidence — before internal/codedb, a second consumer could only have
-	// built a second database (91 seconds and 322 MB, twice) or reimplemented
-	// the path derivation and drifted from it.
-	codeDB := codedb.New(newFactEngine(exec, runID),
-		executor.Bind(exec, executor.Binding{RunID: runID, Agent: "source-acquire"}))
+	// One database manager for the whole run, and two engines bound to the
+	// agents whose work they do.
+	//
+	// Engine and provider are peer dependencies: an engine runs queries, the
+	// manager owns the database's and the checkout's lifecycle. Threading
+	// one manager to every consumer is what makes "built once per run" a
+	// property of the wiring rather than a coincidence — before
+	// internal/codedb a second consumer could only have built a second
+	// database (91 seconds and 322 MB, twice) or reimplemented the path
+	// derivation and drifted from it.
+	//
+	// The two engines differ only in which agent their subprocess events are
+	// attributed to. Acquiring and extracting the repository is the index
+	// stage's work; querying the fact layer is the planner's. Attributing
+	// the 91-second extraction to a planner round — which is what happened
+	// while the build lived in the planner's first round — makes the
+	// planner's own cost unreadable.
+	indexEng := codeql.New()
+	indexEng.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent})
+	codeDB := codedb.New(indexEng,
+		executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent}))
 
 	srcRoot, pinned := acquireSourceScope(context.Background(), codeDB,
 		runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
@@ -235,6 +249,24 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 
 	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
+	}
+
+	// 01A / 01B: the deterministic whole-repo program index, and the neutral
+	// navigation view derived from it. They run before architecture because
+	// architecture consumes the map, and before the planner because the
+	// planner browses it.
+	//
+	// The CodeQL database is built here, once. It used to be built inside
+	// the planner's first round: 91.6 seconds of the planner's own budget
+	// spent on infrastructure, and invisible as such because it arrived as a
+	// round-0 tool call.
+	if err := stage("repo_index", func() error {
+		return repoindex.Run(stageCfg, codeDB, indexEng)
+	}); err != nil {
+		return runDir, fmt.Errorf("repo index: %w", err)
+	}
+	if err := stage("project_map", func() error { return projectmap.Run(stageCfg) }); err != nil {
+		return runDir, fmt.Errorf("project map: %w", err)
 	}
 
 	// Project Understanding Layer (§3.4): the Architecture model and Project
@@ -695,6 +727,13 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 // run and the planner's agent id; per-round identity travels separately on
 // the git calls the fact layer makes, which are bound from the
 // ActionRequest that asked for them.
+// indexAgent is the agent the program index's own subprocesses are recorded
+// under: the git clone and checkout, and the CodeQL database build. It is
+// not the planner — acquiring and extracting the repository is not the
+// planner's work, and attributing it there made a 91-second extraction look
+// like a planner round.
+const indexAgent = "repo-index"
+
 func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
 	eng := codeql.New()
 	eng.Exec = executor.Bind(exec, executor.Binding{
