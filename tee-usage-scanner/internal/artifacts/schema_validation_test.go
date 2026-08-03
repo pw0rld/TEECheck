@@ -281,6 +281,9 @@ func TestSchemaRepoFactsV1_RejectsAJudgementFieldOnACapsule(t *testing.T) {
 	  "capabilities": {"symbols":"available","direct_calls":"partial","field_accesses":"partial","build_reachability":"unavailable"},
 	  "total_call_sites": 10,
 	  "resolved_call_sites": 8,
+	  "unresolved_call_site_count": 2,
+	  "external_call_sites": 1,
+	  "ambiguous_call_sites": 0,
 	  "capsules": [{"symbol_id":"cpp:a.c:1:f()","name":"f","module":"core","file":"a.c","line":1}]
 	}`)
 	if err := schema.Validate(schema.RepoFactsV1, valid); err != nil {
@@ -294,6 +297,9 @@ func TestSchemaRepoFactsV1_RejectsAJudgementFieldOnACapsule(t *testing.T) {
 	  "capabilities": {"symbols":"available","direct_calls":"partial","field_accesses":"partial","build_reachability":"unavailable"},
 	  "total_call_sites": 10,
 	  "resolved_call_sites": 8,
+	  "unresolved_call_site_count": 2,
+	  "external_call_sites": 1,
+	  "ambiguous_call_sites": 0,
 	  "capsules": [{"symbol_id":"cpp:a.c:1:f()","name":"f","module":"core","file":"a.c","line":1,"risk":"high"}]
 	}`)
 	if err := schema.Validate(schema.RepoFactsV1, withVerdict); err == nil {
@@ -311,7 +317,10 @@ func TestSchemaRepoFactsV1_RejectsAGlobalCompleteVerdict(t *testing.T) {
 	  "scope": {},
 	  "capabilities": {"symbols":"complete","direct_calls":"complete","field_accesses":"complete","build_reachability":"complete"},
 	  "total_call_sites": 0,
-	  "resolved_call_sites": 0
+	  "resolved_call_sites": 0,
+	  "unresolved_call_site_count": 0,
+	  "external_call_sites": 0,
+	  "ambiguous_call_sites": 0
 	}`)
 	if err := schema.Validate(schema.RepoFactsV1, body); err == nil {
 		t.Error(`"complete" must not be a capability state`)
@@ -368,8 +377,11 @@ func TestRepoFactsV1_GoStructValidatesAgainstItsSchema(t *testing.T) {
 			CalleeID: "cpp:core/crypto/signed_hdr.c:262:shdr_load_pub_key()",
 			File:     "core/kernel/ree_fs_ta.c", Line: 298, Resolution: ResolutionDirect,
 		}},
-		TotalCallSites:    42322,
-		ResolvedCallSites: 42000,
+		TotalCallSites:          42317,
+		ResolvedCallSites:       40765,
+		UnresolvedCallSiteCount: 1552,
+		ExternalCallSites:       3458,
+		AmbiguousCallSites:      1883,
 		UnresolvedCallSites: []UnresolvedCall{{
 			EnclosingSymbolID: "cpp:core/kernel/ree_fs_ta.c:298:ree_fs_ta_open()",
 			File:              "core/kernel/ree_fs_ta.c", Line: 314,

@@ -32,7 +32,6 @@ const (
 const (
 	ResolutionDirect   = "direct"
 	ResolutionIndirect = "indirect"
-	ResolutionMacro    = "macro"
 	ResolutionUnknown  = "unknown"
 )
 
@@ -149,8 +148,32 @@ type RepoFacts struct {
 	Capsules  []FunctionCapsule `json:"capsules,omitempty"`
 	CallEdges []CallEdge        `json:"call_edges,omitempty"`
 
-	TotalCallSites      int              `json:"total_call_sites"`
-	ResolvedCallSites   int              `json:"resolved_call_sites"`
+	// Call-site accounting. These are counts, and they are deliberately not
+	// the lengths of the lists above: a CodeQL result is a set, so two calls
+	// on one line with the same expression collapse into one row. On
+	// OP-TEE@a9386bf the unresolved list holds 1,423 rows for 1,552
+	// unresolved call sites. The lists are deduplicated views; only these
+	// numbers can be checked against each other.
+	//
+	// Two identities hold:
+	//
+	//	TotalCallSites = ResolvedCallSites + UnresolvedCallSiteCount
+	//	ResolvedCallSites = (calls with one in-tree definition)
+	//	                    + ExternalCallSites + AmbiguousCallSites
+	TotalCallSites          int `json:"total_call_sites"`
+	ResolvedCallSites       int `json:"resolved_call_sites"`
+	UnresolvedCallSiteCount int `json:"unresolved_call_site_count"`
+	// ExternalCallSites call a function with no definition in this tree —
+	// memcpy and friends. AmbiguousCallSites call a function defined several
+	// times, where which definition the linker picks is not decidable from
+	// the source. Neither produces a CallEdge, and both are why a function
+	// can show no callers while being called: a consumer reading only the
+	// edge list has no way to know that, and these are the scope it needs.
+	ExternalCallSites  int `json:"external_call_sites"`
+	AmbiguousCallSites int `json:"ambiguous_call_sites"`
+
+	// UnresolvedCallSites is the deduplicated list. See
+	// UnresolvedCallSiteCount for the multiplicity.
 	UnresolvedCallSites []UnresolvedCall `json:"unresolved_call_sites,omitempty"`
 }
 

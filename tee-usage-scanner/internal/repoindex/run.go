@@ -116,10 +116,14 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 
 	if unresolvedRows, uerr := query(queryUnresolved); uerr != nil {
 		notes = append(notes, queryUnresolved+": "+uerr.Error())
-		// Without the unresolved list, the call graph's own gaps are unknown,
-		// so a caller list cannot be read as complete however many edges it
-		// holds.
-		facts.Capabilities.DirectCalls = artifacts.CapabilityPartial
+		// Without the unresolved list the call graph's own gaps are unknown,
+		// so no caller list can be read as complete however many edges it
+		// holds. Downgrade only from available: a call graph that was never
+		// built is unavailable, and calling that "partial" would tell a
+		// consumer a partial graph exists when none does.
+		if facts.Capabilities.DirectCalls == artifacts.CapabilityAvailable {
+			facts.Capabilities.DirectCalls = artifacts.CapabilityPartial
+		}
 	} else {
 		facts.UnresolvedCallSites = decodeUnresolvedCalls(unresolvedRows)
 		if len(facts.UnresolvedCallSites) > 0 &&
@@ -128,12 +132,30 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 		}
 	}
 
+	// The counts are the index's own coverage accounting, and they are only
+	// meaningful alongside a call graph. Writing them while the call
+	// capability is unavailable would hand a consumer a precise-looking
+	// total for a graph that was never built.
 	if countRows, cerr := query(queryCallSiteCounts); cerr != nil {
 		notes = append(notes, queryCallSiteCounts+": "+cerr.Error())
-	} else if total, resolved, derr := decodeCallSiteCounts(countRows); derr != nil {
+		facts.Capabilities.DirectCalls = artifacts.CapabilityUnavailable
+	} else if counts, derr := decodeCallSiteCounts(countRows); derr != nil {
 		notes = append(notes, queryCallSiteCounts+": "+derr.Error())
+		facts.Capabilities.DirectCalls = artifacts.CapabilityUnavailable
 	} else {
-		facts.TotalCallSites, facts.ResolvedCallSites = total, resolved
+		facts.TotalCallSites = counts.Total
+		facts.ResolvedCallSites = counts.Resolved
+		facts.UnresolvedCallSiteCount = counts.Unresolved
+		facts.ExternalCallSites = counts.External
+		facts.AmbiguousCallSites = counts.Ambiguous
+	}
+	if facts.Capabilities.DirectCalls == artifacts.CapabilityUnavailable {
+		// No usable call accounting: drop whatever edges were collected
+		// rather than shipping a graph whose gaps cannot be stated.
+		facts.CallEdges = nil
+		facts.UnresolvedCallSites = nil
+		facts.TotalCallSites, facts.ResolvedCallSites = 0, 0
+		facts.UnresolvedCallSiteCount, facts.ExternalCallSites, facts.AmbiguousCallSites = 0, 0, 0
 	}
 
 	if accessRows, aerr := query(queryFieldAccesses); aerr != nil {

@@ -1,11 +1,14 @@
 package projectmap
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
@@ -159,15 +162,29 @@ func paginate(capsules []artifacts.FunctionCapsule) [][]artifacts.FunctionCapsul
 	return pages
 }
 
-// moduleSlug turns a module path into one filesystem component, so a page
-// file's location is derivable and flat.
+// moduleSlug turns a module path into one filesystem component.
+//
+// The path is appended to a hash of itself because collapsing "/" to "-"
+// is not injective: a repository holding both core/crypto/… and a top-level
+// core-crypto/… would give two modules the same slug, and since page
+// numbering restarts per module the second module's 0.json would overwrite
+// the first's. Both page references would survive in the map, each naming
+// its own count, and one module's capsules would be unreachable behind a
+// reference that opens and returns someone else's functions — the worse
+// direction of the failure the required path field exists to prevent.
 func moduleSlug(module string) string {
-	slug := strings.ReplaceAll(module, "/", "-")
-	slug = strings.TrimPrefix(slug, ".")
-	if slug == "" {
-		slug = "root"
+	sum := sha256.Sum256([]byte(module))
+	safe := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == '.' {
+			return '-'
+		}
+		return r
+	}, module)
+	safe = strings.Trim(safe, "-")
+	if safe == "" {
+		safe = "root"
 	}
-	return slug
+	return safe + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
 // pageRef describes a page without shipping it. Path is required by the
@@ -209,7 +226,14 @@ func documentedPurpose(readme string) string {
 	}
 	out := b.String()
 	if len(out) > purposeMaxBytes {
-		out = out[:purposeMaxBytes] + "…"
+		// Cut on a rune boundary. A byte slice through a multi-byte rune
+		// yields invalid UTF-8, which json.Marshal rewrites to U+FFFD — and
+		// this field's whole contract is that it is a verbatim quote.
+		cut := purposeMaxBytes
+		for cut > 0 && !utf8.RuneStart(out[cut]) {
+			cut--
+		}
+		out = out[:cut] + "…"
 	}
 	return out
 }

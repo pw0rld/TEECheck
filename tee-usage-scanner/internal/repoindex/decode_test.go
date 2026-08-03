@@ -1,6 +1,7 @@
 package repoindex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -115,20 +116,66 @@ func TestSplitList_EmptyColumnIsNoEntries(t *testing.T) {
 	}
 }
 
-// The counts have to be checkable against each other, or a query that
-// silently matched nothing reads as a repository with no indirect calls.
-func TestDecodeCallSiteCounts_ReadsBothRows(t *testing.T) {
-	total, resolved, err := decodeCallSiteCounts([][]string{{"total", "4"}, {"resolved", "3"}})
+// The measured OP-TEE numbers. Both identities hold on them exactly, which
+// is the point: they are the index's own coverage accounting, and a number
+// nobody checks is one a consumer trusts and should not.
+func TestDecodeCallSiteCounts_AcceptsCountsThatAddUp(t *testing.T) {
+	c, err := decodeCallSiteCounts([][]string{
+		{"total", "42317"}, {"resolved", "40765"}, {"unresolved", "1552"},
+		{"external", "3458"}, {"ambiguous", "1883"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 4 || resolved != 3 {
-		t.Errorf("total=%d resolved=%d, want 4 and 3", total, resolved)
+	if c.Total != c.Resolved+c.Unresolved {
+		t.Errorf("total %d != resolved %d + unresolved %d", c.Total, c.Resolved, c.Unresolved)
+	}
+}
+
+// The identity is checked at the boundary, not assumed. A violation means
+// the queries and this decoder disagree about what they are counting.
+func TestDecodeCallSiteCounts_RejectsCountsThatDoNotAddUp(t *testing.T) {
+	_, err := decodeCallSiteCounts([][]string{
+		{"total", "100"}, {"resolved", "80"}, {"unresolved", "5"},
+		{"external", "1"}, {"ambiguous", "1"},
+	})
+	if err == nil {
+		t.Fatal("100 != 80 + 5 must be rejected")
+	}
+	if !strings.Contains(err.Error(), "do not add up") {
+		t.Errorf("the error must say what failed: %v", err)
 	}
 }
 
 func TestDecodeCallSiteCounts_MissingRowIsAnError(t *testing.T) {
-	if _, _, err := decodeCallSiteCounts([][]string{{"total", "4"}}); err == nil {
-		t.Error("a counts result missing the resolved row must fail, not default to zero")
+	_, err := decodeCallSiteCounts([][]string{{"total", "4"}, {"resolved", "3"}})
+	if err == nil {
+		t.Fatal("a counts result missing three rows must fail, not default to zero")
+	}
+	for _, want := range []string{"unresolved", "external", "ambiguous"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name %q as missing: %v", want, err)
+		}
+	}
+}
+
+// The list is a deduplicated view of the count: a CodeQL result is a set, so
+// two calls on one line with the same expression collapse. Decoding must not
+// reintroduce duplicates either.
+func TestDecodeUnresolvedCalls_Dedupes(t *testing.T) {
+	row := []string{"dispatch", "core/dispatch.c", "17", "struct ops * o",
+		"core/dispatch.c", "19", "call to expression", "indirect"}
+	got := decodeUnresolvedCalls([][]string{row, row})
+	if len(got) != 1 {
+		t.Fatalf("decoded %d entries, want 1", len(got))
+	}
+}
+
+// resolution_kind must carry only what the query proved. An unrecognised
+// value becomes unknown rather than being passed through as a claim.
+func TestDecodeUnresolvedCalls_UnknownKindIsNotInvented(t *testing.T) {
+	got := decodeUnresolvedCalls([][]string{{"f", "a.c", "1", "", "a.c", "2", "e", "macro"}})
+	if len(got) != 1 || got[0].ResolutionKind != artifacts.ResolutionUnknown {
+		t.Errorf("kind = %q, want unknown — the query cannot prove macro dispatch", got[0].ResolutionKind)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
@@ -200,5 +201,42 @@ func TestModuleOf_AgreesWithTheIndexQuery(t *testing.T) {
 		if got := ModuleOf(rel); got != want {
 			t.Errorf("ModuleOf(%q) = %q, want %q", rel, got, want)
 		}
+	}
+}
+
+// Collapsing "/" to "-" is not injective. Without the hash, a repository
+// holding both core/crypto/… and a top-level core-crypto/… gives two modules
+// one slug, and since page numbering restarts per module the second module's
+// 0.json overwrites the first's — leaving a page reference that opens and
+// returns someone else's functions.
+func TestModuleSlug_DistinctModulesGetDistinctSlugs(t *testing.T) {
+	seen := map[string]string{}
+	for _, module := range []string{
+		"core/crypto", "core-crypto", "core", "core/kernel",
+		"lib/libmbedtls", "lib-libmbedtls", ".", "root",
+	} {
+		slug := moduleSlug(module)
+		if prev, dup := seen[slug]; dup {
+			t.Errorf("%q and %q share the slug %q", prev, module, slug)
+		}
+		seen[slug] = module
+		if strings.ContainsAny(slug, `/\:`) {
+			t.Errorf("slug %q is not a single path component", slug)
+		}
+	}
+}
+
+// The field's contract is that it is a verbatim quote. A byte slice through
+// a multi-byte rune yields invalid UTF-8, which json.Marshal rewrites to
+// U+FFFD — a quote that is no longer what the file says.
+func TestDocumentedPurpose_CutsOnARuneBoundary(t *testing.T) {
+	// Every rune is 3 bytes, so a byte cut at 400 lands mid-rune.
+	body := "x\n\n" + strings.Repeat("这", purposeMaxBytes)
+	got := documentedPurpose(body)
+	if !utf8.ValidString(got) {
+		t.Errorf("documented purpose is not valid UTF-8: %q", got)
+	}
+	if len(got) > purposeMaxBytes+8 {
+		t.Errorf("purpose is %d bytes, want it bounded at %d", len(got), purposeMaxBytes)
 	}
 }

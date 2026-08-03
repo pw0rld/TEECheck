@@ -20,19 +20,35 @@ Phase 3 (`formalize_invariant`, `CaseInvariantV2`, `InvariantAssessment`) and Ph
 
 Taken 2026-08-02 against `runs/run-b`'s CodeQL database for `OP-TEE/optee_os@a9386bf987d9` (322 MB, 3291 files). Expect these; investigate a >2× deviation.
 
-```text
-functions with a definition   11,243
-functions total               12,528
-call edges                    42,322
-fields                        10,301
+Corrected 2026-08-03 after a review found the queries were emitting a cross
+product; the first numbers here were measured against that defect.
 
-capsule query compile          17.3 s   (one-time, CodeQL caches it)
-capsule query evaluation        3.6 s   (whole repo)
-raw rows                      19,572
-distinct (file, symbol)        11,301   <- 73% of rows are header duplicates
-capsule JSON total              6.36 MB
-per capsule           avg 340 B / median 225 B / p90 734 B / max 26 KB
+```text
+distinct function definitions            11,603
+call sites                               42,317
+  resolved (target nameable)             40,765
+    -> one in-tree definition (an edge)   35,424
+    -> callee not defined in tree          3,458
+    -> callee defined several times        1,883
+  unresolved (no target at all)            1,552
+fields                                   10,301
+
+query evaluation, whole repo    1-3 s each after compile
+capsule JSON total                6.36 MB
+per capsule       avg 340 B / median 225 B / p90 734 B / max 26 KB
 ```
+
+Two identities hold exactly and are checked in Go:
+
+```text
+total 42,317 = resolved 40,765 + unresolved 1,552
+resolved     = edges 35,424 + external 3,458 + ambiguous 1,883
+```
+
+The LISTS are shorter than the counts, and deliberately so: a CodeQL result
+is a set, so two calls on one line with the same expression collapse. The
+unresolved list holds 1,423 rows for 1,552 sites, and the edge list 34,329
+for 35,424. Any check must be on the counts.
 
 Consequences the tasks encode:
 

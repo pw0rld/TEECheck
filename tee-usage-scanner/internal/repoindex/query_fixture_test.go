@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/projectmap"
 )
 
 // The queries are the layer every negative result in the index inherits its
@@ -215,5 +217,125 @@ func TestFieldAccessesQuery_SeparatesAccessesFromDirectWrites(t *testing.T) {
 	// field read by one function and written by no one.
 	if strings.Contains(load[5], "pub_key.version") {
 		t.Error("pub_key.version is never assigned in the fixture; reporting a write for it would be wrong")
+	}
+}
+
+// The Go ModuleOf and the QL moduleOf are two definitions of one rule, and
+// only one of them assigns capsules to modules while the other counts files
+// into them. A table of hand-written expectations cannot notice a drift: it
+// passes whatever the query does.
+//
+// This compares them on the same inputs, through the query.
+func TestModuleOf_MatchesTheQueryOnEveryFile(t *testing.T) {
+	rows := runIndexQuery(t, "Symbols.ql")
+	if len(rows) == 0 {
+		t.Fatal("no symbols; nothing compared")
+	}
+	var sawShallow, sawDeep bool
+	for _, r := range rows {
+		file, fromQuery := r[1], r[4]
+		if got := projectmap.ModuleOf(file); got != fromQuery {
+			t.Errorf("ModuleOf(%q) = %q, the query says %q", file, got, fromQuery)
+		}
+		if strings.Count(file, "/") == 1 {
+			sawShallow = true
+		} else {
+			sawDeep = true
+		}
+	}
+	// The rule has two branches: one path component for a file directly in a
+	// directory, two for anything deeper. A fixture reaching only one of them
+	// agrees with the query by accident — and the deep branch is the one that
+	// produces core/crypto and lib/libmbedtls on a real repository.
+	if !sawShallow {
+		t.Error("no fixture file one level deep — the single-component branch is untested")
+	}
+	if !sawDeep {
+		t.Error("no fixture file two or more levels deep — the branch that matters on a real tree is untested")
+	}
+}
+
+// The defect this fixture pair exists for: one Function with two
+// definitions. CodeQL's getFile() and getLocation() are each multi-valued on
+// it, and a select that mentions both without binding a single definition
+// entry emits their cross product — on OP-TEE@a9386bf that turned 12,098
+// real definitions into 16,014 rows, giving crypto_acipher_sm2_kep_derive an
+// id naming core/crypto/crypto.c:403, a file and a line from two different
+// definitions. A planner opening that location finds a different function,
+// which is the identity confusion SymbolID exists to prevent.
+func TestSymbolsQuery_DoesNotCrossProductMultiplyDefinedFunctions(t *testing.T) {
+	var rows [][]string
+	for _, r := range runIndexQuery(t, "Symbols.ql") {
+		if r[0] == "backend_init" {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("backend_init has 2 definitions but the query returned %d row(s): %v", len(rows), rows)
+	}
+
+	// Each row's line must be the line of ITS OWN file's definition.
+	want := map[string]bool{}
+	for _, r := range rows {
+		want[r[1]+":"+r[2]] = true
+	}
+	if len(want) != 2 {
+		t.Fatalf("two definitions collapsed onto one location: %v", rows)
+	}
+	for _, r := range rows {
+		body, err := os.ReadFile(filepath.Join(repoRoot(t), "testdata", "index_fixture", r[1]))
+		if err != nil {
+			t.Fatalf("read %s: %v", r[1], err)
+		}
+		line, err := strconv.Atoi(r[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(body), "\n")
+		if line < 1 || line > len(lines) {
+			t.Fatalf("%s:%d is outside the file", r[1], line)
+		}
+		// The row's own file, at the row's own line, must actually hold the
+		// definition it claims. A cross-product row does not.
+		if !strings.Contains(lines[line-1], "backend_init") {
+			t.Errorf("%s:%d does not define backend_init; it holds %q — the row pairs a file with another definition's line",
+				r[1], line, strings.TrimSpace(lines[line-1]))
+		}
+	}
+}
+
+// Field accesses belong to the definition they are written in, not to the
+// Function. backend_a writes max_depth = 1 and backend_b writes max_depth =
+// 2; both are the same Function, so a query scoped to the Function
+// attributes each definition's writes to the other. On a real tree that
+// tells a reader the core/crypto producer writes a field only the vendored
+// implementation writes — in direct_field_writes, the field the
+// CVE-2026-44362 shape is expressed in.
+func TestFieldAccessesQuery_ScopesToTheDefinitionNotTheFunction(t *testing.T) {
+	byLocation := map[string][]string{}
+	for _, r := range runIndexQuery(t, "FieldAccesses.ql") {
+		if r[0] == "backend_init" {
+			byLocation[r[1]] = r
+		}
+	}
+	if len(byLocation) != 2 {
+		t.Fatalf("backend_init has 2 definitions, the query reports %d: %v", len(byLocation), byLocation)
+	}
+	// backend_a writes max_depth, backend_b writes version. Scoped to the
+	// definition, each row holds one field; scoped to the Function, both
+	// rows hold both.
+	want := map[string]string{
+		"core/backend_a.c": "pub_key.max_depth",
+		"core/backend_b.c": "pub_key.version",
+	}
+	for file, field := range want {
+		r, ok := byLocation[file]
+		if !ok {
+			t.Fatalf("%s missing from the index: %v", file, byLocation)
+		}
+		if r[5] != field {
+			t.Errorf("%s direct_writes = %q, want exactly %q — the other definition's writes leaked in",
+				file, r[5], field)
+		}
 	}
 }

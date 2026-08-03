@@ -142,6 +142,7 @@ func decodeCallEdges(rows [][]string) []artifacts.CallEdge {
 // decodeUnresolvedCalls converts UnresolvedCalls.ql rows.
 func decodeUnresolvedCalls(rows [][]string) []artifacts.UnresolvedCall {
 	const wantCols = 8
+	seen := map[string]bool{}
 	out := make([]artifacts.UnresolvedCall, 0, len(rows))
 	for _, r := range rows {
 		if len(r) < wantCols {
@@ -149,17 +150,23 @@ func decodeUnresolvedCalls(rows [][]string) []artifacts.UnresolvedCall {
 		}
 		kind := strings.TrimSpace(r[7])
 		switch kind {
-		case artifacts.ResolutionIndirect, artifacts.ResolutionMacro, artifacts.ResolutionUnknown:
+		case artifacts.ResolutionIndirect, artifacts.ResolutionUnknown:
 		default:
 			kind = artifacts.ResolutionUnknown
 		}
-		out = append(out, artifacts.UnresolvedCall{
+		u := artifacts.UnresolvedCall{
 			EnclosingSymbolID: symbolIDOf(r[0], r[1], r[2], r[3]),
 			File:              strings.TrimSpace(r[4]),
 			Line:              atoi(r[5]),
 			Expression:        strings.TrimSpace(r[6]),
 			ResolutionKind:    kind,
-		})
+		}
+		key := u.File + "\x00" + strconv.Itoa(u.Line) + "\x00" + u.Expression + "\x00" + string(u.EnclosingSymbolID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, u)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -194,30 +201,64 @@ func decodeFieldAccesses(rows [][]string) map[artifacts.SymbolID]fieldAccess {
 	return out
 }
 
-// decodeCallSiteCounts reads the total and resolved call-site counts.
+// callSiteCounts is the index's own coverage accounting.
+type callSiteCounts struct {
+	Total      int
+	Resolved   int
+	Unresolved int
+	External   int
+	Ambiguous  int
+}
+
+// countNames are the rows CallSiteCounts.ql must return. All of them: a
+// missing row is an error rather than a zero, because zero is a legitimate
+// answer for a repository and defaulting to it would make a query that
+// silently matched nothing indistinguishable from a repository with no
+// indirect calls. Every "no callers" answer downstream inherits that.
+var countNames = []string{"total", "resolved", "unresolved", "external", "ambiguous"}
+
+// decodeCallSiteCounts reads the counts and checks them against each other.
 //
-// A missing row is an error rather than a zero. Zero is a legitimate answer
-// for a repository, so defaulting to it would make a query that silently
-// matched nothing indistinguishable from a repository with no indirect
-// calls — and every "no callers" answer downstream inherits that.
-func decodeCallSiteCounts(rows [][]string) (total, resolved int, err error) {
-	var haveTotal, haveResolved bool
+// The two identities are what make the index's coverage verifiable rather
+// than asserted. They are checked here, at the boundary, because a violation
+// means the queries and this decoder disagree about what they are counting —
+// and a coverage number nobody checked is exactly the kind of thing a
+// consumer trusts and should not.
+func decodeCallSiteCounts(rows [][]string) (callSiteCounts, error) {
+	got := map[string]int{}
 	for _, r := range rows {
 		if len(r) < 2 {
 			continue
 		}
-		switch strings.TrimSpace(r[0]) {
-		case "total":
-			total, haveTotal = atoi(r[1]), true
-		case "resolved":
-			resolved, haveResolved = atoi(r[1]), true
+		got[strings.TrimSpace(r[0])] = atoi(r[1])
+	}
+	var missing []string
+	for _, name := range countNames {
+		if _, ok := got[name]; !ok {
+			missing = append(missing, name)
 		}
 	}
-	if !haveTotal || !haveResolved {
-		return 0, 0, fmt.Errorf("call-site counts incomplete (total=%t resolved=%t): "+
-			"a missing count is not a zero count", haveTotal, haveResolved)
+	if len(missing) > 0 {
+		return callSiteCounts{}, fmt.Errorf(
+			"call-site counts incomplete, missing %v: a missing count is not a zero count",
+			missing)
 	}
-	return total, resolved, nil
+
+	c := callSiteCounts{
+		Total: got["total"], Resolved: got["resolved"], Unresolved: got["unresolved"],
+		External: got["external"], Ambiguous: got["ambiguous"],
+	}
+	if c.Total != c.Resolved+c.Unresolved {
+		return callSiteCounts{}, fmt.Errorf(
+			"call-site counts do not add up: total %d != resolved %d + unresolved %d",
+			c.Total, c.Resolved, c.Unresolved)
+	}
+	if c.External+c.Ambiguous > c.Resolved {
+		return callSiteCounts{}, fmt.Errorf(
+			"external %d + ambiguous %d exceed resolved %d",
+			c.External, c.Ambiguous, c.Resolved)
+	}
+	return c, nil
 }
 
 // buildCapsules assembles one capsule per symbol from the edges and the

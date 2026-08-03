@@ -47,8 +47,13 @@ func fullEngine() *tableEngine {
 			{"dispatch", "core/dispatch.c", "17", "struct ops * o",
 				"core/dispatch.c", "19", "call to expression", "indirect"},
 		},
-		queryCallSiteCounts: {{"total", "4"}, {"resolved", "3"}},
-		queryFieldAccesses:  {{"load_pub_key", "core/loader.c", "14", "struct pub_key * key", "pub_key.max_depth", "pub_key.max_depth"}},
+		// 4 = 3 + 1, and external + ambiguous stay within resolved: the
+		// identities decodeCallSiteCounts checks.
+		queryCallSiteCounts: {
+			{"total", "4"}, {"resolved", "3"}, {"unresolved", "1"},
+			{"external", "1"}, {"ambiguous", "0"},
+		},
+		queryFieldAccesses: {{"load_pub_key", "core/loader.c", "14", "struct pub_key * key", "pub_key.max_depth", "pub_key.max_depth"}},
 	}}
 }
 
@@ -152,9 +157,16 @@ func TestRun_BuildsTheIndexAndItsCapabilities(t *testing.T) {
 	if len(facts.Capsules) != 3 {
 		t.Errorf("capsules = %d, want one per symbol", len(facts.Capsules))
 	}
-	if facts.TotalCallSites != facts.ResolvedCallSites+len(facts.UnresolvedCallSites) {
+	// The identity is on the COUNT, not on the list length: a CodeQL result
+	// is a set, so two calls on one line with the same expression collapse
+	// into one row. On OP-TEE the list holds 1,423 rows for 1,552 sites.
+	if facts.TotalCallSites != facts.ResolvedCallSites+facts.UnresolvedCallSiteCount {
 		t.Errorf("total %d != resolved %d + unresolved %d — the index cannot check its own coverage",
-			facts.TotalCallSites, facts.ResolvedCallSites, len(facts.UnresolvedCallSites))
+			facts.TotalCallSites, facts.ResolvedCallSites, facts.UnresolvedCallSiteCount)
+	}
+	if len(facts.UnresolvedCallSites) > facts.UnresolvedCallSiteCount {
+		t.Errorf("the deduplicated list (%d) cannot exceed the count (%d)",
+			len(facts.UnresolvedCallSites), facts.UnresolvedCallSiteCount)
 	}
 	// The edge list is a subset of the resolved calls: a call to a callee
 	// with no definition in this tree is resolved but carries no edge.
@@ -186,6 +198,44 @@ func TestRun_OneFailedQueryDegradesOnlyItsOwnCapability(t *testing.T) {
 	}
 	if len(facts.Capsules) != 3 {
 		t.Errorf("capsules = %d — the symbols are still known even with no field data", len(facts.Capsules))
+	}
+}
+
+// A call graph that was never built must not be reported as a partial one.
+// Before the guard, a second query failure overwrote "unavailable" with
+// "partial" unconditionally, and a consumer would read an empty caller list
+// as weak-but-real evidence from a graph that does not exist.
+func TestRun_ANeverBuiltCallGraphIsNotPartial(t *testing.T) {
+	eng := fullEngine()
+	eng.errs = map[string]error{
+		queryCallEdges:  errors.New("edges boom"),
+		queryUnresolved: errors.New("unresolved boom"),
+	}
+	cfg := probeRun(t, "https://example.invalid/r", "abc123")
+	if err := Run(cfg, readyDB{path: t.TempDir()}, eng); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := readFacts(t, cfg.RunDir).Capabilities.DirectCalls; got != artifacts.CapabilityUnavailable {
+		t.Errorf("direct_calls = %q, want unavailable — no call query ran at all", got)
+	}
+}
+
+// Counts without a call graph are a precise-looking number for something
+// that was never built. They must not survive on their own.
+func TestRun_CountsDoNotOutliveTheCallGraph(t *testing.T) {
+	eng := fullEngine()
+	eng.errs = map[string]error{queryCallSiteCounts: errors.New("counts boom")}
+	cfg := probeRun(t, "https://example.invalid/r", "abc123")
+	if err := Run(cfg, readyDB{path: t.TempDir()}, eng); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	facts := readFacts(t, cfg.RunDir)
+	if facts.Capabilities.DirectCalls != artifacts.CapabilityUnavailable {
+		t.Errorf("direct_calls = %q, want unavailable without its own accounting", facts.Capabilities.DirectCalls)
+	}
+	if len(facts.CallEdges) != 0 || facts.TotalCallSites != 0 {
+		t.Errorf("edges=%d total=%d — a graph whose gaps cannot be stated must not ship",
+			len(facts.CallEdges), facts.TotalCallSites)
 	}
 }
 
