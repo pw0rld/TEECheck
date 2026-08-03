@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
@@ -84,7 +85,7 @@ func TestPlanTWEOperations_EmptyInput(t *testing.T) {
 
 // stubRunner records the requests it was handed and returns a canned fact.
 func stubRunner(status string, locations int, reqs *[]trustirfacts.Request) factRunner {
-	return func(_ context.Context, _ trustirfacts.Engine, req trustirfacts.Request) (artifacts.ToolFact, string, error) {
+	return func(_ context.Context, _ trustirfacts.Engine, _ codedb.DatabaseProvider, req trustirfacts.Request) (artifacts.ToolFact, string, error) {
 		*reqs = append(*reqs, req)
 		fact := artifacts.ToolFact{Status: status}
 		for i := 0; i < locations; i++ {
@@ -99,10 +100,10 @@ func stubRunner(status string, locations int, reqs *[]trustirfacts.Request) fact
 func TestPrefetchFactLayer_CollectsSuccessfulFacts(t *testing.T) {
 	var reqs []trustirfacts.Request
 	refs := prefetchFactLayer(context.Background(), &recordingEngine{available: true},
-		"codeql/trustir/cpp", "/runs/x",
+		nil, "codeql/trustir/cpp", "/runs/x",
 		"https://github.com/OP-TEE/optee_os", "a9386bf",
 		[]artifacts.ProjectInvariant{invariantWithTWEs("INV-STATE-001", "TWE-STATE-001")},
-		nil, stubRunner(trustirfacts.StatusSuccess, 1, &reqs))
+		stubRunner(trustirfacts.StatusSuccess, 1, &reqs))
 
 	if len(reqs) != 1 {
 		t.Fatalf("fact-layer calls = %d, want 1", len(reqs))
@@ -124,9 +125,9 @@ func TestPrefetchFactLayer_CollectsSuccessfulFacts(t *testing.T) {
 func TestPrefetchFactLayer_ZeroLocationsIsStillEvidence(t *testing.T) {
 	var reqs []trustirfacts.Request
 	refs := prefetchFactLayer(context.Background(), &recordingEngine{available: true},
-		"codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "43ed01d",
+		nil, "codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "43ed01d",
 		[]artifacts.ProjectInvariant{invariantWithTWEs("INV-STATE-001", "TWE-STATE-001")},
-		nil, stubRunner(trustirfacts.StatusSuccess, 0, &reqs))
+		stubRunner(trustirfacts.StatusSuccess, 0, &reqs))
 	if len(refs) != 1 {
 		t.Fatalf("refs = %v, want the zero-location fact collected", refs)
 	}
@@ -139,9 +140,9 @@ func TestPrefetchFactLayer_NonSuccessIsNotCollected(t *testing.T) {
 	for _, status := range []string{trustirfacts.StatusUnsupported, trustirfacts.StatusUnresolved, trustirfacts.StatusError} {
 		var reqs []trustirfacts.Request
 		refs := prefetchFactLayer(context.Background(), &recordingEngine{available: true},
-			"codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "deadbeef",
+			nil, "codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "deadbeef",
 			[]artifacts.ProjectInvariant{invariantWithTWEs("INV-STATE-001", "TWE-STATE-001")},
-			nil, stubRunner(status, 0, &reqs))
+			stubRunner(status, 0, &reqs))
 		if len(refs) != 0 {
 			t.Errorf("status %q must not be collected, got %v", status, refs)
 		}
@@ -152,9 +153,9 @@ func TestPrefetchFactLayer_NonSuccessIsNotCollected(t *testing.T) {
 func TestPrefetchFactLayer_NoOperationsMeansNoCalls(t *testing.T) {
 	var reqs []trustirfacts.Request
 	prefetchFactLayer(context.Background(), &recordingEngine{available: true},
-		"codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "deadbeef",
+		nil, "codeql/trustir/cpp", "/runs/x", "https://github.com/OP-TEE/optee_os", "deadbeef",
 		[]artifacts.ProjectInvariant{invariantWithTWEs("INV-FLOW-001", "TWE-FLOW-001")},
-		nil, stubRunner(trustirfacts.StatusSuccess, 1, &reqs))
+		stubRunner(trustirfacts.StatusSuccess, 1, &reqs))
 	if len(reqs) != 0 {
 		t.Errorf("no family has a query — the fact layer must not be called: %+v", reqs)
 	}

@@ -6,7 +6,7 @@ import (
 	"slices"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
@@ -39,7 +39,7 @@ func planTWEOperations(invariants []artifacts.ProjectInvariant) []trustirfacts.O
 // stub, because this function's job is choosing operations and filtering
 // results — the clone, the database build and the query have their own tests
 // in internal/trustirfacts and do not need re-running here.
-type factRunner func(context.Context, trustirfacts.Engine, trustirfacts.Request) (artifacts.ToolFact, string, error)
+type factRunner func(context.Context, trustirfacts.Engine, codedb.DatabaseProvider, trustirfacts.Request) (artifacts.ToolFact, string, error)
 
 // prefetchedFact is a collected ToolFact and the files it flagged. Paths is
 // empty for a query that matched nothing — a statement about the whole tree
@@ -114,9 +114,9 @@ func attachPrefetchedFacts(packs []artifacts.CasePack, facts []prefetchedFact) [
 func prefetchFactLayer(
 	ctx context.Context,
 	eng trustirfacts.Engine,
+	db codedb.DatabaseProvider,
 	queryPackDir, runDir, repository, commit string,
 	invariants []artifacts.ProjectInvariant,
-	exec executor.Executor,
 	run factRunner,
 ) []prefetchedFact {
 	ops := planTWEOperations(invariants)
@@ -126,13 +126,12 @@ func prefetchFactLayer(
 
 	var refs []prefetchedFact
 	for _, op := range ops {
-		fact, path, err := run(ctx, eng, trustirfacts.Request{
+		fact, path, err := run(ctx, eng, db, trustirfacts.Request{
 			RunDir:       runDir,
 			Repository:   repository,
 			Commit:       commit,
 			Operation:    op,
 			QueryPackDir: queryPackDir,
-			Exec:         exec,
 		})
 		if err != nil {
 			fmt.Printf("Warning: fact layer prefetch %s: %v\n", op, err)

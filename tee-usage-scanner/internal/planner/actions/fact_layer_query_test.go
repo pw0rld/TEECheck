@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 )
@@ -188,18 +189,23 @@ func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) 
 	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
 	t.Cleanup(trustirfacts.ResetFactTables)
 
+	eng := &fakeFactEngine{available: true, results: []codeql.Result{{
+		RuleID:    "trustir/state/rollback-version-propagation",
+		Message:   "TWE-STATE-001: producer shdr_load_pub_key never propagates rollback field 'version'; authority check_update_version therefore checks a default version.",
+		Path:      "core/crypto/signed_hdr.c",
+		StartLine: 262,
+		Related: []codeql.RelatedLocation{
+			{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+			{Path: "core/kernel/ree_fs_ta.c", StartLine: 314, Symbol: "check_update_version"},
+		},
+	}}}
+	// One engine, and a provider over it: the fake builds the database
+	// directory the same way the real one does, so the action exercises the
+	// production path from request to observation.
 	handler := &actions.FactLayerQueryHandler{
+		DB:           codedb.New(eng, nil),
+		Engine:       eng,
 		QueryPackDir: realQueryPackDir(t),
-		Engine: &fakeFactEngine{available: true, results: []codeql.Result{{
-			RuleID:    "trustir/state/rollback-version-propagation",
-			Message:   "TWE-STATE-001: producer shdr_load_pub_key never propagates rollback field 'version'; authority check_update_version therefore checks a default version.",
-			Path:      "core/crypto/signed_hdr.c",
-			StartLine: 262,
-			Related: []codeql.RelatedLocation{
-				{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
-				{Path: "core/kernel/ree_fs_ta.c", StartLine: 314, Symbol: "check_update_version"},
-			},
-		}}},
 	}
 
 	res := handler.Run(context.Background(), actions.ActionRequest{
@@ -239,9 +245,11 @@ func TestFactLayerQuery_NoMatchesCarriesNoFindings(t *testing.T) {
 	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
 	t.Cleanup(trustirfacts.ResetFactTables)
 
+	eng := &fakeFactEngine{available: true}
 	handler := &actions.FactLayerQueryHandler{
+		DB:           codedb.New(eng, nil),
+		Engine:       eng,
 		QueryPackDir: realQueryPackDir(t),
-		Engine:       &fakeFactEngine{available: true},
 	}
 	res := handler.Run(context.Background(), actions.ActionRequest{
 		Name:       "fact_layer_query",

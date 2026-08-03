@@ -29,7 +29,7 @@ func TestRun_UsesLLMRegisteredTableAndDisclosesProvenance(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRun_FallsBackToDeterministicFixtureWhenNoLLMTableRegistered(t *testing.
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

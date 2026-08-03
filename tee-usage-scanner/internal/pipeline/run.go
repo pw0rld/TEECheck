@@ -14,6 +14,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
@@ -200,8 +201,17 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// acquireSourceScope: every stage from here on resolves paths against
 	// this one root, so the models, the tools and the fact layer describe
 	// the same revision.
-	srcRoot, pinned := acquireSourceScope(context.Background(),
-		executor.Bind(exec, executor.Binding{RunID: runID, Agent: "source-acquire"}),
+	// One database manager for the whole run. Engine and provider are peer
+	// dependencies: the engine runs queries, the manager owns the database's
+	// and the checkout's lifecycle. Threading one value to every consumer is
+	// what makes "built once per run" a property of the wiring rather than a
+	// coincidence — before internal/codedb, a second consumer could only have
+	// built a second database (91 seconds and 322 MB, twice) or reimplemented
+	// the path derivation and drifted from it.
+	codeDB := codedb.New(newFactEngine(exec, runID),
+		executor.Bind(exec, executor.Binding{RunID: runID, Agent: "source-acquire"}))
+
+	srcRoot, pinned := acquireSourceScope(context.Background(), codeDB,
 		runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
 	scopeReason := "target directory; no pinned checkout"
 	if pinned {
@@ -256,7 +266,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(stageCfg, client, srcRoot, runDir, rec, blobs, exec)
+		return runL3Planner(stageCfg, client, codeDB, srcRoot, runDir, rec, blobs, exec)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -433,7 +443,7 @@ func truncate(s string, n int) string {
 // Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, client llm.Client, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
+func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -462,7 +472,7 @@ func runL3Planner(cfg config.Config, client llm.Client, srcRoot, runDir string, 
 	} else {
 		fmt.Printf("Warning: TWE playbook catalog not loaded (%v); twe_playbook_detail will report no catalog\n", cerr)
 	}
-	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir, playbooks)
+	registry := actions.NewDefaultRegistryWithFacts(eng, db, queryPackDir, playbooks)
 
 	// Case Packs render a TWE's common_defenses / common_false_positives
 	// from this map (§24) — the Challenger's phase-1 instructions rely on
@@ -487,9 +497,8 @@ func runL3Planner(cfg config.Config, client llm.Client, srcRoot, runDir string, 
 
 	// Collect the deterministic evidence these invariants call for before the
 	// planner starts, rather than hoping it asks. See prefetch.go.
-	prefetched := prefetchFactLayer(context.Background(), eng, queryPackDir, runDir,
+	prefetched := prefetchFactLayer(context.Background(), eng, db, queryPackDir, runDir,
 		manifest.RepoURL, manifest.Commit, invs,
-		executor.Bind(exec, executor.Binding{RunID: manifest.RunID, Agent: "fact-prefetch"}),
 		trustirfacts.RunAndPersist)
 	prefetchedRefs := make([]string, 0, len(prefetched))
 	for _, pf := range prefetched {

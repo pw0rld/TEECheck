@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 // names, without cloning anything.
 func markCheckout(t *testing.T, runDir, repo, commit string) string {
 	t.Helper()
-	dir := trustirfacts.SourceDir(runDir, repo, commit)
+	dir := codedb.New(nil, nil).SourceDir(codedb.Scope{RunDir: runDir, Repository: repo, Commit: commit})
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestAcquireSourceScope_ReusesAnExistingCheckout(t *testing.T) {
 	runDir := t.TempDir()
 	want := markCheckout(t, runDir, testRepo, testCommit)
 
-	got, pinned := acquireSourceScope(context.Background(), nil, runDir,
+	got, pinned := acquireSourceScope(context.Background(), codedb.New(nil, nil), runDir,
 		testRepo, testCommit, "/fixtures/CVE-2026-44362/vulnerable")
 	if !pinned {
 		t.Error("pinned = false, want true — the checkout is present")
@@ -53,11 +53,11 @@ func TestAcquireSourceScope_ReusesAnExistingCheckout(t *testing.T) {
 // the named target rather than failing.
 func TestAcquireSourceScope_NoIdentityMeansTargetDirectory(t *testing.T) {
 	fallback := "/some/local/dir"
-	got, pinned := acquireSourceScope(context.Background(), nil, t.TempDir(), "", "", fallback)
+	got, pinned := acquireSourceScope(context.Background(), codedb.New(nil, nil), t.TempDir(), "", "", fallback)
 	if pinned || got != fallback {
 		t.Fatalf("root=%q pinned=%v, want the target directory and pinned=false", got, pinned)
 	}
-	if got, _ := acquireSourceScope(context.Background(), nil, t.TempDir(), testRepo, "", fallback); got != fallback {
+	if got, _ := acquireSourceScope(context.Background(), codedb.New(nil, nil), t.TempDir(), testRepo, "", fallback); got != fallback {
 		t.Errorf("a repository without a commit must use the target directory, got %q", got)
 	}
 }
@@ -68,11 +68,11 @@ func TestAcquireSourceScope_NoIdentityMeansTargetDirectory(t *testing.T) {
 // re-clone from, the run falls back rather than trusting the debris.
 func TestAcquireSourceScope_IgnoresAnUnmarkedDirectory(t *testing.T) {
 	runDir := t.TempDir()
-	if err := os.MkdirAll(trustirfacts.SourceDir(runDir, testRepo, testCommit), 0o755); err != nil {
+	if err := os.MkdirAll(codedb.New(nil, nil).SourceDir(codedb.Scope{RunDir: runDir, Repository: testRepo, Commit: testCommit}), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	fallback := "/fixtures/vulnerable"
-	got, pinned := acquireSourceScope(context.Background(), nil, runDir,
+	got, pinned := acquireSourceScope(context.Background(), codedb.New(nil, nil), runDir,
 		"file:///nonexistent-repository", testCommit, fallback)
 	if pinned || got != fallback {
 		t.Fatalf("root=%q pinned=%v, want the fallback when the checkout cannot be completed", got, pinned)
@@ -87,14 +87,14 @@ func TestAcquireSourceScope_ChecksOutWhenAbsent(t *testing.T) {
 	commit := gitHead(t, origin)
 
 	runDir := t.TempDir()
-	got, pinned := acquireSourceScope(context.Background(), nil, runDir, origin, commit, "/fixtures/vulnerable")
+	got, pinned := acquireSourceScope(context.Background(), codedb.New(nil, nil), runDir, origin, commit, "/fixtures/vulnerable")
 	if !pinned {
 		t.Fatalf("pinned = false; the checkout should have been made. root=%q", got)
 	}
 	if _, err := os.Stat(filepath.Join(got, "core", "crypto", "signed_hdr.c")); err != nil {
 		t.Fatalf("the acquired tree must contain the repository's files: %v", err)
 	}
-	if !trustirfacts.SourceAvailable(runDir, origin, commit) {
+	if !codedb.New(nil, nil).SourceAvailable(codedb.Scope{RunDir: runDir, Repository: origin, Commit: commit}) {
 		t.Error("the checkout must be marked complete so later stages reuse it")
 	}
 }
@@ -189,7 +189,7 @@ func TestAcquireSourceScope_ReturnsAnAbsolutePath(t *testing.T) {
 	}
 	markCheckout(t, rel, testRepo, testCommit)
 
-	got, pinned := acquireSourceScope(context.Background(), nil, rel, testRepo, testCommit, "/fixtures/vulnerable")
+	got, pinned := acquireSourceScope(context.Background(), codedb.New(nil, nil), rel, testRepo, testCommit, "/fixtures/vulnerable")
 	if !pinned {
 		t.Fatal("the checkout is present; pinned must be true")
 	}

@@ -1,4 +1,4 @@
-package trustirfacts
+package codedb
 
 import (
 	"context"
@@ -129,25 +129,5 @@ func TestNoExecutorStillWorksAndRecordsNothing(t *testing.T) {
 		if e.Type == events.TypeToolCallStarted || e.Type == events.TypeToolCallCompleted {
 			t.Fatalf("recorded %s with no executor wired", e.Type)
 		}
-	}
-}
-
-// Request.Exec is the seam the planner action wires. It must not change
-// the request's identity: the fact ID and the database cache key are
-// derived from repository+commit+operation only, and a run that suddenly
-// recorded its subprocesses must still hit the same cache.
-func TestExecDoesNotAffectRequestIdentity(t *testing.T) {
-	base := Request{
-		RunDir: "/run", Repository: "https://example.invalid/r", Commit: "abc123",
-		Operation: OperationRollbackVersionPropagation, QueryPackDir: "/pack",
-	}
-	withExec := base
-	withExec.Exec = &executor.LocalExecutor{}
-
-	if base.argumentsSHA256() != withExec.argumentsSHA256() {
-		t.Error("arguments hash changed when an executor was wired in")
-	}
-	if base.factID() != withExec.factID() {
-		t.Error("fact ID changed when an executor was wired in")
 	}
 }

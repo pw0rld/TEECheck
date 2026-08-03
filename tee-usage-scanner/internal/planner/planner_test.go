@@ -426,7 +426,7 @@ func TestPlannerRun_PulledPlaybookDetailStaysInPromptAcrossRounds(t *testing.T) 
 
 	detailText := "[TWE-STATE-001] Trusted State Rollback\nInvestigate: " + strings.Repeat("x", 2000) + "END-OF-DETAIL-MARKER\n"
 	src := &fakePlaybookSource{byID: map[string]string{"TWE-STATE-001": detailText}}
-	reg := actions.NewDefaultRegistryWithFacts(nil, "", src)
+	reg := actions.NewDefaultRegistryWithFacts(nil, nil, "", src)
 
 	client := &mockLLM{scripts: []string{
 		`{"thought":"pull detail","actions":[{"name":"twe_playbook_detail","args":{"twe_id":"TWE-STATE-001"}}]}`,

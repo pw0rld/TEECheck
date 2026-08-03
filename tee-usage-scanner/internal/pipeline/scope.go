@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
 // acquireSourceScope resolves the one tree every stage of the run reads, and
@@ -36,14 +35,15 @@ import (
 // fails, the run continues against the named target — a smaller scope, but a
 // truthful one. What must never happen is reading the narrow tree while
 // reporting about the wide one.
-func acquireSourceScope(ctx context.Context, ex executor.Executor, runDir, repository, commit, fallback string) (string, bool) {
+func acquireSourceScope(ctx context.Context, db *codedb.Manager, runDir, repository, commit, fallback string) (string, bool) {
 	if repository == "" || commit == "" {
 		return fallback, false
 	}
-	if trustirfacts.SourceAvailable(runDir, repository, commit) {
-		return absOrSame(trustirfacts.SourceDir(runDir, repository, commit)), true
+	scope := codedb.Scope{RunDir: runDir, Repository: repository, Commit: commit}
+	if db.SourceAvailable(scope) {
+		return absOrSame(db.SourceDir(scope)), true
 	}
-	tree, err := trustirfacts.EnsureSource(ctx, ex, runDir, repository, commit)
+	tree, err := db.EnsureSource(ctx, scope)
 	if err != nil {
 		fmt.Printf("Warning: could not check out %s@%s (%v); scanning %s instead\n",
 			repository, truncate(commit, 12), err, fallback)

@@ -84,7 +84,7 @@ func TestRegistry_ListsRegisteredActions(t *testing.T) {
 }
 
 func TestFactsRegistry_RegistersPlaybookDetail(t *testing.T) {
-	r := actions.NewDefaultRegistryWithFacts(nil, "", nil)
+	r := actions.NewDefaultRegistryWithFacts(nil, nil, "", nil)
 	found := false
 	for _, n := range r.Names() {
 		if n == "twe_playbook_detail" {

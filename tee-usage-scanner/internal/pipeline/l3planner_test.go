@@ -139,7 +139,7 @@ func TestRunL3Planner_MultiSample_WritesDedupedUnionOnce(t *testing.T) {
 		KnowledgeRoot: t.TempDir(),
 		Samples:       2,
 	}
-	if err := runL3Planner(cfg, client, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestRunL3Planner_MaxCasesCapsWrittenPacks(t *testing.T) {
 		Samples:       2,
 		MaxCases:      2,
 	}
-	if err := runL3Planner(cfg, client, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestRunL3Planner_SingleSampleWritesAllPacks(t *testing.T) {
 		Default:   donePass(t),
 	}
 	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1, MaxCases: 12}
-	if err := runL3Planner(cfg, client, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
 	}
 	if packs := readWrittenPacks(t, runDir); len(packs) != 2 {
@@ -229,7 +229,7 @@ func TestRunL3Planner_WriteFailureAbortsTheRun(t *testing.T) {
 		Default:   donePass(t),
 	}
 	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1}
-	if err := runL3Planner(cfg, client, repoRoot, runDir, events.Nop{}, nil, nil); err == nil {
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err == nil {
 		t.Fatal("a failure to persist case packs must abort the run, not be swallowed into bundle.Errors")
 	}
 }

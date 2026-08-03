@@ -1,4 +1,4 @@
-package trustirfacts
+package codedb
 
 import (
 	"context"

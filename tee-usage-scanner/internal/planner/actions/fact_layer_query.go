@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
@@ -98,7 +98,11 @@ func capFindings(findings []artifacts.ToolFinding) ([]artifacts.ToolFinding, boo
 // trustirfacts.Engine, and registers a pointer to one instance holding
 // its own QueryPackDir.
 type FactLayerQueryHandler struct {
-	Engine       trustirfacts.Engine
+	Engine trustirfacts.Engine
+	// DB owns the run's CodeQL database. It is the same value the program
+	// index stage holds, so a planner round that needs a fact finds the
+	// database already built rather than building a second one.
+	DB           codedb.DatabaseProvider
 	QueryPackDir string
 }
 
@@ -133,28 +137,20 @@ func (h *FactLayerQueryHandler) Run(ctx context.Context, req ActionRequest) Acti
 		return fail("fact_layer_query", "run_dir/repository/commit not available for this run — the fact layer requires a pinned repository+commit")
 	}
 
-	fact, path, err := trustirfacts.RunAndPersist(ctx, h.Engine, trustirfacts.Request{
+	// Deliberately not marked ExecutorBacked: one fact_layer_query action
+	// fans out to several subprocesses (codeql create, codeql analyze), so
+	// the action-level event and the executor-level events are different
+	// granularities, not duplicates.
+	//
+	// The git clone that used to happen here is gone: internal/codedb owns
+	// the checkout, and the pipeline acquires it before the first stage, so
+	// by the time a planner round asks for a fact the tree is already there.
+	fact, path, err := trustirfacts.RunAndPersist(ctx, h.Engine, h.DB, trustirfacts.Request{
 		RunDir:       req.RunDir,
 		Repository:   req.Repository,
 		Commit:       req.Commit,
 		Operation:    trustirfacts.Operation(args.Operation),
 		QueryPackDir: h.QueryPackDir,
-		// The fact layer shells out to git to build the database's source
-		// tree. Executor comes from the ActionRequest the planner already
-		// populates, so the handler needs no field of its own; Bind stamps
-		// this round's correlation ids on so a git-clone event deep inside
-		// the fact layer is still attributable to the round that asked for
-		// it. The CodeQL subprocesses are recorded by h.Engine, which
-		// carries its own executor from the pipeline.
-		//
-		// Deliberately not marked ExecutorBacked: one fact_layer_query
-		// action fans out to several subprocesses (git clone, git
-		// checkout, codeql create, codeql analyze), so the action-level
-		// event and the executor-level events are different granularities,
-		// not duplicates.
-		Exec: executor.Bind(req.Executor, executor.Binding{
-			RunID: req.RunID, Agent: req.Agent, Round: req.Round,
-		}),
 	})
 	if err != nil {
 		return fail("fact_layer_query", fmt.Sprintf("fact layer call failed: %v", err))
