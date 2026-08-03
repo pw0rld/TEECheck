@@ -101,6 +101,17 @@ func ProjectMapPath(runDir string) string {
 	return filepath.Join(ContextDir(runDir), "project_map.v1.json")
 }
 
+// FunctionCardsRelDir is where the project map's function-card pages live,
+// relative to the run directory. The relative form is what a page reference
+// carries, so a run directory can be moved or archived without every
+// reference in it becoming wrong.
+const FunctionCardsRelDir = "01_context/function_cards"
+
+// FunctionCardsDir is FunctionCardsRelDir under a given run.
+func FunctionCardsDir(runDir string) string {
+	return filepath.Join(runDir, filepath.FromSlash(FunctionCardsRelDir))
+}
+
 // EvidenceSlicesDir holds the per-lead expansions the planner retrieved. It
 // lives under the planner's own directory rather than 01_context because the
 // slices are a product of the investigation, not of project understanding.
