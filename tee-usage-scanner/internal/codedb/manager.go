@@ -140,7 +140,32 @@ func dirName(repository, commit string) string {
 // Path is the explicit, visible run-directory location of one revision's
 // database (§23.3: an artifact, not a cache side effect).
 func (m *Manager) Path(scope Scope) string {
-	return filepath.Join(runfs.TrustIRToolFactsDir(scope.RunDir), "db", dirName(scope.Repository, scope.Commit))
+	return absolute(filepath.Join(runfs.TrustIRToolFactsDir(scope.RunDir), "db", dirName(scope.Repository, scope.Commit)))
+}
+
+// absolute resolves a path built from the run directory against this
+// process's working directory.
+//
+// Every path this Manager produces is handed to a subprocess: git clone as a
+// destination, git checkout as a working directory, codeql as a database
+// argument. A relative run directory — "runs/recon-001", which is what
+// --output-dir defaults to — means each of those resolves against whatever
+// directory the subprocess happens to start in.
+//
+// Two of the three survived that by accident, because they run as children
+// of this process and inherit its directory. The third did not: the executor
+// refuses a relative working directory outright, so on the first real run
+// against OP-TEE the clone succeeded and the checkout was rejected. The
+// pinned revision was never checked out, the run silently fell back to the
+// branch tip, and the program index degraded to no function cards at all.
+// Making the paths absolute here fixes all three at once, rather than the
+// one that happened to report it.
+func absolute(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 // State reports whether the database is built. It reads the marker rather
@@ -169,7 +194,7 @@ func (m *Manager) State(scope Scope) string {
 // It returns a path whether or not anything is there yet, so check
 // SourceAvailable before relying on it.
 func (m *Manager) SourceDir(scope Scope) string {
-	return filepath.Join(runfs.TrustIRToolFactsDir(scope.RunDir), "src", dirName(scope.Repository, scope.Commit))
+	return absolute(filepath.Join(runfs.TrustIRToolFactsDir(scope.RunDir), "src", dirName(scope.Repository, scope.Commit)))
 }
 
 // SourceAvailable reports whether SourceDir holds a completed checkout. The

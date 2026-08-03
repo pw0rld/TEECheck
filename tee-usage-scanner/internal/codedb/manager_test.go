@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
 func TestDbDirName_DeterministicAndDiscriminating(t *testing.T) {
@@ -253,5 +255,61 @@ func TestState_UnmarkedDirectoryIsNotReady(t *testing.T) {
 	}
 	if m.State(scope) != StateAbsent {
 		t.Error("a database directory with no built marker must read as absent, not ready")
+	}
+}
+
+// A relative --output-dir is the default ("runs"), and every path this
+// Manager produces is handed to a subprocess. On the first real run against
+// OP-TEE the clone succeeded — dest is a positional argument, resolved
+// against this process's own directory — and the checkout was rejected,
+// because the executor refuses a relative working directory. The pinned
+// revision was never checked out, the run fell back to the branch tip, and
+// the program index degraded to zero function cards.
+//
+// This exercises the whole chain rather than asserting on a string: chdir
+// somewhere, name the run directory relatively, and check that the tree
+// really is at the pinned commit.
+func TestEnsureSource_WorksWhenTheRunDirectoryIsRelative(t *testing.T) {
+	origin, pinned := newOrigin(t)
+
+	t.Chdir(t.TempDir())
+	m := New(nil, &executor.LocalExecutor{})
+	scope := Scope{RunDir: filepath.Join("runs", "recon-001"), Repository: origin, Commit: pinned}
+
+	tree, err := m.EnsureSource(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("EnsureSource with a relative run dir: %v", err)
+	}
+	if !filepath.IsAbs(tree) {
+		t.Errorf("EnsureSource returned %q; a relative tree means nothing to a subprocess", tree)
+	}
+	// The pinned revision, not the branch tip. A checkout that silently did
+	// not happen leaves a clone of the tip that looks like a success.
+	if got := headCommit(t, tree); got != pinned {
+		t.Errorf("checked out %s, want the pinned %s — the checkout did not run", got, pinned)
+	}
+	if body, err := os.ReadFile(filepath.Join(tree, "version.txt")); err != nil {
+		t.Fatal(err)
+	} else if strings.TrimSpace(string(body)) != "v1" {
+		t.Errorf("tree holds %q, want the pinned revision's v1", strings.TrimSpace(string(body)))
+	}
+}
+
+// Every path handed to a subprocess is absolute, whatever the caller's
+// --output-dir looked like. Path feeds codeql as a database argument and
+// SourceDir feeds git as a destination and a working directory; only the
+// working directory reports a relative path as an error, so the other two
+// need an assertion of their own rather than waiting to be noticed.
+func TestManagerPaths_AreAbsoluteWhateverTheRunDirWas(t *testing.T) {
+	m := New(nil, nil)
+	scope := Scope{
+		RunDir:     filepath.Join("runs", "recon-001"),
+		Repository: "https://github.com/OP-TEE/optee_os",
+		Commit:     "a9386bf987d95374a6f7f4c7bcf850115e0e1a4e",
+	}
+	for name, got := range map[string]string{"Path": m.Path(scope), "SourceDir": m.SourceDir(scope)} {
+		if !filepath.IsAbs(got) {
+			t.Errorf("%s(relative run dir) = %q, want an absolute path", name, got)
+		}
 	}
 }
