@@ -33,7 +33,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
 	scall "github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck/all"
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/twecontext"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
@@ -527,15 +526,15 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 
-	// Collect the deterministic evidence these invariants call for before the
-	// planner starts, rather than hoping it asks. See prefetch.go.
-	prefetched := prefetchFactLayer(context.Background(), eng, db, queryPackDir, runDir,
-		manifest.RepoURL, manifest.Commit, invs,
-		trustirfacts.RunAndPersist)
-	prefetchedRefs := make([]string, 0, len(prefetched))
-	for _, pf := range prefetched {
-		prefetchedRefs = append(prefetchedRefs, pf.Ref)
-	}
+	// Nothing is prefetched for the planner. The pipeline used to run the
+	// fact-layer queries the run's invariants called for and hand the
+	// resulting refs to planner.Run, which unioned them into every
+	// investigation it reported — so a lead the model reached on its own
+	// still shipped evidence the old invariant had selected, and the same
+	// facts were attached by path match to every Case Pack downstream.
+	// BUG-003 §3.3 is what that chain produces. The Planner now cites only
+	// what it executed itself; §6 says a lead's reasons must reference facts
+	// the Planner has seen, and a prefetched fact is not one of them.
 
 	samples := cfg.Samples
 	if samples <= 0 {
@@ -576,9 +575,14 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 			fmt.Printf("\n=== Planner pass %d/%d (avoiding %d previously-covered targets) ===\n", pass, samples, len(avoid))
 		}
 		result := planner.Run(context.Background(), planner.RunConfig{
-			RunID:         manifest.RunID,
-			RepoRoot:      srcRoot,
-			RunDir:        runDir,
+			RunID:    manifest.RunID,
+			RepoRoot: srcRoot,
+			RunDir:   runDir,
+			// Every pass restarts at round 1, so without this each one's
+			// observation refs would collide with the last's — and a lead
+			// raised in pass 2 would cite pass 1's evidence, from a pass
+			// deliberately pointed at different code.
+			SampleIndex:   pass - 1,
 			Profile:       promptProfile,
 			Client:        client,
 			Registry:      registry,
@@ -593,10 +597,9 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 			// Project Understanding prior knowledge (§7.5): the planner
 			// investigates against these, and reaches the fact layer via
 			// the fact_layer_query action registered above.
-			TWEContext:             string(tweText),
-			Architecture:           archPtr,
-			Invariants:             invs,
-			PrefetchedToolFactRefs: prefetchedRefs,
+			TWEContext:   string(tweText),
+			Architecture: archPtr,
+			Invariants:   invs,
 			// §24 Case Pack: common_defenses / common_false_positives per
 			// TWE, consumed when a done.investigations entry builds a Case
 			// Pack for the Challenger (internal/challenger/phase1.go).
@@ -701,7 +704,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// After dedup, not before: a fact attached to a pack that dedup then
 	// drops reaches nobody, which is how the 2026-07-31 run collected the
 	// right ToolFact and delivered it to no agent.
-	final := attachPrefetchedFacts(planner.DedupePacks(allPacks), prefetched)
+	final := planner.DedupePacks(allPacks)
 	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
 		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
 		final = final[:cfg.MaxCases]

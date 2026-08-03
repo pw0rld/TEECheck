@@ -366,7 +366,7 @@ func TestBrowsingActions_AreAdvertisedWithTheirArgs(t *testing.T) {
 	for _, n := range reg.Names() {
 		registered[n] = true
 	}
-	prompt := planner.BuildSystemPrompt(reg.Names(), "", planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt(reg.Names(), "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	for _, name := range []string{
 		"get_repository_card", "list_modules", "list_functions",
 		"find_symbols", "get_function_card", "get_callers",

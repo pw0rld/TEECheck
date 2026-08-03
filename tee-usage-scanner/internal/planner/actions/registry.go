@@ -52,6 +52,37 @@ func (r *Registry) IsExecutorBacked(name string) bool {
 	return eb.IsExecutorBacked()
 }
 
+// Has reports whether an action is reachable in this registry.
+func (r *Registry) Has(name string) bool {
+	_, ok := r.handlers[name]
+	return ok
+}
+
+// Without returns a copy of r with the named handlers removed.
+//
+// It exists so a phase can be constrained by construction rather than by
+// instruction. A prompt that asks the model not to use an action is a
+// request: on run-b the planner's first two actions were twe_playbook_detail
+// calls, because the catalog sat at the top of its prompt. A call to an
+// action that is not in the registry returns "unknown action", and the model
+// finds out in the same round.
+//
+// The copy is shallow — handlers are safe for concurrent use after
+// construction, so both registries may share them.
+func (r *Registry) Without(names ...string) *Registry {
+	drop := make(map[string]bool, len(names))
+	for _, n := range names {
+		drop[n] = true
+	}
+	out := NewRegistry()
+	for name, h := range r.handlers {
+		if !drop[name] {
+			out.handlers[name] = h
+		}
+	}
+	return out
+}
+
 // Names returns the sorted list of registered handler names.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.handlers))

@@ -177,10 +177,15 @@ func TestPlannerRun_ModelReportedToolFactRefIsNotDuplicated(t *testing.T) {
 	}
 }
 
-// A ToolFact the pipeline collected before the loop started must reach the
-// investigation too. It is no less real for having been obtained without the
-// model asking — that is the entire point of collecting it deterministically.
-func TestPlannerRun_PrefetchedToolFactReachesTheInvestigation(t *testing.T) {
+// A ToolFact this loop did not execute must NOT reach the investigation.
+//
+// The pipeline used to prefetch the fact-layer queries the run's invariants
+// called for and union the refs into every investigation the Planner
+// reported — so a lead the model reached on its own still shipped evidence
+// the old invariant had selected, and nothing downstream could tell the two
+// apart. §6 requires a lead's reasons to reference facts the Planner has
+// seen; a fact collected on its behalf is not one of them.
+func TestPlannerRun_AFactTheLoopDidNotExecuteDoesNotReachTheInvestigation(t *testing.T) {
 	repoRoot, runDir := setupRollbackFixtureRepo(t)
 
 	factPath := filepath.Join(runDir, "02_tool_facts", "trustir", "prefetched.json")
@@ -191,8 +196,7 @@ func TestPlannerRun_PrefetchedToolFactReachesTheInvestigation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The model never calls fact_layer_query and reports no refs — the run
-	// that produced BUG-001 on the vulnerable side, exactly.
+	// The model never calls fact_layer_query and reports no refs.
 	done := roundResponseWithDone(t, map[string]any{
 		"summary":    "no fact layer call this round",
 		"candidates": []map[string]any{},
@@ -206,14 +210,13 @@ func TestPlannerRun_PrefetchedToolFactReachesTheInvestigation(t *testing.T) {
 	})
 
 	result := planner.Run(context.Background(), planner.RunConfig{
-		RunID:                  "test-prefetch",
-		RepoRoot:               repoRoot,
-		RunDir:                 runDir,
-		Profile:                planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf"},
-		Client:                 &mockLLM{scripts: []string{done}},
-		Registry:               actions.NewDefaultRegistryWithNav(),
-		Budget:                 defaultTestBudget(),
-		PrefetchedToolFactRefs: []string{factPath},
+		RunID:    "test-no-prefetch",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Profile:  planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf"},
+		Client:   &mockLLM{scripts: []string{done}},
+		Registry: actions.NewDefaultRegistryWithNav(),
+		Budget:   defaultTestBudget(),
 	})
 	if result.Err != nil {
 		t.Fatalf("unexpected error: %v", result.Err)
@@ -221,11 +224,7 @@ func TestPlannerRun_PrefetchedToolFactReachesTheInvestigation(t *testing.T) {
 	if len(result.Investigations) != 1 {
 		t.Fatalf("Investigations len = %d", len(result.Investigations))
 	}
-	refs := result.Investigations[0].ToolFactRefs
-	if len(refs) != 1 || refs[0] != factPath {
-		t.Fatalf("ToolFactRefs = %v, want [%s]", refs, factPath)
-	}
-	if len(result.CasePacks) != 1 || len(result.CasePacks[0].ToolFactRefs) != 1 {
-		t.Fatalf("the prefetched fact must reach the Case Pack the agents read: %+v", result.CasePacks)
+	if refs := result.Investigations[0].ToolFactRefs; len(refs) != 0 {
+		t.Errorf("ToolFactRefs = %v, want none — this loop executed no fact-layer query", refs)
 	}
 }

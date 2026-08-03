@@ -94,15 +94,6 @@ type RunConfig struct {
 	Architecture *artifacts.ArchitectureModel
 	Invariants   []artifacts.ProjectInvariant
 
-	// PrefetchedToolFactRefs are ToolFacts the pipeline collected before this
-	// loop started, because the run's invariants called for them (see
-	// internal/pipeline's prefetchFactLayer). They are unioned into every
-	// investigation the loop reports, exactly like the refs the loop obtains
-	// itself: a fact is no less real for having been collected without the
-	// model asking. Whether an immutable fact exists must not depend on the
-	// model's choice.
-	PrefetchedToolFactRefs []string
-
 	// TWEPlaybooks maps a TWE ID to the playbook-derived context a Case
 	// Pack built for that TWE should carry (§24 "Case Pack 修改": common
 	// defenses / common false positives). A TWE ID with no entry here
@@ -192,9 +183,28 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	observedPaths := map[string]bool{}
 
 	obligations := LoadObligations(cfg.KnowledgeRoot)
-	knowledge := PriorKnowledge{TWEText: cfg.TWEContext, Architecture: cfg.Architecture, Invariants: cfg.Invariants}
-	systemPrompt := BuildSystemPrompt(cfg.Registry.Names(), obligations, knowledge)
+	knowledge := PriorKnowledge{TWEText: cfg.TWEContext}
 	roundsLog := runfs.RoundsLogPath(cfg.RunDir)
+
+	// Pass A is project-first by construction, not by instruction. The
+	// registry it is given does not contain twe_playbook_detail, so a call
+	// to it returns "unknown action" in the same round. A prompt asking the
+	// model not to use an action is a request: on run-b the planner's first
+	// two actions were twe_playbook_detail calls, because the catalog sat at
+	// the top of its prompt.
+	reconRegistry := cfg.Registry.Without(passBOnlyActions...)
+
+	// The reconnaissance gate, and what the project map says there is to
+	// browse. A caller that budgeted no reconnaissance rounds never enters
+	// the phase — reconnaissance costs rounds, and this is what those rounds
+	// buy.
+	projectMap, mapped := loadProjectMap(cfg.RunDir)
+	recon := NewReconState(ReconModeFor(projectMap)).WithTotals(
+		len(projectMap.Modules), totalFunctions(projectMap), projectMap.Repository.FileCount)
+	if cfg.Budget.MaxReconRounds <= 0 || !mapped {
+		recon.SkipReconnaissance()
+	}
+	var leads []artifacts.AuditLead
 
 	var donePayload actions.DonePayload
 	var terminationReason string
@@ -219,14 +229,35 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 
 loop:
 	for !cfg.Budget.Exhausted() {
-		cfg.Budget.ConsumeRound()
+		inRecon := recon.Phase() == PhaseReconnaissance
+		if inRecon {
+			cfg.Budget.ConsumeReconRound()
+			// Released at the START of the round it runs out in, so the
+			// prompt below can say so. Neither escape may be silent.
+			if cfg.Budget.ReconExhausted() && !recon.Satisfied() {
+				recon.ExhaustReconBudget()
+			}
+		} else {
+			cfg.Budget.ConsumeRound()
+		}
 		roundNum := cfg.Budget.RoundsUsed
 
 		_ = cfg.Events.Emit(events.PlannerRoundStarted(cfg.RunID, cfg.AgentID, roundNum))
 
-		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths)
+		// The registry and the system prompt both follow the phase, and the
+		// phase flips mid-run when a lead opens. Rebuilding them per round
+		// is what makes that flip real rather than narrated.
+		registry := cfg.Registry
+		if inRecon {
+			registry = reconRegistry
+		}
+		systemPrompt := BuildSystemPrompt(
+			advertisedActions(registry), obligations, knowledge, recon.Phase())
 
-		isFinalRound := cfg.Budget.RoundsUsed == cfg.Budget.MaxRounds
+		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths)
+		roundPrompt += reconStatusBlock(recon)
+
+		isFinalRound := cfg.Budget.IsFinalRound()
 
 		// Inject the list of paths the LLM has actually observed so
 		// far in every round after the first. The wording is soft in
@@ -416,26 +447,56 @@ loop:
 			// the executor. The planner must skip its manual emit
 			// path for those actions or events.jsonl will record
 			// duplicates and stats action_mix doubles.
-			executorBacked := cfg.Registry.IsExecutorBacked(act.Name)
+			executorBacked := registry.IsExecutorBacked(act.Name)
 
 			if !executorBacked {
 				toolArgsBlob := events.BestEffortRef(cfg.Blobs, act.Args)
 				_ = cfg.Events.Emit(events.ToolCallStarted(cfg.RunID, cfg.AgentID, act.Name, roundNum, toolArgsBlob))
 			}
 
-			result := cfg.Registry.Run(ctx, actions.ActionRequest{
-				Name:       act.Name,
-				Args:       act.Args,
-				RepoRoot:   cfg.RepoRoot,
-				RunDir:     cfg.RunDir,
-				Repository: cfg.Profile.RepoURL,
-				Commit:     cfg.Profile.Commit,
-				Executor:   cfg.Executor,
-				RunID:      cfg.RunID,
-				Agent:      cfg.AgentID,
-				Round:      roundNum,
-			})
+			// open_audit_lead and the reconnaissance gate on `done` are
+			// dispatched here rather than through the registry. Both need
+			// the live ReconState and this pass's observation set, and an
+			// actions.Handler receives only an ActionRequest — a handler
+			// would have to re-read artifacts from disk and guess what the
+			// planner saw, which is the kind of reconstruction that
+			// produces a citation to something nobody looked at.
+			// Captured before dispatch: open_audit_lead is the action that
+			// flips the phase, and it was itself made in the phase before
+			// the flip.
+			phaseAtAction := recon.Phase()
+
+			var result actions.ActionResult
+			switch {
+			case act.Name == ActionOpenAuditLead:
+				var lead artifacts.AuditLead
+				lead, result = openLead(cfg, recon, observations, act.Args, roundNum)
+				if result.OK {
+					leads = append(leads, lead)
+				}
+			case act.Name == "done" && !recon.AllowDone(isFinalRound):
+				result = actions.ActionResult{
+					Name: "done",
+					OK:   false,
+					Error: "done refused: you have not yet seen enough of this project to " +
+						"conclude anything about it. Still needed:\n" + recon.Unmet(),
+				}
+			default:
+				result = registry.Run(ctx, actions.ActionRequest{
+					Name:       act.Name,
+					Args:       act.Args,
+					RepoRoot:   cfg.RepoRoot,
+					RunDir:     cfg.RunDir,
+					Repository: cfg.Profile.RepoURL,
+					Commit:     cfg.Profile.Commit,
+					Executor:   cfg.Executor,
+					RunID:      cfg.RunID,
+					Agent:      cfg.AgentID,
+					Round:      roundNum,
+				})
+			}
 			loopDet.Record(act.Name, argsStr)
+			recon.ObserveAction(act.Name, act.Args, result.OK)
 
 			// The blob carries the UNTRUNCATED output. The round
 			// observation below keeps an excerpt so the next prompt
@@ -477,6 +538,7 @@ loop:
 				Ref:         ref,
 				OutputBlob:  outputBlob,
 				ActionIndex: i,
+				Phase:       phaseAtAction,
 				Output:      body,
 				Error:       result.Error,
 				Truncated:   result.Truncated || cutHere,
@@ -536,6 +598,18 @@ loop:
 	if terminationReason == "" {
 		terminationReason = "unknown"
 	}
+	// A run whose `done` was allowed only because the final round forced it
+	// did not conclude — it ran out. Recording "llm_done" here would make
+	// the two indistinguishable, and the acceptance criterion for the
+	// reconnaissance budget is precisely that this reason never appears: a
+	// run that reaches it is evidence the budget is too small.
+	if recon.TerminationReason(true) == terminationReconIncomplete {
+		terminationReason = terminationReconIncomplete
+	}
+
+	if err := writeCoverageLedger(cfg, recon, projectMap, len(leads)); err != nil {
+		fmt.Fprintf(os.Stdout, "[planner] coverage ledger not written: %v\n", err)
+	}
 
 	bundle := &artifacts.EvidenceBundle{
 		SchemaVersion: "teecheck.evidence_bundle.v1",
@@ -547,7 +621,7 @@ loop:
 		},
 		PlannerMeta: artifacts.PlannerMeta{
 			RoundsUsed:        cfg.Budget.RoundsUsed,
-			RoundsBudget:      cfg.Budget.MaxRounds,
+			RoundsBudget:      cfg.Budget.TotalRounds(),
 			TokensUsed:        cfg.Budget.TokensUsed,
 			WallClockMs:       time.Since(loopStartedAt).Milliseconds(),
 			TerminationReason: terminationReason,
@@ -657,8 +731,13 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		inv := investigations.Build(wire)
 		// Union before Validate so an executed ref is subject to the same
 		// on-disk resolution check as a model-reported one.
-		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs,
-			unionStrings(cfg.PrefetchedToolFactRefs, executedToolFactRefs))
+		// Only what this loop executed. The pipeline used to union in
+		// ToolFacts it had collected before the loop started, from queries
+		// chosen by the run's invariants — so every investigation, however
+		// the Planner reached it, shipped evidence the old invariant had
+		// selected. Closing that channel is half of what makes a lead the
+		// Planner's own; see BUG-003.
+		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
 		inv, _ = investigations.Validate(inv, validationIn)
 
 		if cfg.RunDir != "" {

@@ -109,6 +109,25 @@ func RoundsLogPath(runDir string) string {
 	return filepath.Join(runDir, "04_planner", "rounds.jsonl")
 }
 
+// AuditLeadsPath is the run's audit leads, one JSON object per line.
+//
+// JSONL rather than a JSON array because a lead is appended the moment it
+// opens, from a loop that runs once per --samples pass. An array would make
+// every pass read, merge and rewrite the whole file, and a pass that died
+// mid-write would take the earlier passes' leads with it.
+func AuditLeadsPath(runDir string) string {
+	return filepath.Join(PlannerDir(runDir), "audit_leads.jsonl")
+}
+
+// CoverageLedgerPath is the run's single coverage ledger (§6.5).
+//
+// One file for the whole run, carrying a per-sample breakdown. Every
+// downstream consumer unions the samples, so a file per sample would make
+// each of them re-aggregate.
+func CoverageLedgerPath(runDir string) string {
+	return filepath.Join(PlannerDir(runDir), "coverage_ledger.json")
+}
+
 func SinkHitsPath(runDir string) string {
 	return filepath.Join(runDir, "04_planner", "sink_hits.json")
 }

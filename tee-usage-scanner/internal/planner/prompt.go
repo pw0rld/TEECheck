@@ -5,8 +5,6 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 	"sort"
 	"strings"
-
-	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
 // PromptProfile is the repository identity and caller intent the planner
@@ -20,13 +18,19 @@ type PromptProfile struct {
 	FileCount int
 }
 
-// PriorKnowledge is everything from the project-understanding and TWE
-// layers the Planner injects into its system prompt (§7.5): the full
-// compiled TWE catalog text, a compact rendering of the Architecture
-// Model, and the current Project Invariants. Each field is independently
-// optional — a zero-value PriorKnowledge renders no extra sections, so a
-// caller that has not wired this context yet (e.g. internal/pipeline's
-// legacy Rust-focused L3 run) keeps working unchanged.
+// PriorKnowledge is the TWE catalog the Planner is shown once it is
+// investigating a lead of its own.
+//
+// It used to also carry the run's Architecture Model and Project
+// Invariants. Both are gone, from both passes. BUG-003 traced what they
+// did: a keyword match became a freshness candidate, became an
+// architecture asset, became an invariant anchored at a line nobody had
+// read — and the Planner, handed that invariant at the top of its prompt,
+// spent its rounds verifying it instead of reading the project. The
+// artifacts still exist and the Expert, Challenger and Verifier still read
+// them; they no longer decide what the Planner looks at.
+//
+// The zero value renders no sections, which is what reconnaissance passes.
 type PriorKnowledge struct {
 	// TWEText is twecontext.Catalog.Compile().Text — the complete,
 	// agent-ready TWE prior-knowledge context. Injected verbatim (§11.1:
@@ -34,19 +38,13 @@ type PriorKnowledge struct {
 	// not import internal/twecontext itself — the caller compiles once
 	// and passes the resulting text, keeping the planner decoupled from
 	// playbook YAML loading.
+	//
+	// It is shown in the investigation phase only. In reconnaissance the
+	// catalog at the top of the prompt is precisely what makes a Planner
+	// go looking for the catalog's vulnerabilities rather than at this
+	// project's code — on run-b its first two actions were
+	// twe_playbook_detail calls, before it had opened a single file.
 	TWEText string
-
-	// Architecture is the full run's ArchitectureModel. BuildSystemPrompt
-	// renders a compact one-line-per-element/relation slice (id, kind,
-	// name/from/to — not full evidence) rather than the entire dossier,
-	// keeping prompt size bounded per §11.3.
-	Architecture *artifacts.ArchitectureModel
-
-	// Invariants is the current run's Project Invariants (status
-	// "proposed" — see §7.4). Rendered as statement + related TWEs +
-	// verification plan so the Planner can turn each into concrete
-	// investigation tasks (§7.5).
-	Invariants []artifacts.ProjectInvariant
 }
 
 // actionArgSchemas documents the exact args shape each action
@@ -69,50 +67,61 @@ var actionArgSchemas = map[string]string{
 	"tree_sitter_outline": `{"path": string (a source file: .c/.h/.rs/...)}`,
 	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
+	"open_audit_lead":     `{"security_question": string, "target_symbol_ids": [string (symbol_ids you have opened with get_function_card)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
 	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
 	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
 
-// BuildSystemPrompt returns the static system prompt the planner
-// sends with every LLM request. It explains the agent role, lists
-// available actions with typed arg schemas, optionally inlines the
-// curated obligations wiki and TWE/Architecture/Invariant prior
-// knowledge, and specifies the JSON response format.
+// BuildSystemPrompt returns the system prompt for one planner phase.
 //
-// obligationsBlock should be the string returned by LoadObligations.
-// Pass "" to skip the obligations section entirely. knowledge is §7.5's
-// prior-knowledge injection (TWE catalog, Architecture slice, Project
-// Invariants) — pass PriorKnowledge{} to skip all three sections.
-func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowledge PriorKnowledge) string {
+// The two phases get different prompts because they have different jobs,
+// and because what is in the prompt decides what the model does far more
+// reliably than what the prompt asks of it.
+//
+// Reconnaissance (Pass A, §6.4) is project-first: the program index and the
+// project map, nothing else. No TWE catalog, no obligations wiki, no
+// Architecture Model, no Project Invariants. The goal is to find the
+// semantic breaks and implied contracts this project has, including the
+// ones no catalog names.
+//
+// Investigation (Pass B) restores the TWE catalog and the obligations, so
+// the Planner can check whether a known threat has a role or a lifecycle
+// its own reading missed. §6.4 is explicit that a TWE may only raise a new
+// question — never produce a Case directly.
+//
+// obligationsBlock should be the string returned by LoadObligations, and is
+// rendered in the investigation phase only. Pass "" to skip it entirely.
+func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowledge PriorKnowledge, phase string) string {
 	var b strings.Builder
-	b.WriteString("You are TEECheck's L3 security audit planner (Investigator, §7.5). Your job is to drive TWE-guided investigations of a TEE codebase using its Architecture Model and Project Invariants, calling the structured fact layer for real evidence, and to record what you found as bounded, source-anchored investigations — not to render a final vulnerability verdict.\n\n")
+
+	if phase == PhaseInvestigation {
+		b.WriteString("You are TEECheck's L3 security audit planner (Investigator, §7.5). You have opened an audit lead of your own: a question about this project's code, grounded in facts you observed. Your job now is to expand it — read the bodies, follow the relations, and find out whether the contract you suspect is broken actually is — and to record what you found as bounded, source-anchored investigations. You do not render a final vulnerability verdict.\n\n")
+	} else {
+		b.WriteString("You are TEECheck's L3 security audit planner. Your job in this phase is to understand THIS project from its own code: what it is built out of, how its parts call each other, and which of its relations the project map cannot explain.\n\n")
+		b.WriteString("You are not looking for known vulnerability patterns and you have not been given any. The questions worth asking here are this project's own:\n")
+		b.WriteString("  - a producer and a consumer that disagree about the same field;\n")
+		b.WriteString("  - a check on one object and a use of a different one;\n")
+		b.WriteString("  - a validation far away from the effect it is supposed to protect;\n")
+		b.WriteString("  - a default, an error path or a recovery path that changes the meaning;\n")
+		b.WriteString("  - a cross-module call carrying an assumption neither side states;\n")
+		b.WriteString("  - two implementations of the same thing that differ in a way nothing explains;\n")
+		b.WriteString("  - functions that are each fine and whose combined lifecycle is not.\n\n")
+		b.WriteString("These are directions to think in, not rules to match. When you can state one as a question about specific definitions, and cite the observations that raised it, call open_audit_lead.\n\n")
+	}
 
 	b.WriteString("CRITICAL RULES:\n")
-	b.WriteString("  - A missing role in an investigation (missing_roles) is YOUR NEXT INVESTIGATIVE TASK. It is NOT a vulnerability conclusion, and it is NOT evidence of safety. Keep investigating until you either fill the role, exhaust your budget, or have concrete evidence it does not exist in this codebase.\n")
-	b.WriteString("  - A fact_layer_query that returns status \"unresolved\" or \"unsupported\", or a query with zero locations, does NOT mean \"no vulnerability\" or \"safe\". It only proves no match was found within the modeled scope (§6.5). Never conclude safety from an absence of a match.\n")
-	b.WriteString("  - You do not decide the final vulnerability verdict. Report what you found (filled/missing roles, required evidence, counterevidence, coverage gaps) — Expert/Challenger/Verifier judge it afterward.\n\n")
+	b.WriteString("  - An unanswered question — an open lead, a missing role — is YOUR NEXT INVESTIGATIVE TASK. It is NOT a vulnerability conclusion, and it is NOT evidence of safety. Keep investigating until you answer it, exhaust your budget, or have concrete evidence the thing does not exist in this codebase.\n")
+	b.WriteString("  - Zero results is not a negative result. A fact_layer_query that returns \"unresolved\" or \"unsupported\" or zero locations, a caller list that came back empty, a ripgrep with no matches: each proves only that nothing was found within that scope (§6.5). Never conclude safety from an absence of a match. Every browsing action tells you the scope of what it could see and what it could not cover — read it, and say which one you mean.\n")
+	b.WriteString("  - Anything you did not look at is a coverage gap, never a safe area.\n")
+	b.WriteString("  - You do not decide the final vulnerability verdict. Report what you found — Expert/Challenger/Verifier judge it afterward.\n\n")
 
-	if strings.TrimSpace(knowledge.TWEText) != "" {
-		b.WriteString("=== TWE PRIOR KNOWLEDGE (complete catalog; use it to decide what to investigate) ===\n")
+	if phase == PhaseInvestigation && strings.TrimSpace(knowledge.TWEText) != "" {
+		b.WriteString("=== TWE PRIOR KNOWLEDGE (a coverage check on the lead you opened, not a list to go looking for) ===\n")
 		b.WriteString(knowledge.TWEText)
 		b.WriteString("\n\n")
 	}
 
-	if knowledge.Architecture != nil {
-		if slice := renderArchitectureSlice(*knowledge.Architecture); slice != "" {
-			b.WriteString("=== ARCHITECTURE MODEL (project-specific; from the Architecture Agent) ===\n")
-			b.WriteString(slice)
-			b.WriteString("\n")
-		}
-	}
-
-	if len(knowledge.Invariants) > 0 {
-		b.WriteString("=== PROJECT INVARIANTS (status=proposed — obligations to verify, not findings) ===\n")
-		b.WriteString(renderInvariants(knowledge.Invariants))
-		b.WriteString("\n")
-	}
-
-	if strings.TrimSpace(obligationsBlock) != "" {
+	if phase == PhaseInvestigation && strings.TrimSpace(obligationsBlock) != "" {
 		b.WriteString("SECURITY OBLIGATIONS TO KEEP IN MIND (curated wiki, treat these as the review criteria a downstream human auditor will apply):\n")
 		b.WriteString(obligationsBlock)
 		b.WriteString("\n\n")
@@ -133,17 +142,25 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	b.WriteString("\n")
 
 	b.WriteString("APPROACH:\n")
-	b.WriteString("  1. Start from the Project Invariants and TWE prior knowledge above: pick a security obligation this component must uphold.\n")
-	b.WriteString("  2. When a TWE from the prior knowledge looks relevant to this code, call twe_playbook_detail with its id to get the full investigation method before you start searching.\n")
-	b.WriteString("  3. Use ripgrep (with globs matching the project's source languages — see the `languages:` line in the round prompt) to find concrete sites related to that obligation.\n")
-	b.WriteString("  4. Use tree_sitter_outline on a relevant source file to get its structure before reading specific ranges with read_file.\n")
-	b.WriteString("  5. Use reverse_trace to walk backward from a trust-decision point to its callers.\n")
-	b.WriteString("  6. When you have evidence, call done with candidates and, where a TWE/invariant applies, an investigations entry.\n\n")
+	if phase == PhaseInvestigation {
+		b.WriteString("  1. Expand the lead you opened: read the bodies of its target definitions, and follow the relations the question depends on.\n")
+		b.WriteString("  2. Look for the evidence that would settle it EITHER way. A lead you close because the contract holds is as complete an answer as one you confirm.\n")
+		b.WriteString("  3. Use fact_layer_query when a structural question needs a real answer rather than a reading.\n")
+		b.WriteString("  4. Check the TWE catalog above against what you found: does a known threat need a role or a lifecycle stage your reading did not cover? If so, that is a new question to investigate — not a finding.\n")
+		b.WriteString("  5. When you have evidence, call done with candidates and, where a TWE applies, an investigations entry.\n\n")
+	} else {
+		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, and what the index can and cannot answer.\n")
+		b.WriteString("  2. list_modules — the parts, with their sizes. Sizes are how you tell the project's own code from vendored dependencies.\n")
+		b.WriteString("  3. list_functions on several modules, and get_function_card on the definitions that look load-bearing. Cover more than one part of the project: what you never open, you cannot have an opinion about.\n")
+		b.WriteString("  4. get_callers to ask how something is reached. find_symbols resolves a name to candidate ids when more than one definition shares it — pick by id, never by name.\n")
+		b.WriteString("  5. read_file and ripgrep when the index cannot answer, or to see the code behind a card.\n")
+		b.WriteString("  6. open_audit_lead when you can state a question about specific definitions and cite the observations that raised it.\n\n")
+	}
 
 	b.WriteString("HINTS:\n")
+	b.WriteString("  - Every observation is printed with a ref (ref=obs:...). That ref is how you cite it in reason_fact_refs. A reason with no ref is refused.\n")
 	b.WriteString("  - Match ripgrep globs to the target's source languages; skip lockfiles, build manifests, and docs.\n")
-	b.WriteString("  - Prioritize directories that cross the trust boundary (TA entry points, secure-world core, attestation, key handling).\n")
-	b.WriteString("  - You MUST call done by round 7 at the latest. Budget is 8 rounds total.\n\n")
+	b.WriteString("  - The round prompt tells you how many rounds remain. Call done before they run out.\n\n")
 
 	b.WriteString("RESPONSE FORMAT (strict JSON, no extra text, no markdown code fences):\n")
 	b.WriteString(`{
@@ -157,87 +174,6 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	return b.String()
 }
 
-// maxArchitectureElementsRendered bounds how many Architecture Model
-// elements/relations BuildSystemPrompt renders — a compact per-item summary
-// line, not the full evidence-bearing model (§11.3). A project with a large
-// model still gets a usable prompt instead of an unbounded one.
-const maxArchitectureElementsRendered = 60
-
-// renderArchitectureSlice renders a compact, one-line-per-item summary of
-// model: id, kind, name (for elements) or from/to (for relations). It never
-// includes Evidence — that stays in the persisted ArchitectureModel
-// artifact, referenced by ID, per §11.3.
-func renderArchitectureSlice(model artifacts.ArchitectureModel) string {
-	var lines []string
-	addElements := func(bucket string, elems []artifacts.ArchitectureElement) {
-		for _, el := range elems {
-			lines = append(lines, fmt.Sprintf("- [%s] %s (%s) %q state=%s", bucket, el.ID, el.Kind, el.Name, el.State))
-		}
-	}
-	addRelations := func(bucket string, rels []artifacts.ArchitectureRelation) {
-		for _, rel := range rels {
-			lines = append(lines, fmt.Sprintf("- [%s] %s (%s) %s -> %s state=%s", bucket, rel.ID, rel.Kind, rel.From, rel.To, rel.State))
-		}
-	}
-	addElements("party", model.Parties)
-	addElements("component", model.Components)
-	addElements("role", model.Roles)
-	addElements("asset", model.Assets)
-	addElements("trust_zone", model.TrustZones)
-	addElements("entrypoint", model.Entrypoints)
-	addRelations("boundary", model.Boundaries)
-	addRelations("data_flow", model.DataFlows)
-	addRelations("state_lifecycle", model.StateLifecycles)
-	addElements("trust_assumption", model.TrustAssumptions)
-	addElements("deployment_assumption", model.DeploymentAssumptions)
-	addElements("unknown", model.Unknowns)
-
-	if len(lines) == 0 {
-		return ""
-	}
-	total := len(lines)
-	truncated := total > maxArchitectureElementsRendered
-	if truncated {
-		lines = lines[:maxArchitectureElementsRendered]
-	}
-	out := strings.Join(lines, "\n") + "\n"
-	if truncated {
-		out += fmt.Sprintf("... (truncated to %d of %d elements; the full model is in the run's architecture.v1.json artifact)\n", maxArchitectureElementsRendered, total)
-	}
-	return out
-}
-
-// maxInvariantsRendered bounds how many Project Invariants
-// BuildSystemPrompt renders, for the same reason as
-// maxArchitectureElementsRendered.
-const maxInvariantsRendered = 30
-
-func renderInvariants(invs []artifacts.ProjectInvariant) string {
-	var b strings.Builder
-	n := len(invs)
-	truncated := n > maxInvariantsRendered
-	if truncated {
-		n = maxInvariantsRendered
-	}
-	for _, inv := range invs[:n] {
-		fmt.Fprintf(&b, "- %s: %s\n", inv.InvariantID, inv.Statement)
-		if len(inv.RelatedTWEs) > 0 {
-			fmt.Fprintf(&b, "  related_twes: %s\n", strings.Join(inv.RelatedTWEs, ", "))
-		}
-		if len(inv.VerificationPlan) > 0 {
-			fmt.Fprintf(&b, "  verification_plan: %s\n", strings.Join(inv.VerificationPlan, "; "))
-		}
-	}
-	if truncated {
-		fmt.Fprintf(&b, "... (truncated to %d of %d invariants; the full set is in the run's project_invariants.v1.json artifact)\n", maxInvariantsRendered, len(invs))
-	}
-	return b.String()
-}
-
-// BuildRoundPrompt assembles the user-message prompt for a single
-// planner round. It includes the project profile, accumulated
-// candidates, the trailing window of recent observations, and the
-// remaining budget.
 // scrollbackBytes bounds an observation from a round that is no longer the
 // most recent one.
 //
