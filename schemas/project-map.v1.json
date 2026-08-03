@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/project-map.v1.json",
+  "title": "TEECheck ProjectMap v1",
+  "description": "The neutral navigation view the Planner browses. It carries structure and size, never a judgement about where to look: selecting audit targets is a Planner runtime behaviour, not a 01-stage output. The map never embeds the function capsules themselves — the full set is megabytes and pages are fetched one at a time.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "scope", "capabilities", "repository"],
+  "properties": {
+    "schema_version": { "const": "teecheck.project_map.v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "scope": { "$ref": "#/$defs/scannedScope" },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "repository": { "$ref": "#/$defs/repositoryCard" },
+    "modules": { "type": "array", "items": { "$ref": "#/$defs/moduleCard" } },
+    "function_pages": { "type": "array", "items": { "$ref": "#/$defs/functionCardPageRef" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "scannedScope": {
+      "type": "object",
+      "properties": {
+        "repo_url": { "type": "string" },
+        "commit": { "type": "string" },
+        "root": { "type": "string" },
+        "file_count": { "type": "integer", "minimum": 0 },
+        "hash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "capabilityState": { "enum": ["available", "partial", "unavailable"] },
+    "capabilities": {
+      "type": "object",
+      "required": ["symbols", "direct_calls", "field_accesses", "build_reachability"],
+      "properties": {
+        "symbols": { "$ref": "#/$defs/capabilityState" },
+        "direct_calls": { "$ref": "#/$defs/capabilityState" },
+        "field_accesses": { "$ref": "#/$defs/capabilityState" },
+        "build_reachability": { "$ref": "#/$defs/capabilityState" }
+      },
+      "additionalProperties": false
+    },
+    "repositoryCard": {
+      "type": "object",
+      "properties": {
+        "documented_purpose": {
+          "type": "string",
+          "description": "Quoted from the repository's own README, not summarised. A summary is an inference and would need an evidence state; a quote is a fact about the file."
+        },
+        "languages": { "type": "array", "items": { "type": "string" } },
+        "build_targets": { "type": "array", "items": { "type": "string" } },
+        "file_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "moduleCard": {
+      "type": "object",
+      "description": "One module's size and its dependency edges. The counts are what let a reader tell first-party code from vendored dependencies — the deleted keyword fingerprint never reported them, so every consumer treated lib/libmbedtls as project code. Edges are derived from resolved call edges by symbol id, never by matching names.",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "file_count": { "type": "integer", "minimum": 0 },
+        "function_count": { "type": "integer", "minimum": 0 },
+        "exports": { "type": "array", "items": { "type": "string" } },
+        "calls_modules": { "type": "array", "items": { "type": "string" } },
+        "called_by_modules": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "functionCardPageRef": {
+      "type": "object",
+      "required": ["module", "page", "count", "path"],
+      "properties": {
+        "module": { "type": "string", "minLength": 1 },
+        "page": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 0 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The page file, relative to the run directory. Required: a page reference the Planner cannot open is a page that does not exist."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

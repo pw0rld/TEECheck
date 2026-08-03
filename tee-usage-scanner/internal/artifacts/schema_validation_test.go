@@ -268,3 +268,150 @@ func TestSchemaFindingV3(t *testing.T) {
 		t.Fatal("expected human_verdict without verdict to be rejected")
 	}
 }
+
+// The Go struct cannot stop a later stage from writing an extra field into
+// repo_facts.json by hand, or a different language's producer from adding
+// one. additionalProperties:false on the capsule is what makes "01 states
+// behaviour, it does not judge" a contract rather than a convention.
+func TestSchemaRepoFactsV1_RejectsAJudgementFieldOnACapsule(t *testing.T) {
+	valid := []byte(`{
+	  "schema_version": "teecheck.repo_facts.v1",
+	  "run_id": "run-1",
+	  "scope": {"repo_url": "r", "commit": "c"},
+	  "capabilities": {"symbols":"available","direct_calls":"partial","field_accesses":"partial","build_reachability":"unavailable"},
+	  "total_call_sites": 10,
+	  "resolved_call_sites": 8,
+	  "capsules": [{"symbol_id":"cpp:a.c:1:f()","name":"f","module":"core","file":"a.c","line":1}]
+	}`)
+	if err := schema.Validate(schema.RepoFactsV1, valid); err != nil {
+		t.Fatalf("a neutral capsule must validate: %v", err)
+	}
+
+	withVerdict := []byte(`{
+	  "schema_version": "teecheck.repo_facts.v1",
+	  "run_id": "run-1",
+	  "scope": {"repo_url": "r", "commit": "c"},
+	  "capabilities": {"symbols":"available","direct_calls":"partial","field_accesses":"partial","build_reachability":"unavailable"},
+	  "total_call_sites": 10,
+	  "resolved_call_sites": 8,
+	  "capsules": [{"symbol_id":"cpp:a.c:1:f()","name":"f","module":"core","file":"a.c","line":1,"risk":"high"}]
+	}`)
+	if err := schema.Validate(schema.RepoFactsV1, withVerdict); err == nil {
+		t.Error("a capsule carrying a risk label must be rejected — that is BUG-003's amplification chain re-entering under a new name")
+	}
+}
+
+// "complete" was the original single verdict. The enum is what stops it
+// coming back: a consumer that reads one word cannot tell a solid symbol
+// table with no call graph from a fully extracted database.
+func TestSchemaRepoFactsV1_RejectsAGlobalCompleteVerdict(t *testing.T) {
+	body := []byte(`{
+	  "schema_version": "teecheck.repo_facts.v1",
+	  "run_id": "run-1",
+	  "scope": {},
+	  "capabilities": {"symbols":"complete","direct_calls":"complete","field_accesses":"complete","build_reachability":"complete"},
+	  "total_call_sites": 0,
+	  "resolved_call_sites": 0
+	}`)
+	if err := schema.Validate(schema.RepoFactsV1, body); err == nil {
+		t.Error(`"complete" must not be a capability state`)
+	}
+}
+
+// A page the Planner cannot open is a page that does not exist.
+func TestSchemaProjectMapV1_RequiresAPathOnEveryPage(t *testing.T) {
+	body := []byte(`{
+	  "schema_version": "teecheck.project_map.v1",
+	  "run_id": "run-1",
+	  "scope": {},
+	  "capabilities": {"symbols":"available","direct_calls":"available","field_accesses":"available","build_reachability":"unavailable"},
+	  "repository": {"documented_purpose": "OP-TEE Trusted OS"},
+	  "function_pages": [{"module":"core/crypto","page":0,"count":50}]
+	}`)
+	if err := schema.Validate(schema.ProjectMapV1, body); err == nil {
+		t.Error("a page reference without its file path must be rejected")
+	}
+}
+
+// The Go struct and the JSON schema are two separate definitions of one
+// contract. additionalProperties:false makes them fail loudly when they
+// drift: a field added to the struct and not to the schema stops validating,
+// which is the point — silent drift is how a producer and a consumer end up
+// describing different artifacts.
+func TestRepoFactsV1_GoStructValidatesAgainstItsSchema(t *testing.T) {
+	facts := RepoFacts{
+		SchemaVersion: SchemaVersionRepoFactsV1,
+		RunID:         "run-1",
+		Scope:         ScannedScope{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf", FileCount: 3291, Hash: "deadbeef"},
+		Capabilities: IndexCapabilities{
+			Symbols: CapabilityAvailable, DirectCalls: CapabilityPartial,
+			FieldAccesses: CapabilityPartial, BuildReachability: CapabilityUnavailable,
+		},
+		IndexNote:    "build-mode none",
+		Languages:    []string{"c"},
+		BuildTargets: []string{"make"},
+		Symbols: []Symbol{{
+			SymbolID: MakeSymbolID("cpp", "core/crypto/signed_hdr.c", 262, "shdr_load_pub_key", "()"),
+			Name:     "shdr_load_pub_key", File: "core/crypto/signed_hdr.c", StartLine: 262,
+			Signature: "()", Module: "core/crypto",
+		}},
+		Capsules: []FunctionCapsule{{
+			SymbolID: "cpp:core/crypto/signed_hdr.c:262:shdr_load_pub_key()",
+			Name:     "shdr_load_pub_key", Module: "core/crypto",
+			File: "core/crypto/signed_hdr.c", Line: 262,
+			CalledBy:          []SymbolID{"cpp:core/kernel/ree_fs_ta.c:298:ree_fs_ta_open()"},
+			FieldAccesses:     []string{"shdr_subkey.uuid"},
+			DirectFieldWrites: []string{"shdr_pub_key.max_depth"},
+		}},
+		CallEdges: []CallEdge{{
+			CallerID: "cpp:core/kernel/ree_fs_ta.c:298:ree_fs_ta_open()",
+			CalleeID: "cpp:core/crypto/signed_hdr.c:262:shdr_load_pub_key()",
+			File:     "core/kernel/ree_fs_ta.c", Line: 298, Resolution: ResolutionDirect,
+		}},
+		TotalCallSites:    42322,
+		ResolvedCallSites: 42000,
+		UnresolvedCallSites: []UnresolvedCall{{
+			EnclosingSymbolID: "cpp:core/kernel/ree_fs_ta.c:298:ree_fs_ta_open()",
+			File:              "core/kernel/ree_fs_ta.c", Line: 314,
+			Expression: "ops->load(...)", ResolutionKind: ResolutionIndirect,
+		}},
+	}
+	data, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(schema.RepoFactsV1, data); err != nil {
+		t.Fatalf("the Go struct must validate against repo-facts.v1: %v\n%s", err, data)
+	}
+}
+
+func TestProjectMapV1_GoStructValidatesAgainstItsSchema(t *testing.T) {
+	m := ProjectMap{
+		SchemaVersion: SchemaVersionProjectMapV1,
+		RunID:         "run-1",
+		Scope:         ScannedScope{RepoURL: "r", Commit: "c"},
+		Capabilities: IndexCapabilities{
+			Symbols: CapabilityAvailable, DirectCalls: CapabilityAvailable,
+			FieldAccesses: CapabilityAvailable, BuildReachability: CapabilityUnavailable,
+		},
+		Repository: RepositoryCard{
+			DocumentedPurpose: "OP-TEE Trusted OS", Languages: []string{"c"},
+			BuildTargets: []string{"make"}, FileCount: 3291,
+		},
+		Modules: []ModuleCard{{
+			Path: "lib/libmbedtls", FileCount: 898, FunctionCount: 4000,
+			CalledByModules: []string{"core/crypto"},
+		}},
+		FunctionPages: []FunctionCardPageRef{{
+			Module: "core/crypto", Page: 0, Count: 50,
+			Path: "01_context/function_cards/core-crypto/0.json",
+		}},
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(schema.ProjectMapV1, data); err != nil {
+		t.Fatalf("the Go struct must validate against project-map.v1: %v\n%s", err, data)
+	}
+}
