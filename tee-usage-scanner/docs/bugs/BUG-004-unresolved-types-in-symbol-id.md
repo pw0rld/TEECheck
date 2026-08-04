@@ -1,6 +1,6 @@
 # BUG-004：未解析类型进入 SymbolID，Planner 无法可靠引用一个函数
 
-> 状态：**已确认 / 部分缓解，根因待决策**
+> 状态：**根因已确认（实测）/ 部分缓解，处置待决策**
 > 记录日期：2026-08-04
 > 影响：Program Index 的符号身份、Planner 的浏览动作、reconnaissance gate 能否完成
 > 代表运行：`runs/recon-001`（OP-TEE `a9386bf987d95374a6f7f4c7bcf850115e0e1a4e`，首次真实全仓运行）
@@ -8,12 +8,16 @@
 >
 > 已修：拒绝信息现在会指出"你发来的是某些已有 id 的前缀"并列出候选（commit `0972f72`）。
 > 未修：`error` / `<error-type>` 仍然出现在 SymbolID 里，见 §7。
+>
+> **2026-08-04 根因修订**：初稿写的是"build-mode=none 没有 include 路径"。实测推翻 ——
+> 12163 条 `#include` 全部解析成功，但 `<stdbool.h>` 解析到了 C++ TR1 转发头、
+> `<stddef.h>` 解析到了不含 `size_t` 的 Linux UAPI 头。见 §4.3。
 
 ---
 
 ## 1. 一句话症状
 
-**CodeQL 在 `--build-mode=none` 下解析不出 14% 的参数类型，把它们记为 `ErroneousType`；这个类型的字符串形式（`error` / `<error-type>`）经由函数签名进入 `SymbolID`，而 `SymbolID` 是 Planner 引用一个函数的唯一方式。于是 28% 的符号 id 里带着看起来像噪音的 token，模型倾向于把它裁掉，裁掉后的 id 不存在，动作被拒绝。**
+**CodeQL 在 `--build-mode=none` 下把 `<stdbool.h>` / `<stddef.h>` 解析到宿主机上不适用的头文件，导致 14% 的参数类型解析失败、被记为 `ErroneousType`；这个类型的字符串形式（`error` / `<error-type>`）经由函数签名进入 `SymbolID`，而 `SymbolID` 是 Planner 引用一个函数的唯一方式。于是 28% 的符号 id 里带着看起来像噪音的 token，模型倾向于把它裁掉，裁掉后的 id 不存在，动作被拒绝。**
 
 在 `runs/recon-001` 中，这条链导致 `get_callers` 一次都没有成功执行 —— 而它是 reconnaissance gate 唯一的关系查询要求。
 
@@ -27,10 +31,11 @@
   TEE_Result tee_fs_dirfile_open(bool create, uint8_t *hash, ...)
         │
         │  codeql database create --build-mode=none
-        │  （无 -I，无 -D：见 §4）
+        │  （include 解析到了宿主机的错误头文件：见 §4）
         ▼
 CodeQL 数据库
-  参数 create 的类型解析失败 → ErroneousType
+  <stdbool.h> 解析到 /usr/include/c++/10/tr1/stdbool.h（C++ 转发头，
+  对 C 文件不定义 bool）→ 参数 create 的类型成为 ErroneousType
   ErroneousType.toString() == "error"
         │
         │  codeql/index/cpp/Symbols.ql
@@ -99,6 +104,7 @@ select t.toString(), p.getName(), d.getFunction().getName(),
 | `error oidlen` | `size_t oidlen` |
 
 **全部是标准库 typedef**（`stdbool.h` 的 `bool`、`stddef.h` 的 `size_t`），不是项目自定义的复杂类型。
+这是线索：失败的不是难解析的类型，而是本该最容易解析的那些 —— 见 §4.3。
 
 ### 3.3 Planner 读到的内容（输出）
 
@@ -182,14 +188,12 @@ find_symbols by name, or ripgrep.
 
 ---
 
-## 4. 根因
+## 4. 根因：include 解析到了错误的头文件
 
-`internal/codedb/manager.go` 用 `--build-mode=none` 建库（§23.3 的既定决策：C 项目没有可靠的 build system 接入路径，spike 只证明了这一种模式可跑通）。这意味着抽取时：
+初稿把根因写成"`--build-mode=none` 没有 include 搜索路径，头文件找不到"。**这是错的。**
+实测表明头文件全部找得到 —— 找到的是**不适用的那一份**。
 
-- 没有 `-I` include 搜索路径；
-- 没有 `-D` 宏定义。
-
-`stdbool.h`、`stddef.h` 这些头文件找不到，`bool` 和 `size_t` 就没有声明。CodeQL 不会因此丢弃函数 —— 它保留函数，把无法解析的参数类型记为 `ErroneousType`。
+### 4.1 现象规模
 
 `ErroneousType` 有两种字符串形式，取决于它出现在什么位置：
 
@@ -199,7 +203,7 @@ find_symbols by name, or ripgrep.
 | `<error-type>` | 作为指针/数组的元素类型，如 `const <error-type> *` | 997 个 id |
 | 合计（去重） | | **3242 个 id，占 11603 的 27.9%** |
 
-数据库级统计（探针查询）：
+数据库级统计：
 
 ```text
 已定义函数的参数总数            25265
@@ -207,8 +211,153 @@ find_symbols by name, or ripgrep.
 类型为 UnknownType 的               0
 ```
 
----
+### 4.2 数据库里有 38708 个编译错误
 
+```ql
+from string msg, int n
+where n = strictcount(CompilerError e | e.getMessage() = msg | e) and n > 20
+select msg, n order by n desc
+```
+
+```text
+compiler errors                 38708
+files with >=1 compiler error    1878   (2707 个文件中的 69%)
+
+identifier 'size_t' is undefined                 7005
+identifier 'NULL' is undefined                   3325
+identifier 'true' is undefined                   2828
+identifier 'uint32_t' is undefined               2544
+There was an error during this compilation       1692
+expected a ';'                                   1689
+identifier 'uint8_t' is undefined                1510
+identifier 'bool' is undefined                   1184
+identifier 'false' is undefined                  1011
+variable 'bool' is not a type name                947
+```
+
+`parameters typed 'bool'` 和 `parameters typed 'size_t'` 在整个数据库里都是 **0**。
+
+### 4.3 但 include 全部解析成功了
+
+```text
+#include directives seen           12163
+#includes that resolved to a file  12163      ← 100%
+files named stdbool.h in db            1
+files named stddef.h  in db            1
+```
+
+一个都没缺。问题在于**解析到了哪里**：
+
+```ql
+from string included, string target, int n
+where n = strictcount(Include i |
+      i.getIncludeText().regexpMatch("[<\"](stdbool|stddef|stdint|string)\\.h[>\"]") and
+      included = i.getIncludeText() and target = i.getIncludedFile().getAbsolutePath() | i)
+select included, target, n order by n desc
+```
+
+```text
+| <stdint.h>  | <src>/lib/libutils/isoc/include/stdint.h        | 557 |   ← 正确
+| <stdbool.h> | /usr/include/c++/10/tr1/stdbool.h               | 310 |   ← 错误
+| <string.h>  | <src>/lib/libutils/isoc/include/string.h        | 224 |   ← 正确
+| <string.h>  | /usr/include/linux/string.h                     | 165 |   ← 错误
+| <stdint.h>  | /usr/include/c++/10/tr1/stdint.h                | 125 |   ← 错误
+| <stddef.h>  | /usr/include/linux/stddef.h                     | 100 |   ← 错误
+| <stdint.h>  | /usr/lib/gcc/.../include/stdint.h               |   4 |
+```
+
+两个致命的：
+
+- **`/usr/include/c++/10/tr1/stdbool.h`** 是 C++ TR1 的转发头，内容只有
+  `#include <tr1/cstdbool>`。对一个 C 文件，它什么都不定义 —— 所以
+  `identifier 'bool' is undefined` 出现 1184 次。
+- **`/usr/include/linux/stddef.h`** 是 Linux UAPI 头，`grep -c size_t` 返回
+  **0**。所以 `identifier 'size_t' is undefined` 出现 7005 次。
+
+CodeQL 在 `build-mode=none` 下搜索的是**宿主机**的 include 目录。OP-TEE 是
+freestanding 的 ARM 安全内核，它自己的构建恰恰用 `-nostdinc` 把这些目录排除掉：
+
+```make
+# mk/clang.mk:28
+nostdinc$(sm) := -nostdinc -isystem $(shell $(CC$(sm)) -print-file-name=include)
+# mk/compile.mk:118, 202, 273 —— 每条编译规则都带上它，外加 -ffreestanding
+```
+
+**所以这不是"没有 include 路径"，是"用了一套被目标项目明确排除的 include 路径"。**
+后者更糟：它不会报"找不到文件"，而是安静地产出错误的类型。
+
+### 4.4 三种替代方案，实测
+
+均对同一棵 pinned checkout（`a9386bf`，3292 文件）执行。
+
+**方案 A：`none` + `frontend_options` 追加 `-I`**
+
+```bash
+codeql database create <out> --language=cpp --build-mode=none --source-root=<src> \
+  -O cpp.frontend_options="-I/usr/lib/gcc/x86_64-redhat-linux/10/include" \
+  -O cpp.frontend_options="-I<src>/core/include" \
+  -O cpp.frontend_options="-I<src>/lib/libutils/ext/include" \
+  -O cpp.frontend_options="-I<src>/lib/libutils/isoc/include" \
+  -O cpp.frontend_options="-I<src>/lib/libutee/include" \
+  -O cpp.frontend_options="-I<src>/core/arch/arm/include"
+```
+
+结果 —— **几乎无效**：
+
+```text
+ErroneousType                          3520 → 3492   (-28，0.8%)
+<stdbool.h> 解析到 gcc 正确头的次数        0 → 3      (仍有 310 走 tr1)
+建库耗时                                        1m43s
+```
+
+选项确实生效了（gcc 的 `stdbool.h` 第一次出现在数据库里），但 CodeQL 自己的搜索
+顺序压过它。`core/tee/fs_dirfile.c` 的四个 `error` 参数一个都没变。
+
+**方案 B：`none` + `-nostdinc -ffreestanding` + 显式路径**
+
+照抄 OP-TEE 自己的编译标志。结果 —— **抽取结果为 0**：
+
+```text
+CodeQL detected code written in C/C++ but could not process any of it
+using the 'none' build mode.
+```
+
+原因：OP-TEE 需要 `core/include/generated/conf.h`，那是 `make` 生成的，源码树里
+不存在。742 个不同的 `CFG_*` 宏都依赖它。`-nostdinc` 一旦生效，几乎每个
+translation unit 都在第一个 include 处就失败。
+
+**方案 C：`manual --command="make PLATFORM=..."`**
+
+未执行，本机缺前提：
+
+```text
+aarch64-none-elf-gcc      -
+aarch64-linux-gnu-gcc     -
+arm-none-eabi-gcc         -
+arm-linux-gnueabihf-gcc   -
+```
+
+### 4.5 traced build 不是纯粹的升级
+
+即便装上交叉编译器，方案 C 也有实质代价：
+
+| | `build-mode=none`（现状） | `manual` traced build |
+|---|---|---|
+| 覆盖 | 全仓 3292 文件、11603 定义 | 仅该配置实际编译到的文件 |
+| 类型 | 14% 参数解析失败 | 全部正确 |
+| 平台 | 40 个 `core/arch/arm/plat-*` 全在 | 40 选 1 |
+| 条件编译 | 742 个 `CFG_*` 全走默认分支 | 仅该配置为真的分支 |
+| §7 负面证据阶梯 | 最高 `not_found_in_indexed_repository` | 可达 `proved_unreachable_under_build_target` |
+
+`repo_facts.capabilities.build_reachability` 报 `unavailable` 正是因为这一点。
+**traced build 是取得那一级证据的唯一途径**，但索引会从"全都有、类型不准"
+变成"一个配置、类型准确"。
+
+对当前阶段（Planner 做 reconnaissance，需要"这个项目由哪些部分组成"）覆盖面更
+重要；对将来要证明"某路径在某构建目标下不可达"时，traced build 是必需的。
+两者不是二选一 —— 可以按需要各建一个库。
+
+---
 ## 5. 为什么模型会去裁它
 
 这不能证明，但呈现方式明显在邀请这个动作，三个因素叠加：
@@ -284,30 +433,55 @@ Ask again with one of these, copied exactly.
 
 ### 7.2 待决策
 
-三个方向，互不排斥：
+§4.4 的实测把选项收窄了：**方案 A（追加 `-I`）无效，方案 B（`-nostdinc`）会让抽取归零。**
+剩下三条，互不排斥。
 
-**A. 签名里把 `ErroneousType` 渲染成 `?`**
+**C1. 把抽取质量写进 `repo_facts.index_note`（建议先做）**
 
-改 `codeql/index/cpp/Symbols.ql`，不再直接用 `getParameterString()`，而是自己拼参数串，遇到 `ErroneousType` 输出 `?`。
+索引自己知道它有 1878 个文件解析出过错、38708 条编译错误，但 `index_note` 现在是
+空字符串。消费者因此无从判断"这个索引的类型信息有多可信" —— 这次是人工跑探针
+查询才发现的。
 
-- 好处：`?` 一看就是"没解析出来"，而 `error` 会被误读成一个真的叫 error 的类型；语义诚实。
-- 代价：**所有 SymbolID 的字面值都会变**。已有 run 的索引、artifact 和引用全部失效，必须重建。
+`internal/repoindex` 应当在建库后读取 `CompilerError` 计数，写成类似：
 
-**B. 给 CodeQL 补 include 路径**
+```json
+"index_note": "38708 extraction errors across 1878 of 2707 files; 13.9% of
+parameter types on defined functions did not resolve. Signatures in symbol_id
+may contain 'error' or '<error-type>' where a type could not be determined.
+Type information is unreliable; structure (definitions, call edges) is not
+affected."
+```
 
-治本 —— 能拿到真实类型，`error` 从源头消失，签名也会短一些。
+结构信息（定义、调用边、字段访问）**不受影响** —— 那些不依赖类型解析。受影响的
+只有签名里的类型名。这个区分必须写清楚，否则读者会把整个索引都打折。
 
-- 代价：要为每个项目配 `-I`，与 `--build-mode=none` 的初衷（不依赖项目构建系统）冲突。可能的折中：只补 libc 的标准头，覆盖 `bool` / `size_t` 这类占多数的情况。
-- 需要先量化：单靠标准头能消掉多少比例的 3520 个 ErroneousType。
+**C2. 签名里把 `ErroneousType` 渲染成 `?`（推荐，证据已足）**
 
-**C. 改打印格式，不改 id 本身**
+改 `codeql/index/cpp/Symbols.ql`，不再直接用 `getParameterString()`，自己拼参数串，
+遇到 `ErroneousType` 输出 `?`。
 
-停止 `name  file:line  id=lang:file:line:name(sig)` 这种前半段重复的写法；id 单独一行、明确标注整串都是身份。
+§4.3 让这条的理由从"好看一点"变成"不撒谎"：`error` 会被读成"有个类型叫 error"，
+而事实是"这个 translation unit 的 include 解析错了，类型未知"。`?` 说的是后者。
 
-- 好处：改动最小，不影响 id 字面值，不需要重建索引。
-- 代价：`error` 仍在 id 里；治标。
+- 代价：**所有 SymbolID 的字面值都会变**，已有 run 的索引与引用全部失效，必须重建。
+- 因此适合与任何一次需要重建索引的改动一起做。
 
-**建议顺序：先 C（低风险、直接针对 §5.1/§5.2），再量化 B 的收益，A 留到需要重建索引的时机一并做。**
+**C3. 为需要 build reachability 的场景另建一个 traced 库**
+
+不替换现有的 none 库，而是**并存**（§4.5）：none 库负责覆盖面，traced 库负责
+"某路径在某构建目标下是否可达"。前提是装交叉编译器并选定 `PLATFORM=`。
+
+在 §7 负面证据阶梯上，`proved_unreachable_under_build_target` 只有 traced 库能给。
+现在 `capabilities.build_reachability` 报 `unavailable` 就是这个原因，而那是诚实的。
+
+**已否决**
+
+| | 为什么 |
+|---|---|
+| 追加 `-I` 修复解析 | 实测 3520 → 3492，CodeQL 自身搜索顺序压过它（§4.4 A） |
+| `-nostdinc` + 显式路径 | 抽取归零，缺 `generated/conf.h`（§4.4 B） |
+| 用 traced build 取代 none | 40 个平台只覆盖 1 个，742 个 `CFG_*` 只有一种取值（§4.5） |
+| 从 id 里删掉签名 | 301 组定义会撞车（§6） |
 
 ---
 
@@ -356,4 +530,46 @@ where
   n = count(Parameter p |
         p.getType() instanceof ErroneousType and exists(definitionOf(p.getFunction())) | p)
 select bucket, n
+```
+
+复现 §4.2 的编译错误统计与 §4.3 的 include 去向（同一 qlpack）：
+
+```ql
+// 编译错误按消息聚合
+import cpp
+from string msg, int n
+where n = strictcount(CompilerError e | e.getMessage() = msg | e) and n > 20
+select msg, n order by n desc
+```
+
+```ql
+// 标准头解析到了哪里
+import cpp
+from string included, string target, int n
+where n = strictcount(Include i |
+      i.getIncludeText().regexpMatch("[<\"](stdbool|stddef|stdint|string)\\.h[>\"]") and
+      included = i.getIncludeText() and
+      target = i.getIncludedFile().getAbsolutePath() | i)
+select included, target, n order by n desc
+```
+
+复现 §4.4 方案 A（追加 `-I`，实测无效）与方案 B（`-nostdinc`，实测抽取归零）：
+
+```bash
+SRC=runs/recon-001/02_tool_facts/trustir/src/df16a35bfd62a0e59aec9b4e
+GCCINC=$(ls -d /usr/lib/gcc/*/*/include | head -1)
+
+# A：追加 include 路径 —— ErroneousType 3520 → 3492
+codeql database create /tmp/db-A --language=cpp --build-mode=none --source-root=$SRC \
+  -O cpp.frontend_options="-I$GCCINC" \
+  -O cpp.frontend_options="-I$SRC/core/include" \
+  -O cpp.frontend_options="-I$SRC/lib/libutils/ext/include" \
+  -O cpp.frontend_options="-I$SRC/lib/libutils/isoc/include"
+
+# B：照抄 OP-TEE 的 -nostdinc —— "could not process any of it"
+codeql database create /tmp/db-B --language=cpp --build-mode=none --source-root=$SRC \
+  -O cpp.frontend_options="-nostdinc" \
+  -O cpp.frontend_options="-ffreestanding" \
+  -O cpp.frontend_options="-isystem$GCCINC" \
+  -O cpp.frontend_options="-I$SRC/core/include"
 ```
