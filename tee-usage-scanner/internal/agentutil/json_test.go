@@ -309,3 +309,104 @@ func FuzzExtractJSONObject(f *testing.F) {
 		}
 	})
 }
+
+// The reply that cost a planner round on 2026-08-04. glm-5.2 returned the
+// correct object nested inside a single "answer" string; json.Unmarshal
+// ignores unknown fields, so it parsed without error into a struct with
+// every field at its zero value, and the planner reported "no actions" and
+// re-asked. The payload was already in hand.
+func TestUnmarshalJSONObject_RecoversFromASingleKeyEnvelope(t *testing.T) {
+	type reply struct {
+		Thought string `json:"thought"`
+		Actions []struct {
+			Name string `json:"name"`
+		} `json:"actions"`
+	}
+	const wrapped = `{"answer": "\n{\n  \"thought\": \"read calc_node_hash\",\n  ` +
+		`\"actions\": [\n    {\n      \"name\": \"read_file\"\n    }\n  ]\n}"}`
+
+	var got reply
+	if err := UnmarshalJSONObject(wrapped, &got); err != nil {
+		t.Fatalf("the payload was recoverable: %v", err)
+	}
+	if got.Thought != "read calc_node_hash" {
+		t.Errorf("thought = %q, want the nested object's", got.Thought)
+	}
+	if len(got.Actions) != 1 || got.Actions[0].Name != "read_file" {
+		t.Errorf("actions = %+v, want the nested object's", got.Actions)
+	}
+}
+
+// A reply in the expected shape must never be re-read through the envelope
+// path. The unwrapping only exists for a parse that produced nothing.
+func TestUnmarshalJSONObject_PrefersTheDirectParse(t *testing.T) {
+	type reply struct {
+		Answer  string `json:"answer"`
+		Thought string `json:"thought"`
+	}
+	// A legitimate single-key reply whose value happens to look like JSON.
+	// The direct parse produces something, so it wins.
+	const direct = `{"answer": "{\"thought\": \"not mine\"}"}`
+
+	var got reply
+	if err := UnmarshalJSONObject(direct, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Answer == "" {
+		t.Error("a field the schema declares was discarded in favour of the envelope path")
+	}
+	if got.Thought != "" {
+		t.Errorf("thought = %q — the nested object was read over a valid direct parse", got.Thought)
+	}
+}
+
+// The wrapper is only a wrapper when its single value is a complete object.
+// Anything else must fail as it always did, rather than be reinterpreted.
+func TestUnmarshalJSONObject_LeavesNonEnvelopesAlone(t *testing.T) {
+	type reply struct {
+		Thought string `json:"thought"`
+	}
+	for name, body := range map[string]string{
+		"single key, not a string":    `{"answer": 42}`,
+		"single key, string not JSON": `{"answer": "just prose"}`,
+		"two keys":                    `{"a": "{\"thought\":\"x\"}", "b": 1}`,
+	} {
+		var got reply
+		err := UnmarshalJSONObject(body, &got)
+		if err == nil && got.Thought != "" {
+			t.Errorf("%s: recovered %q from something that is not an envelope", name, got.Thought)
+		}
+	}
+}
+
+// internal/llm's wrapper takes `out any` and hands it on, so the target can
+// arrive already boxed — and one caller boxes it twice. Zero detection has
+// to see through that, or an envelope arriving via that path is judged
+// against the box instead of the struct and never gets unwrapped.
+func TestUnmarshalObjectInto_SeesThroughAnErasedTarget(t *testing.T) {
+	type reply struct {
+		Thought string `json:"thought"`
+	}
+	const wrapped = `{"answer": "{\"thought\": \"recovered\"}"}`
+
+	// Boxed once: any holding *reply. This is what internal/llm passes.
+	var once reply
+	var boxed any = &once
+	if err := UnmarshalObjectInto(wrapped, boxed); err != nil {
+		t.Fatalf("boxed once: %v", err)
+	}
+	if once.Thought != "recovered" {
+		t.Errorf("boxed once: thought = %q, want the nested object's", once.Thought)
+	}
+
+	// Boxed twice: *any holding *reply, which is what a caller taking the
+	// address of its own any parameter produces.
+	var twice reply
+	var inner any = &twice
+	if err := UnmarshalObjectInto(wrapped, &inner); err != nil {
+		t.Fatalf("boxed twice: %v", err)
+	}
+	if twice.Thought != "recovered" {
+		t.Errorf("boxed twice: thought = %q, want the nested object's", twice.Thought)
+	}
+}

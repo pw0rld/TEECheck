@@ -576,3 +576,39 @@ func TestPlannerRun_GivesUpAfterOneFailedReAsk(t *testing.T) {
 		t.Errorf("termination_reason = %q, want %q", result.Bundle.PlannerMeta.TerminationReason, "llm_malformed")
 	}
 }
+
+// The reply that cost round 11 of runs/recon-002: the correct object,
+// wrapped in a single "answer" string. It parses — json.Unmarshal ignores
+// unknown fields — so the planner saw an empty LLMResponse and re-asked,
+// spending a round and 5,000 tokens on a payload it already had.
+func TestPlannerRun_RecoversAnActionWrappedInAnEnvelope(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+	writeRepoFile(t, repoRoot, "src/small.rs", "fn main() {}\n")
+
+	wrapped := `{"answer": "{\"thought\": \"read it\", \"actions\": ` +
+		`[{\"name\": \"read_file\", \"args\": {\"path\": \"src/small.rs\"}}]}"}`
+
+	client := &mockLLM{scripts: []string{
+		wrapped,
+		`{"thought":"done","actions":[{"name":"done","args":{"summary":"x","candidates":[]}}]}`,
+	}}
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID: "test-envelope", RepoRoot: repoRoot, RunDir: runDir,
+		Profile: planner.PromptProfile{Focus: "tee"},
+		Client:  client, Registry: actions.NewDefaultRegistryWithNav(),
+		Budget: defaultTestBudget(),
+	})
+	if result.Err != nil {
+		t.Fatalf("the wrapped action was recoverable: %v", result.Err)
+	}
+
+	// Two scripted replies, two rounds. A third call means the envelope
+	// was not recovered and the planner spent a round re-asking.
+	if client.calls != 2 {
+		t.Errorf("the planner made %d LLM calls, want 2 — the extra one is the re-ask", client.calls)
+	}
+	if got := result.Bundle.PlannerMeta.TerminationReason; got != "llm_done" {
+		t.Errorf("termination = %q, want llm_done", got)
+	}
+}

@@ -396,9 +396,16 @@ loop:
 			// because the eighth slipped is the wrong trade — the cost of
 			// re-asking is one extra call, the cost of not re-asking is the
 			// whole run.
-			fmt.Fprintf(os.Stdout, "[planner] round %d: reply was not a JSON object — re-asking once\n", roundNum)
+			// The message carries parseErr rather than a fixed sentence.
+			// It used to read "reply was not a JSON object" whatever went
+			// wrong, and on 2026-08-04 that was false: the reply WAS a JSON
+			// object, just wrapped in one the schema does not describe, and
+			// the real error was "no actions". Diagnosing it from the log
+			// alone sent the investigation the wrong way for an afternoon.
+			fmt.Fprintf(os.Stdout, "[planner] round %d: %v — re-asking once\n", roundNum, parseErr)
 			retryPrompt := roundPrompt + "\n\n=== YOUR PREVIOUS REPLY WAS REJECTED ===\n" +
-				"It contained no JSON object. Do not narrate, explain, or announce what you are about to do.\n" +
+				"It was rejected because: " + parseErr.Error() + "\n" +
+				"Do not narrate, explain, or announce what you are about to do. Do not wrap the object in another object.\n" +
 				"Reply with the JSON object described in the response format and NOTHING else — no prose before it, no prose after it, no markdown fence.\n" +
 				"Your rejected reply began: " + truncate(genResp.Text, 200) + "\n"
 			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {

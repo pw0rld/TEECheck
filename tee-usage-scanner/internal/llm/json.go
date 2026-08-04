@@ -23,7 +23,7 @@ import (
 // indirect() is built for: it unwraps the interface and decodes into the
 // caller's concrete value.
 func ExtractJSONObject(raw string, out any) error {
-	if err := agentutil.UnmarshalJSONObject(raw, &out); err != nil {
+	if err := agentutil.UnmarshalObjectInto(raw, out); err != nil {
 		return fmt.Errorf("llm response: %w", err)
 	}
 	return nil
