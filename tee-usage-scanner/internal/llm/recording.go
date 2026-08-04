@@ -96,6 +96,14 @@ func (c *recordingClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 	promptBlob := writeBlob(o.Blobs, prompt)
 	responseBlob := writeBlob(o.Blobs, body)
 
+	// The wire bodies are kept in addition, never instead. The two above
+	// are for reading; these are the exact bytes, and they are the only
+	// place finish_reason, response_format and any field the parser does
+	// not read survive. They are written on the failure path too — that is
+	// the call someone will be diagnosing.
+	wireRequestBlob := writeBlob(o.Blobs, resp.RawRequest)
+	wireResponseBlob := writeBlob(o.Blobs, resp.Raw)
+
 	tokensIn, tokensOut := resp.Usage.PromptTokens, resp.Usage.CompletionTokens
 	if genErr == nil && tokensIn == 0 && tokensOut == 0 {
 		// Provider reported no usage (older OpenAI-compatible endpoints,
@@ -110,7 +118,8 @@ func (c *recordingClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 	// count would inflate the run's token accounting with tokens nobody
 	// was billed for.
 
-	done := events.LLMCallCompleted(o.RunID, o.AgentID, o.Model, noRound, tokensIn, tokensOut, promptBlob, responseBlob)
+	done := events.LLMCallCompleted(o.RunID, o.AgentID, o.Model, noRound, tokensIn, tokensOut, promptBlob, responseBlob).
+		WithWireBodies(wireRequestBlob, wireResponseBlob)
 	if genErr != nil {
 		done.Error = genErr.Error()
 	}

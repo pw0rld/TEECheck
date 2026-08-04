@@ -11,6 +11,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
@@ -298,4 +299,71 @@ func TestPlannerRun_FailedToolRecordsOutputAndError(t *testing.T) {
 		"partial output produced before the failure"; got != want {
 		t.Errorf("output blob on the failure path = %q, want %q", got, want)
 	}
+}
+
+// The planner records its own LLM calls (it is deliberately not wrapped in
+// the recording client, because it needs round numbers), so the wire bodies
+// have to be written on this path too. On 2026-08-04 a run died on two
+// consecutive non-JSON replies and the artifacts could not say what the
+// provider had actually returned.
+func TestPlannerRun_RecordsTheWireBodiesOfEveryLLMCall(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+
+	client := &wireLLM{
+		reply:    `{"thought":"done","actions":[{"name":"done","args":{"summary":"x","candidates":[]}}]}`,
+		wireReq:  `{"model":"glm-5.2","response_format":{"type":"json_object"}}`,
+		wireResp: `{"choices":[{"message":{"content":"..."},"finish_reason":"stop"}]}`,
+	}
+
+	eventsPath := filepath.Join(runDir, "events.jsonl")
+	rec, err := events.NewJSONLRecorder(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := events.NewBlobStore(filepath.Join(runDir, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	planner.Run(context.Background(), planner.RunConfig{
+		RunID: "test-wire", RepoRoot: repoRoot, RunDir: runDir,
+		Profile: planner.PromptProfile{Focus: "tee"},
+		Client:  client, Registry: actions.NewDefaultRegistryWithNav(),
+		Budget: defaultTestBudget(), Events: rec, Blobs: blobs,
+	})
+	rec.Close()
+
+	var completed events.Event
+	for _, e := range readEventsJSONL(t, eventsPath) {
+		if e.Type == events.TypeLLMCallCompleted {
+			completed = e
+			break
+		}
+	}
+	if completed.WireRequestBlob == "" || completed.WireResponseBlob == "" {
+		t.Fatalf("the planner dropped the wire bodies: %+v", completed)
+	}
+	if got := resolveBlob(t, runDir, completed.WireRequestBlob); got != client.wireReq {
+		t.Errorf("wire request = %q, want the exact bytes sent", got)
+	}
+	if got := resolveBlob(t, runDir, completed.WireResponseBlob); got != client.wireResp {
+		t.Errorf("wire response = %q, want the exact bytes received", got)
+	}
+	// The readable response blob still holds the parsed reply, so the two
+	// are genuinely different records rather than one written twice.
+	if resolveBlob(t, runDir, completed.ResponseBlob) == client.wireResp {
+		t.Error("response_blob and wire_response_blob resolved to the same body")
+	}
+}
+
+// wireLLM returns a usable reply plus fixed wire bytes, so the test asserts
+// on what the planner persists rather than on a provider's behaviour.
+type wireLLM struct {
+	reply, wireReq, wireResp string
+}
+
+func (c *wireLLM) Generate(context.Context, llm.GenerateRequest) (llm.GenerateResponse, error) {
+	return llm.GenerateResponse{
+		Text: c.reply, RawRequest: c.wireReq, Raw: c.wireResp,
+	}, nil
 }

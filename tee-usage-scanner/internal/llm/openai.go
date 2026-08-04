@@ -60,9 +60,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 		return GenerateResponse{}, fmt.Errorf("marshal llm request: %w", err)
 	}
 
+	// out accumulates the wire bytes as they become known, so every return
+	// below carries whatever was already on the wire. The bytes are the
+	// point: a reply that parsed cleanly still hides finish_reason and any
+	// field the parser does not read.
+	out := GenerateResponse{RawRequest: string(payload)}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("build llm request: %w", err)
+		return out, fmt.Errorf("build llm request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
@@ -70,29 +76,28 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("llm request failed: %w", err)
+		return out, fmt.Errorf("llm request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
+	out.Raw = string(respBody)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("read llm response: %w", err)
+		return out, fmt.Errorf("read llm response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return GenerateResponse{}, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return out, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	text, usage, err := parseOpenAIResponse(resp.Header.Get("Content-Type"), respBody)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
+		return out, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
 	}
 
-	return GenerateResponse{
-		Text:  text,
-		Raw:   string(respBody),
-		Usage: usage,
-	}, nil
+	out.Text = text
+	out.Usage = usage
+	return out, nil
 }
 
 type openAIChatRequest struct {

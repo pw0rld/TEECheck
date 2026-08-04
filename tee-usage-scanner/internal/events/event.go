@@ -71,6 +71,23 @@ type Event struct {
 	PromptBlob   string `json:"prompt_blob,omitempty"`
 	ResponseBlob string `json:"response_blob,omitempty"`
 
+	// The exact bytes on the wire, in both directions.
+	//
+	// PromptBlob and ResponseBlob above are for reading: a prompt joined
+	// for a human, and the assistant message the parser extracted. These
+	// two are for debugging, and they are not the same thing. On
+	// 2026-08-04 a planner run died on two consecutive non-JSON replies
+	// and the artifacts could not say whether response_format had been
+	// sent, what finish_reason was, or whether the provider had returned a
+	// field the parser ignored — the raw body was read, parsed and
+	// dropped. Written whenever the bytes exist, including on the failure
+	// paths, because a call that failed is the one someone is diagnosing.
+	//
+	// The API key travels in a header, never in the body, so the request
+	// is safe to persist.
+	WireRequestBlob  string `json:"wire_request_blob,omitempty"`
+	WireResponseBlob string `json:"wire_response_blob,omitempty"`
+
 	// tool_call_*
 	ToolName       string `json:"tool_name,omitempty"`
 	ToolArgsBlob   string `json:"tool_args_blob,omitempty"`
@@ -294,6 +311,18 @@ func LLMCallCompleted(runID, agent, model string, round, tokensIn, tokensOut int
 		PromptBlob:   promptBlob,
 		ResponseBlob: responseBlob,
 	}
+}
+
+// WithWireBodies attaches the raw request and response refs.
+//
+// A method rather than two more constructor parameters: it reads the same
+// at every call site, it is impossible to misfile positionally, and the
+// failure path — which builds the event and then sets Error — can use it
+// without a second constructor.
+func (e Event) WithWireBodies(requestBlob, responseBlob string) Event {
+	e.WireRequestBlob = requestBlob
+	e.WireResponseBlob = responseBlob
+	return e
 }
 
 func ToolCallStarted(runID, agent, toolName string, round int, toolArgsBlob string) Event {

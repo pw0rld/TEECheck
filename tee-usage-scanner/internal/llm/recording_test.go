@@ -322,3 +322,62 @@ func TestRecordingClient_PassesRequestThrough(t *testing.T) {
 		t.Errorf("request mutated: %+v", got)
 	}
 }
+
+// The extracted text answers "what did the model say". It cannot answer
+// "was response_format sent", "what was finish_reason", or "did the
+// provider return a field the parser ignored" — and on 2026-08-04 a planner
+// run died on two consecutive non-JSON replies with none of those
+// answerable. The wire bodies are kept in addition, not instead.
+func TestRecordingClient_KeepsBothWireBodies(t *testing.T) {
+	const wireReq = `{"model":"glm-5.2","response_format":{"type":"json_object"},"messages":[]}`
+	const wireResp = `{"choices":[{"message":{"content":"hi"},"finish_reason":"length"}]}`
+
+	inner := &recInner{resp: llm.GenerateResponse{
+		Text: "hi", RawRequest: wireReq, Raw: wireResp,
+	}}
+	c, rec, dir := newRecordingHarness(t, inner)
+	if _, err := c.Generate(context.Background(), llm.GenerateRequest{JSONMode: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := rec.byType(events.TypeLLMCallCompleted)[0]
+	if done.WireRequestBlob == "" || done.WireResponseBlob == "" {
+		t.Fatalf("wire bodies not recorded: request=%q response=%q",
+			done.WireRequestBlob, done.WireResponseBlob)
+	}
+	if got := readBlob(t, dir, done.WireRequestBlob); got != wireReq {
+		t.Errorf("request blob = %q, want the exact bytes sent", got)
+	}
+	if got := readBlob(t, dir, done.WireResponseBlob); got != wireResp {
+		t.Errorf("response blob = %q, want the exact bytes received", got)
+	}
+	// The readable pair still holds the extracted message, not the JSON —
+	// the wire bodies are an addition, not a replacement.
+	if got := readBlob(t, dir, done.ResponseBlob); got != "hi" {
+		t.Errorf("response_blob = %q, want the extracted message", got)
+	}
+}
+
+// A call that failed is the one someone will be diagnosing. Whatever
+// reached the wire before it failed has to survive — a 429 body says why.
+func TestRecordingClient_KeepsWireBodiesOnTheErrorPath(t *testing.T) {
+	const wireReq = `{"model":"glm-5.2"}`
+	const wireResp = `{"error":{"message":"rate limit"}}`
+
+	inner := &recInner{
+		resp: llm.GenerateResponse{RawRequest: wireReq, Raw: wireResp},
+		err:  errors.New("llm status 429"),
+	}
+	c, rec, dir := newRecordingHarness(t, inner)
+	if _, err := c.Generate(context.Background(), llm.GenerateRequest{}); err == nil {
+		t.Fatal("the inner error must propagate")
+	}
+
+	done := rec.byType(events.TypeLLMCallCompleted)[0]
+	if got := readBlob(t, dir, done.WireResponseBlob); got != wireResp {
+		t.Errorf("the provider's error body was dropped: %q", got)
+	}
+	if got := readBlob(t, dir, done.WireRequestBlob); got != wireReq {
+		t.Errorf("the request that failed was dropped: %q", got)
+	}
+}

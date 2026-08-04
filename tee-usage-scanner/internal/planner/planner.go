@@ -331,7 +331,13 @@ loop:
 				// Emit a completion event with Error populated so
 				// downstream consumers can pair the started/completed
 				// events even on failure.
-				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
+				// The bytes the client got as far as, even though the
+				// call failed — a non-2xx body or a timed-out request is
+				// exactly what needs reading afterwards.
+				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "").
+					WithWireBodies(
+						events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
+						events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw)))
 				failed.Error = err.Error()
 				_ = cfg.Events.Emit(failed)
 				return llm.GenerateResponse{}, err
@@ -362,7 +368,15 @@ loop:
 					responseBlob = ref
 				}
 			}
-			_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
+			// The wire bodies are kept alongside the readable pair, not
+			// instead of it: promptBlob is a prompt joined for a human and
+			// responseBlob is the message the parser extracted, while these
+			// two are what actually crossed the wire.
+			_ = cfg.Events.Emit(events.LLMCallCompleted(
+				cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob).
+				WithWireBodies(
+					events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
+					events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw))))
 			return genResp, nil
 		}
 

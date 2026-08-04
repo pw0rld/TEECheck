@@ -200,3 +200,81 @@ func TestOpenAIClient_ZeroMaxTokensFallsBackToDefault(t *testing.T) {
 		t.Fatalf("max_tokens = %d, want the default %d", got.MaxTokens, config.DefaultLLMMaxTokens)
 	}
 }
+
+// The wire bytes have to be the wire bytes. If RawRequest were rebuilt from
+// the GenerateRequest rather than captured from what was marshalled, it
+// could not answer the question it exists for — whether response_format was
+// actually sent — because that field is added inside Generate.
+func TestOpenAIClient_CapturesBothWireBodies(t *testing.T) {
+	const body = `{"choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],` +
+		`"usage":{"prompt_tokens":11,"completion_tokens":3}}`
+
+	var sent string
+	client := NewOpenAIClient(config.Config{
+		LLMBaseURL: "https://example.test", LLMAPIKey: "k", LLMModel: "glm-5.2", LLMTimeoutSec: 5,
+	})
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		sent = string(raw)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewBufferString(body)),
+		}, nil
+	})}
+
+	resp, err := client.Generate(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		JSONMode: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.RawRequest != sent {
+		t.Errorf("RawRequest is not what was POSTed:\n got: %s\nsent: %s", resp.RawRequest, sent)
+	}
+	if !strings.Contains(resp.RawRequest, `"response_format"`) {
+		t.Errorf("the recorded request cannot answer whether JSON mode was sent:\n%s", resp.RawRequest)
+	}
+	if resp.Raw != body {
+		t.Errorf("Raw = %q, want the exact response body", resp.Raw)
+	}
+	if !strings.Contains(resp.Raw, "finish_reason") {
+		t.Error("finish_reason must survive into the recorded response")
+	}
+	// The extracted text is still the message, not the envelope.
+	if resp.Text != `{"ok":true}` {
+		t.Errorf("Text = %q, want the assistant message", resp.Text)
+	}
+}
+
+// A non-2xx reply carries the provider's explanation. Dropping it leaves an
+// error string and nothing to read.
+func TestOpenAIClient_KeepsTheBodyOfAFailedCall(t *testing.T) {
+	const body = `{"error":{"message":"model not found","code":"invalid_model"}}`
+
+	client := NewOpenAIClient(config.Config{
+		LLMBaseURL: "https://example.test", LLMAPIKey: "k", LLMModel: "nope", LLMTimeoutSec: 5,
+	})
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewBufferString(body)),
+		}, nil
+	})}
+
+	resp, err := client.Generate(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("a 400 must be an error")
+	}
+	if resp.Raw != body {
+		t.Errorf("the error body was dropped: %q", resp.Raw)
+	}
+	if !strings.Contains(resp.RawRequest, `"nope"`) {
+		t.Errorf("the request that failed was dropped: %q", resp.RawRequest)
+	}
+}

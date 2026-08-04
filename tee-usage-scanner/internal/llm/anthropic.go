@@ -69,9 +69,13 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		return GenerateResponse{}, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
+	// See GenerateResponse: the wire bytes accumulate here so every return
+	// below carries whatever had already been sent or received.
+	out := GenerateResponse{RawRequest: string(payload)}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("build anthropic request: %w", err)
+		return out, fmt.Errorf("build anthropic request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
@@ -80,33 +84,32 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("anthropic request failed: %w", err)
+		return out, fmt.Errorf("anthropic request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
+	out.Raw = string(respBody)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("read anthropic response: %w", err)
+		return out, fmt.Errorf("read anthropic response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return GenerateResponse{}, fmt.Errorf("anthropic status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return out, fmt.Errorf("anthropic status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	text, usage, err := parseAnthropicResponse(respBody)
 	if err != nil {
-		return GenerateResponse{}, fmt.Errorf("parse anthropic response: %w | raw=%s", err, truncateForError(string(respBody), 300))
+		return out, fmt.Errorf("parse anthropic response: %w | raw=%s", err, truncateForError(string(respBody), 300))
 	}
 
 	if req.JSONMode {
 		text = restorePrefill(text)
 	}
 
-	return GenerateResponse{
-		Text:  text,
-		Raw:   string(respBody),
-		Usage: usage,
-	}, nil
+	out.Text = text
+	out.Usage = usage
+	return out, nil
 }
 
 // jsonPrefill is the assistant turn that opens the object the model must
