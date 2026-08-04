@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 )
@@ -19,16 +22,37 @@ import (
 // editing internal/trustirfacts, which this package must not modify.
 type fakeFactEngine struct {
 	available bool
+	// results is what Analyze reports back. Zero value (nil) keeps the
+	// existing tests' behaviour: a query that ran and matched nothing.
+	results []codeql.Result
 }
 
 func (f *fakeFactEngine) Available() bool { return f.available }
 
-func (f *fakeFactEngine) CreateDatabase(_ context.Context, _ codeql.CreateDBOptions) error {
-	return nil
+// CreateDatabase makes the output directory a real codeql would have made.
+// Returning nil without it left the fact layer unable to write its
+// db-built marker, so every path through this fake ended at status
+// "unresolved" — which quietly satisfies any assertion phrased as "the
+// observation does NOT contain X".
+func (f *fakeFactEngine) CreateDatabase(_ context.Context, opts codeql.CreateDBOptions) error {
+	return os.MkdirAll(opts.DBPath, 0o755)
 }
 
 func (f *fakeFactEngine) Analyze(_ context.Context, _ codeql.AnalyzeOptions) ([]codeql.Result, error) {
-	return nil, nil
+	return f.results, nil
+}
+
+// realQueryPackDir returns the repository's own CodeQL pack. The fact layer
+// copies it and then reads the operation's .ql back, so a t.TempDir() here
+// makes every request fail at "materialize query pack" with status "error" —
+// which never reaches the observation code these tests are about.
+func realQueryPackDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join("..", "..", "..", "codeql", "trustir", "cpp")
+	if _, err := os.Stat(filepath.Join(dir, "state", "RollbackVersionNotPropagated.ql")); err != nil {
+		t.Skipf("query pack not present at %s: %v", dir, err)
+	}
+	return dir
 }
 
 func factLayerArgs(t *testing.T, operation string) json.RawMessage {
@@ -146,6 +170,99 @@ func TestFactLayerQuery_UnknownOperationIsRejectedWithTheVocabulary(t *testing.T
 		if !strings.Contains(res.Error, op) {
 			t.Errorf("error must name the legal value %q so the model can correct itself; got: %q", op, res.Error)
 		}
+	}
+}
+
+// TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites drives the
+// whole action — real git, fake CodeQL — and asserts on what the Planner
+// actually sees back.
+//
+// This is CVE-2026-44362's failure, reduced. The fact layer resolved the
+// rollback authority to a site in ANOTHER FILE (core/kernel/ree_fs_ta.c) and
+// persisted it, but the observation projected only the primary location.
+// Not knowing a caller had already been found, the Planner ran reverse_trace
+// over a single-file fixture, got "(no callers found)", and the Challenger
+// turned that into "the whole path is dead code". The authority location was
+// on disk the entire time. See docs/bugs/BUG-002 §3.4.
+func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) {
+	repo, commit := gitInit(t)
+	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
+	t.Cleanup(trustirfacts.ResetFactTables)
+
+	eng := &fakeFactEngine{available: true, results: []codeql.Result{{
+		RuleID:    "trustir/state/rollback-version-propagation",
+		Message:   "TWE-STATE-001: producer shdr_load_pub_key never propagates rollback field 'version'; authority check_update_version therefore checks a default version.",
+		Path:      "core/crypto/signed_hdr.c",
+		StartLine: 262,
+		Related: []codeql.RelatedLocation{
+			{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+			{Path: "core/kernel/ree_fs_ta.c", StartLine: 314, Symbol: "check_update_version"},
+		},
+	}}}
+	// One engine, and a provider over it: the fake builds the database
+	// directory the same way the real one does, so the action exercises the
+	// production path from request to observation.
+	handler := &actions.FactLayerQueryHandler{
+		DB:           codedb.New(eng, nil),
+		Engine:       eng,
+		QueryPackDir: realQueryPackDir(t),
+	}
+
+	res := handler.Run(context.Background(), actions.ActionRequest{
+		Name:       "fact_layer_query",
+		Args:       factLayerArgs(t, string(trustirfacts.OperationRollbackVersionPropagation)),
+		RunDir:     t.TempDir(),
+		Repository: repo,
+		Commit:     commit,
+	})
+	if !res.OK {
+		t.Fatalf("handler failed: %+v", res)
+	}
+
+	// The message is the query's conclusion — without it the observation
+	// says "something was flagged here" and nothing about what.
+	if !strings.Contains(res.Output, "never propagates rollback field") {
+		t.Errorf("observation must carry the finding message; got:\n%s", res.Output)
+	}
+	// The authority site lives in a different file from the primary
+	// location. This is the field whose absence cost the run the finding.
+	if !strings.Contains(res.Output, "core/kernel/ree_fs_ta.c") {
+		t.Errorf("observation must carry related sites in other files; got:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "check_update_version") {
+		t.Errorf("a related site's symbol is what makes it actionable; got:\n%s", res.Output)
+	}
+	// Still an artifact reference, not the raw payload (§11.2/§24).
+	if !strings.Contains(res.Output, "tool_fact_ref") {
+		t.Errorf("observation must still reference the persisted ToolFact; got:\n%s", res.Output)
+	}
+}
+
+// A run that matched nothing must not grow a findings key — "we looked and
+// found nothing" and "we found something" have to stay distinguishable.
+func TestFactLayerQuery_NoMatchesCarriesNoFindings(t *testing.T) {
+	repo, commit := gitInit(t)
+	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
+	t.Cleanup(trustirfacts.ResetFactTables)
+
+	eng := &fakeFactEngine{available: true}
+	handler := &actions.FactLayerQueryHandler{
+		DB:           codedb.New(eng, nil),
+		Engine:       eng,
+		QueryPackDir: realQueryPackDir(t),
+	}
+	res := handler.Run(context.Background(), actions.ActionRequest{
+		Name:       "fact_layer_query",
+		Args:       factLayerArgs(t, string(trustirfacts.OperationRollbackVersionPropagation)),
+		RunDir:     t.TempDir(),
+		Repository: repo,
+		Commit:     commit,
+	})
+	if !res.OK {
+		t.Fatalf("handler failed: %+v", res)
+	}
+	if strings.Contains(res.Output, `"findings"`) {
+		t.Errorf("a zero-match success must not emit a findings key; got:\n%s", res.Output)
 	}
 }
 

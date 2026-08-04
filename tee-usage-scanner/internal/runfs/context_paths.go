@@ -9,10 +9,6 @@ func ContextDir(runDir string) string {
 	return filepath.Join(runDir, "01_context")
 }
 
-func ContextProjectProfilePath(runDir string) string {
-	return filepath.Join(ContextDir(runDir), "project_profile.v2.json")
-}
-
 func ArchitectureModelPath(runDir string) string {
 	return filepath.Join(ContextDir(runDir), "architecture.v1.json")
 }

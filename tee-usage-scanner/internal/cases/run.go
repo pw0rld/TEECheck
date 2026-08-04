@@ -19,11 +19,6 @@ func Run(cfg config.Config) error {
 		return fmt.Errorf("load manifest: %w", err)
 	}
 
-	var profile artifacts.ProjectProfile
-	if err := runfs.ReadJSON(runfs.ProjectProfilePath(cfg.RunDir), &profile); err != nil {
-		return fmt.Errorf("load project profile: %w", err)
-	}
-
 	var repoMap artifacts.RepoMap
 	if err := runfs.ReadJSON(runfs.RepoMapPath(cfg.RunDir), &repoMap); err != nil {
 		return fmt.Errorf("load repo_map: %w", err)
@@ -38,7 +33,7 @@ func Run(cfg config.Config) error {
 		return fmt.Errorf("ensure knowledge layout: %w", err)
 	}
 
-	packs, err := buildCasePacks(manifest, profile, repoMap, hotspots.Hotspots, cfg.KnowledgeRoot, cfg.MaxCases)
+	packs, err := buildCasePacks(manifest, repoMap, hotspots.Hotspots, cfg.KnowledgeRoot, cfg.MaxCases)
 	if err != nil {
 		return err
 	}
@@ -92,7 +87,7 @@ func Enrich(cfg config.Config) error {
 	return nil
 }
 
-func buildCasePacks(manifest artifacts.Manifest, profile artifacts.ProjectProfile, repoMap artifacts.RepoMap, hotspots []artifacts.Hotspot, knowledgeRoot string, maxCases int) ([]artifacts.CasePack, error) {
+func buildCasePacks(manifest artifacts.Manifest, repoMap artifacts.RepoMap, hotspots []artifacts.Hotspot, knowledgeRoot string, maxCases int) ([]artifacts.CasePack, error) {
 	limit := maxCases
 	if limit <= 0 || limit > len(hotspots) {
 		limit = len(hotspots)
@@ -119,7 +114,7 @@ func buildCasePacks(manifest artifacts.Manifest, profile artifacts.ProjectProfil
 			TargetFiles:         append([]string{}, hotspot.Paths...),
 			TargetSymbols:       append([]string{}, hotspot.Symbols...),
 			WhySelected:         append([]string{}, hotspot.WhySelected...),
-			ToolFacts:           collectToolFacts(profile, repoMap, hotspot),
+			ToolFacts:           collectToolFacts(repoMap, hotspot),
 			GraphFacts:          collectGraphFacts(hotspot),
 			Snippets:            collectSnippets(manifest.LocalPath, hotspot.Paths, hotspot.Symbols),
 			ExpectedObligations: obligations,
@@ -135,11 +130,8 @@ func buildCasePacks(manifest artifacts.Manifest, profile artifacts.ProjectProfil
 	return packs, nil
 }
 
-func collectToolFacts(profile artifacts.ProjectProfile, repoMap artifacts.RepoMap, hotspot artifacts.Hotspot) []string {
+func collectToolFacts(repoMap artifacts.RepoMap, hotspot artifacts.Hotspot) []string {
 	var facts []string
-	if len(profile.FrameworkHints) > 0 {
-		facts = append(facts, "framework hints: "+strings.Join(profile.FrameworkHints, ", "))
-	}
 	for _, boundary := range repoMap.Boundaries {
 		for _, path := range hotspot.Paths {
 			if contains(boundary.Paths, path) {

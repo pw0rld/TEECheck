@@ -2,7 +2,6 @@ package expert
 
 import (
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -228,22 +227,10 @@ func renderToolFacts(facts []artifacts.ToolFact, missing []string) string {
 	}
 	var lines []string
 	for _, f := range facts {
-		lines = append(lines, "- ["+f.FactID+"] "+f.Tool+"/"+f.Operation+" status="+f.Status+
-			" locations="+formatToolLocations(f.Locations))
+		lines = append(lines, "- "+artifacts.FormatToolFact(f))
 	}
 	for _, ref := range missing {
 		lines = append(lines, "- (unavailable) "+ref)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func formatToolLocations(locs []artifacts.ToolLocation) string {
-	if len(locs) == 0 {
-		return "(none)"
-	}
-	var parts []string
-	for _, l := range locs {
-		parts = append(parts, l.Path+":"+strconv.Itoa(l.StartLine))
-	}
-	return strings.Join(parts, ", ")
 }

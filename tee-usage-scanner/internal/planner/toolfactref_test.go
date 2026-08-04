@@ -176,3 +176,55 @@ func TestPlannerRun_ModelReportedToolFactRefIsNotDuplicated(t *testing.T) {
 		t.Fatalf("ToolFactRefs = %v, want exactly one entry (no duplicate)", refs)
 	}
 }
+
+// A ToolFact this loop did not execute must NOT reach the investigation.
+//
+// The pipeline used to prefetch the fact-layer queries the run's invariants
+// called for and union the refs into every investigation the Planner
+// reported — so a lead the model reached on its own still shipped evidence
+// the old invariant had selected, and nothing downstream could tell the two
+// apart. §6 requires a lead's reasons to reference facts the Planner has
+// seen; a fact collected on its behalf is not one of them.
+func TestPlannerRun_AFactTheLoopDidNotExecuteDoesNotReachTheInvestigation(t *testing.T) {
+	repoRoot, runDir := setupRollbackFixtureRepo(t)
+
+	factPath := filepath.Join(runDir, "02_tool_facts", "trustir", "prefetched.json")
+	if err := os.MkdirAll(filepath.Dir(factPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(factPath, []byte(`{"status":"success"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The model never calls fact_layer_query and reports no refs.
+	done := roundResponseWithDone(t, map[string]any{
+		"summary":    "no fact layer call this round",
+		"candidates": []map[string]any{},
+		"investigations": []map[string]any{{
+			"twe_ids": []string{"TWE-STATE-001"},
+			"filled_roles": map[string]any{
+				"claim_producer": map[string]any{"path": "core/crypto/signed_hdr.c", "start_line": 1, "symbol": "shdr_load_pub_key"},
+			},
+			"tool_fact_refs": []string{},
+		}},
+	})
+
+	result := planner.Run(context.Background(), planner.RunConfig{
+		RunID:    "test-no-prefetch",
+		RepoRoot: repoRoot,
+		RunDir:   runDir,
+		Profile:  planner.PromptProfile{RepoURL: "https://github.com/OP-TEE/optee_os", Commit: "a9386bf"},
+		Client:   &mockLLM{scripts: []string{done}},
+		Registry: actions.NewDefaultRegistryWithNav(),
+		Budget:   defaultTestBudget(),
+	})
+	if result.Err != nil {
+		t.Fatalf("unexpected error: %v", result.Err)
+	}
+	if len(result.Investigations) != 1 {
+		t.Fatalf("Investigations len = %d", len(result.Investigations))
+	}
+	if refs := result.Investigations[0].ToolFactRefs; len(refs) != 0 {
+		t.Errorf("ToolFactRefs = %v, want none — this loop executed no fact-layer query", refs)
+	}
+}

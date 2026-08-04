@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 )
 
@@ -60,7 +61,7 @@ const toolName = "trustir-cpp"
 //     success (e.g. the fixed revision, where the structural gap the query
 //     looks for is genuinely absent) — see §6.5: an empty result proves
 //     "no match found within the modeled scope", not "no vulnerability".
-func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, error) {
+func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Request) (artifacts.ToolFact, error) {
 	if err := req.validate(); err != nil {
 		return artifacts.ToolFact{}, err
 	}
@@ -82,8 +83,15 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 		return unresolvedFact(base, "codeql engine not available"), nil
 	}
 
-	dbPath := databaseDir(req.RunDir, req.Repository, req.Commit)
-	reused, err := ensureDatabase(ctx, eng, req.Exec, dbPath, req.Repository, req.Commit, req.ExtraPATH)
+	if db == nil {
+		return unresolvedFact(base, "no database provider"), nil
+	}
+	scope := codedb.Scope{RunDir: req.RunDir, Repository: req.Repository, Commit: req.Commit}
+	// Asked before Ensure, because afterwards every state is ready. The
+	// answer becomes a coverage gap: a fact derived from a database this run
+	// did not build is a fact about whatever that build saw.
+	reused := db.State(scope) == codedb.StateReady
+	dbPath, err := db.Ensure(ctx, scope)
 	if err != nil {
 		return unresolvedFact(base, fmt.Sprintf("database build failed: %v", err)), nil
 	}
@@ -108,6 +116,7 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 	fact := base
 	fact.Status = StatusSuccess
 	fact.Locations = toolLocations(results)
+	fact.Findings = toolFindings(results)
 	fact.ArtifactRef = filepath.ToSlash(relDB)
 	fact.CoverageGaps = coverageGaps(reused, isLLMFactTable(req.Repository))
 	return fact, nil
@@ -118,8 +127,8 @@ func Run(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, erro
 // persistence). It is a convenience for callers that always want both steps;
 // Run and Persist remain independently usable (e.g. a caller inspecting the
 // fact before deciding whether to keep it).
-func RunAndPersist(ctx context.Context, eng Engine, req Request) (artifacts.ToolFact, string, error) {
-	fact, err := Run(ctx, eng, req)
+func RunAndPersist(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Request) (artifacts.ToolFact, string, error) {
+	fact, err := Run(ctx, eng, db, req)
 	if err != nil {
 		return artifacts.ToolFact{}, "", err
 	}
@@ -185,6 +194,29 @@ func analyzeOptions(dbPath, queryFile, extraPATH string) codeql.AnalyzeOptions {
 // embeds — recovering the symbol would mean parsing the message text, which
 // is fragile. This is a real, disclosed limitation, not silently dropped:
 // see coverageGaps.
+// toolFindings carries each result's message and the sites it names. The
+// message is the query's actual conclusion — without it a caller sees a line
+// number and has to guess what was concluded about it.
+func toolFindings(results []codeql.Result) []artifacts.ToolFinding {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]artifacts.ToolFinding, 0, len(results))
+	for _, r := range results {
+		fi := artifacts.ToolFinding{
+			Message:  r.Message,
+			Location: artifacts.ToolLocation{Path: r.Path, StartLine: r.StartLine, EndLine: r.EndLine},
+		}
+		for _, rel := range r.Related {
+			fi.Related = append(fi.Related, artifacts.ToolLocation{
+				Path: rel.Path, StartLine: rel.StartLine, Symbol: rel.Symbol,
+			})
+		}
+		out = append(out, fi)
+	}
+	return out
+}
+
 func toolLocations(results []codeql.Result) []artifacts.ToolLocation {
 	if len(results) == 0 {
 		return nil
@@ -212,7 +244,7 @@ func coverageGaps(dbReused, llmSourced bool) []string {
 		factTableGap,
 		"only the STATE/rollback family (TWE-STATE-001) is implemented; the other six TWE families are unsupported",
 		"database built with --build-mode=none: macro/#ifdef branches resolve to source defaults, not a real build (§23.5)",
-		"finding locations do not include a resolved symbol name (SARIF related-location parsing not implemented)",
+		"path/line only for the primary location; a finding's named sites carry resolved symbols, other locations do not",
 	}
 	if dbReused {
 		gaps = append(gaps, "database reused from a prior build in this run directory (cache hit on repository+commit)")

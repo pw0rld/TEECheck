@@ -152,6 +152,42 @@ func TestBuildMemoLLM_PromptCarriesObservedFlowAndCounterEvidence(t *testing.T) 
 	}
 }
 
+// to_agent is a closed vocabulary. The arbiter's prompt published it; this
+// one did not, and on run 44362-vuln-p9 the verifier spent all four of its
+// bus queries asking "fact-layer" — an endpoint that does not exist. Every
+// one was refused (four bus_query_failed events), so the Expert/Challenger
+// dispute those queries were meant to settle went unanswered and the memo
+// came back "contested".
+func TestBuildMemoLLM_PromptPublishesTheAgentVocabulary(t *testing.T) {
+	repo, _ := repoFixture(t)
+	stub := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}
+
+	bus := agentbus.New(1)
+	bus.Register("expert-001", func(context.Context, agentbus.Query) (agentbus.Response, error) {
+		return agentbus.Response{}, nil
+	})
+	bus.Register("challenger-001", func(context.Context, agentbus.Query) (agentbus.Response, error) {
+		return agentbus.Response{}, nil
+	})
+
+	if _, err := buildMemoLLM(context.Background(), stub, bus, repo,
+		artifacts.CasePack{CaseID: "case-001"}, artifacts.Hypothesis{}, artifacts.Challenge{},
+		caseContext{}, "verifier-001", 0, nil, nil); err != nil {
+		t.Fatalf("buildMemoLLM: %v", err)
+	}
+
+	sys := stub.gotRequest.SystemPrompt
+	for _, name := range []string{"expert-001", "challenger-001"} {
+		if !strings.Contains(sys, name) {
+			t.Errorf("system prompt must name the registered agent %q — it is the only way "+
+				"to_agent's legal values reach the model:\n%s", name, sys)
+		}
+	}
+	if !strings.Contains(sys, "no fact layer") {
+		t.Errorf("system prompt must deny the endpoint this agent actually invented:\n%s", sys)
+	}
+}
+
 func TestBuildMemoLLM_EmptyFlowAndCounterEvidenceRenderCleanly(t *testing.T) {
 	repo, _ := repoFixture(t)
 	stub := &stubLLM{responseJSON: verifierResponse(t, nil, nil, "inconclusive")}

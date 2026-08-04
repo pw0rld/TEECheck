@@ -10,13 +10,17 @@ import (
 )
 
 type Config struct {
-	Command         string
-	RunID           string
-	RunDir          string
-	RepoURL         string
-	LocalPath       string
-	Commit          string
-	Focus           string
+	Command   string
+	RunID     string
+	RunDir    string
+	RepoURL   string
+	LocalPath string
+	Commit    string
+	Focus     string
+	// Hint is the caller's free-text concern, passed through to the
+	// planner's system prompt. It biases what gets investigated; it never
+	// narrows what gets modelled or scanned.
+	Hint            string
 	OutputDir       string
 	KnowledgeRoot   string
 	GraphJSONPath   string
@@ -357,7 +361,7 @@ func parseCurator(args []string) (Config, error) {
 		Command:         "curator",
 		AgentID:         "curator-001",
 		KnowledgeRoot:   filepath.Clean("knowledge"),
-		MaxDialogRounds: 3,
+		MaxDialogRounds: DefaultMaxDialogRounds,
 		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
 		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
 		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
@@ -369,7 +373,7 @@ func parseCurator(args []string) (Config, error) {
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable curator agent identifier")
-	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case")
+	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case, per asking agent")
 	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
@@ -458,7 +462,7 @@ func parseRun(args []string) (Config, error) {
 		KnowledgeRoot:   filepath.Clean("knowledge"),
 		MaxHotspots:     12,
 		MaxCases:        12,
-		MaxDialogRounds: 3,
+		MaxDialogRounds: DefaultMaxDialogRounds,
 		Mode:            "llm",
 		StaticTools:     "auto",
 		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
@@ -472,6 +476,7 @@ func parseRun(args []string) (Config, error) {
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
+	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	// Upstream identity overrides. Needed when the scanned directory is not
 	// the project it represents — a benchmark fixture is a subtree of the
@@ -587,6 +592,14 @@ func validateProviderConfig(cfg Config, context string) error {
 // stage. 16384 was demonstrably too small — the expert stage exhausted it on
 // a single case pack on 2026-07-29. Raised, and made configurable, because
 // no fixed number is right for every model and prompt size.
+// DefaultMaxDialogRounds is the per-case, per-asking-agent inter-agent
+// dialog budget. It was 3 and shared across every stage, which was survivable
+// only while scanner-001 — the one tool-backed bus agent — failed every query
+// with "a prebuilt database is required". Once it started answering, the
+// verifier spent the shared budget and the arbiter reported hitting the limit
+// before it could ask about the rollback path at all.
+const DefaultMaxDialogRounds = 10
+
 const DefaultLLMMaxTokens = 32768
 
 func firstNonEmptyEnv(keys ...string) string {

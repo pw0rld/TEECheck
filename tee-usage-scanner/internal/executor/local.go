@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,6 +65,22 @@ func (e *LocalExecutor) Run(ctx context.Context, req Request) Result {
 
 	cmd := exec.CommandContext(cctx, req.Command, req.Args...)
 	if req.WorkDir != "" {
+		// A relative working directory is resolved twice: once here, and
+		// again by any tool that was handed the same path as an argument.
+		// ripgrep is given its search root both ways, so a relative root
+		// made it cd into the tree and then look for the tree inside
+		// itself — 17 consecutive calls across three runs returned "No
+		// such file or directory" while read_file in the same round
+		// succeeded, and nothing surfaced it. This is the one place every
+		// subprocess in the system passes through, so the rule belongs
+		// here rather than in each tool's comments.
+		if !filepath.IsAbs(req.WorkDir) {
+			res := Result{Error: fmt.Sprintf("executor: work dir must be absolute, got %q — "+
+				"a relative path is resolved against the subprocess's own directory "+
+				"and silently finds nothing", req.WorkDir)}
+			e.emitCompleted(req, res)
+			return res
+		}
 		cmd.Dir = req.WorkDir
 	}
 

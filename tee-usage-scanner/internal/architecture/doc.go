@@ -1,5 +1,5 @@
 // Package architecture implements the Architecture Agent (§7.3, §22 of the
-// merge design). It turns a ProjectProfileV2 fingerprint plus TWE prior
+// merge design). It turns TWE prior
 // knowledge into a structured ArchitectureModel — parties, components,
 // roles, assets, trust zones, boundaries, entrypoints, data flows, state
 // lifecycles, trust/deployment assumptions and unknowns — with a derived

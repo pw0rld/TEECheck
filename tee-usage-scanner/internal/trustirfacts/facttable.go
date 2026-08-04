@@ -3,6 +3,8 @@ package trustirfacts
 import (
 	"fmt"
 	"strings"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 )
 
 // ClaimProducerFact is one isClaimProducer clause: a function that produces
@@ -184,17 +186,8 @@ func isLLMFactTable(repository string) bool {
 	return ok
 }
 
-// normalizeRepo collapses scheme, trailing slash, and ".git" suffix
-// differences so "https://github.com/OP-TEE/optee_os",
-// "https://github.com/OP-TEE/optee_os.git", and
-// "git@github.com:OP-TEE/optee_os.git" all key the same registry entry.
-func normalizeRepo(repository string) string {
-	s := strings.ToLower(strings.TrimSpace(repository))
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimPrefix(s, "git@")
-	s = strings.Replace(s, ":", "/", 1) // git@host:owner/repo -> host/owner/repo
-	s = strings.TrimSuffix(s, "/")
-	s = strings.TrimSuffix(s, ".git")
-	return s
-}
+// normalizeRepo delegates to codedb, which derives database directory names
+// from the same normalization. Two copies could drift, and a drift there
+// means a fact table keyed on one identity while the database it describes
+// lives under another.
+func normalizeRepo(repository string) string { return codedb.NormalizeRepo(repository) }

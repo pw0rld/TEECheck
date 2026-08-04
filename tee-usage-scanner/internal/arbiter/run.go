@@ -180,7 +180,7 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
 		independentView := loadIndependentView(challenge.IndependentViewPath)
 
-		bus.ResetDialog(pack.CaseID)
+		bus.ResetDialog(pack.CaseID, cfg.AgentID)
 		item, packet, err := arbitrateLLM(context.Background(), client, bus, pack, hypothesis, challenge, memo, caseCtx, independentView, cfg.AgentID, cfg.LLMTemp)
 		if err != nil {
 			return fmt.Errorf("arbiter llm for %s: %w", pack.CaseID, err)
@@ -194,7 +194,7 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 			return fmt.Errorf("write arbiter packet: %w", err)
 		}
 
-		if dialog := bus.GetDialog(pack.CaseID); dialog != nil && len(dialog.Rounds) > 0 {
+		if dialog := bus.GetDialog(pack.CaseID, cfg.AgentID); dialog != nil && len(dialog.Rounds) > 0 {
 			dialogPath := filepath.Join(runfs.ArbiterDir(cfg.RunDir), fmt.Sprintf("dialog-%03d.jsonl", idx+1))
 			if err := writeDialogJSONL(dialogPath, dialog); err != nil {
 				fmt.Printf("Warning: failed to write arbiter dialog: %v\n", err)
@@ -302,6 +302,14 @@ citation-validated. Validated items are the basis for any
 		formatKnowledgeHintsForLLM(pack.KnowledgeHints))
 	systemPrompt = fmt.Sprintf(systemPrompt, complete)
 
+	// to_agent is a closed vocabulary. The schema line above names the field
+	// but never the legal values, so the model could only guess — across six
+	// runs it guessed 72 times and was answered zero times, inventing
+	// "fact-layer", "Investigator" and "CryptoAnalyzer", and missing the
+	// registered expert-001 by writing "Expert". Appended after the Sprintf
+	// so the agent list needs no placeholder in the format string.
+	systemPrompt += bus.VocabularyNote()
+
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
 
 	for round := 0; round < bus.MaxRounds()+1; round++ {
@@ -359,6 +367,7 @@ citation-validated. Validated items are the basis for any
 				Severity:   parsed.Severity,
 				Confidence: parsed.Confidence,
 				Files:      pack.TargetFiles,
+				Locations:  findingLocations(caseCtx),
 				Summary:    parsed.Summary,
 				Evidence:   evidence,
 				Sections:   &sections,
@@ -390,6 +399,10 @@ citation-validated. Validated items are the basis for any
 				ToAgent:   q.ToAgent,
 				Kind:      q.Kind,
 				Question:  q.Question,
+				// A bus agent has no file access and no tools. Hand it the
+				// same anchored evidence this stage reasons from, or the only
+				// answer it can give is invented — see agentbus.NewLLMHandler.
+				Evidence: busEvidence(pack, caseCtx),
 			})
 			if err != nil {
 				queryResults = append(queryResults, fmt.Sprintf("Query to %s failed: %v", q.ToAgent, err))
@@ -411,8 +424,13 @@ citation-validated. Validated items are the basis for any
 		Severity:   severityForCategory(pack.Category),
 		Confidence: "low",
 		Files:      pack.TargetFiles,
-		Summary:    "Reached maximum dialog rounds without final arbiter judgment",
-		Sections:   &sections,
+		// Deterministic evidence does not depend on the dialog reaching a
+		// judgment: the fact layer already resolved these lines, and a
+		// round-limit finding is exactly the case a reader most needs to be
+		// able to jump straight into.
+		Locations: findingLocations(caseCtx),
+		Summary:   "Reached maximum dialog rounds without final arbiter judgment",
+		Sections:  &sections,
 	}
 	return item, buildPacket(pack, hypothesis, challenge, memo, item, sections), nil
 }

@@ -2,7 +2,6 @@ package architecture
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -10,13 +9,12 @@ import (
 )
 
 // Input is everything the Architecture Agent reads per §7.3: the full TWE
-// prior-knowledge context, ProjectProfile, and enough repo identity to
-// resolve citations and stamp the output artifact.
+// prior-knowledge context and enough repo identity to resolve citations and
+// stamp the output artifact.
 type Input struct {
 	RunID      string
 	Repo       artifacts.RepoRef
 	RepoRoot   string
-	Profile    artifacts.ProjectProfileV2
 	TWEContext string
 }
 
@@ -42,7 +40,7 @@ type wireModel struct {
 
 // BuildLLM calls the configured LLM once and parses its response directly
 // into the canonical bucket shapes. It does not itself decide what is true
-// — ValidateAndDowngrade (validate.go) and ApplyCoverageGuards (coverage.go)
+// — ValidateAndDowngrade (validate.go)
 // are the enforcement layer that runs on the result before it is persisted;
 // this function's job is prompting and parsing only.
 func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature float64) (artifacts.ArchitectureModel, error) {
@@ -77,19 +75,4 @@ func BuildLLM(ctx context.Context, client llm.Client, in Input, temperature floa
 		DeploymentAssumptions: wire.DeploymentAssumptions,
 		Unknowns:              wire.Unknowns,
 	}, nil
-}
-
-// marshalCondensed renders v as indented JSON, truncated to maxChars so a
-// large ProjectProfileV2 does not blow the prompt budget. Mirrors
-// tee-audit's dossier.py truncation (fp_context[:3000]).
-func marshalCondensed(v any, maxChars int) string {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("<failed to render: %v>", err)
-	}
-	s := string(data)
-	if len(s) > maxChars {
-		return s[:maxChars] + "\n...[truncated]"
-	}
-	return s
 }

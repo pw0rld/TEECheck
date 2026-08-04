@@ -333,7 +333,7 @@ func TestValidateAndDowngrade_RelationNonexistentFileDowngrades(t *testing.T) {
 	}
 }
 
-// Path-only evidence (StartLine == 0, as fingerprint-v2 emits for manifest/
+// Path-only evidence (StartLine == 0, as a model emits for manifest/
 // path-kind signals) validates on existence alone — no symbol check.
 func TestValidateAndDowngrade_PathOnlyEvidenceExistenceOnly(t *testing.T) {
 	repo := t.TempDir()

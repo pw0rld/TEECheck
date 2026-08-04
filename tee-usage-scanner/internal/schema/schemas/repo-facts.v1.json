@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/repo-facts.v1.json",
+  "title": "TEECheck RepoFacts v1",
+  "description": "The deterministic whole-repo program index. It answers what structure was observed, never what is dangerous: no field here may carry a priority, a risk label or a TWE mapping. See docs/bugs/BUG-003 for the amplification chain that follows when 01 pre-judges.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "scope", "capabilities", "total_call_sites", "resolved_call_sites", "unresolved_call_site_count", "external_call_sites", "ambiguous_call_sites"],
+  "properties": {
+    "schema_version": { "const": "teecheck.repo_facts.v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "scope": { "$ref": "#/$defs/scannedScope" },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "index_note": {
+      "type": "string",
+      "description": "Why a capability is degraded. A reader must be able to tell a repository with no indirect calls from an extractor that could not run."
+    },
+    "languages": { "type": "array", "items": { "type": "string" } },
+    "build_targets": { "type": "array", "items": { "type": "string" } },
+    "symbols": { "type": "array", "items": { "$ref": "#/$defs/symbol" } },
+    "capsules": { "type": "array", "items": { "$ref": "#/$defs/functionCapsule" } },
+    "call_edges": { "type": "array", "items": { "$ref": "#/$defs/callEdge" } },
+    "total_call_sites": { "type": "integer", "minimum": 0 },
+    "resolved_call_sites": { "type": "integer", "minimum": 0 },
+    "unresolved_call_site_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The multiplicity. Not the length of unresolved_call_sites: a CodeQL result is a set, so two calls on one line with the same expression collapse into one row."
+    },
+    "external_call_sites": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Calls to a function with no definition in this tree. They produce no call edge, and are one reason a function can show no callers while being called."
+    },
+    "ambiguous_call_sites": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Calls to a function defined several times, where which definition links is not decidable from the source. Emitting one edge would be a fabrication and emitting all would claim every implementation is called, so they produce none."
+    },
+    "unresolved_call_sites": { "type": "array", "items": { "$ref": "#/$defs/unresolvedCall" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "scannedScope": {
+      "type": "object",
+      "properties": {
+        "repo_url": { "type": "string" },
+        "commit": { "type": "string" },
+        "root": { "type": "string" },
+        "file_count": { "type": "integer", "minimum": 0 },
+        "hash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "capabilityState": { "enum": ["available", "partial", "unavailable"] },
+    "capabilities": {
+      "type": "object",
+      "description": "Reported per capability rather than as one verdict: under --build-mode=none the symbol table is solid while build reachability was never computed, and a single word cannot say which.",
+      "required": ["symbols", "direct_calls", "field_accesses", "build_reachability"],
+      "properties": {
+        "symbols": { "$ref": "#/$defs/capabilityState" },
+        "direct_calls": { "$ref": "#/$defs/capabilityState" },
+        "field_accesses": { "$ref": "#/$defs/capabilityState" },
+        "build_reachability": { "$ref": "#/$defs/capabilityState" }
+      },
+      "additionalProperties": false
+    },
+    "symbol": {
+      "type": "object",
+      "required": ["symbol_id", "name", "file", "start_line"],
+      "properties": {
+        "symbol_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "qualified_name": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
+        "start_line": { "type": "integer", "minimum": 0 },
+        "signature": { "type": "string" },
+        "module": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "functionCapsule": {
+      "type": "object",
+      "description": "One function's neutral behaviour record. additionalProperties is false so a judgement field cannot be added without changing this contract: that is what makes the no-verdict rule a cross-stage guarantee rather than a Go-only test.",
+      "required": ["symbol_id", "name", "module", "file", "line"],
+      "properties": {
+        "symbol_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "module": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "called_by": { "type": "array", "items": { "type": "string" } },
+        "calls": { "type": "array", "items": { "type": "string" } },
+        "field_accesses": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Every Type.field touched, read or written. Not named reads: CodeQL's FieldAccess matches an assignment's left-hand side too."
+        },
+        "direct_field_writes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The subset provable as a direct assignment. A field filled by memcpy, through a pointer alias, or by a designated initializer is absent, and its absence proves nothing."
+        }
+      },
+      "additionalProperties": false
+    },
+    "callEdge": {
+      "type": "object",
+      "required": ["caller_id", "callee_id", "file", "line", "resolution"],
+      "properties": {
+        "caller_id": { "type": "string", "minLength": 1 },
+        "callee_id": { "type": "string", "minLength": 1 },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "resolution": { "const": "direct" }
+      },
+      "additionalProperties": false
+    },
+    "unresolvedCall": {
+      "type": "object",
+      "description": "One call site whose target the extractor could not name. A total count cannot answer whether anything unresolved reaches a given function, so the enclosing symbol and the expression are required to make a missing caller interpretable.",
+      "required": ["file", "line", "resolution_kind"],
+      "properties": {
+        "enclosing_symbol_id": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "expression": { "type": "string" },
+        "resolution_kind": {
+          "enum": ["indirect", "unknown"],
+          "description": "Only what the query can prove. An ExprCall dispatches through an expression, which is provable from the call's shape; anything else with no target is unknown, because a macro-expanded call and a call to an undeclared function are indistinguishable here."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

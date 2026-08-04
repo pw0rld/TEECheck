@@ -7,15 +7,47 @@ import (
 )
 
 type Manifest struct {
-	SchemaVersion string            `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	RepoURL       string            `json:"repo_url"`
-	LocalPath     string            `json:"local_path"`
-	Commit        string            `json:"commit"`
-	Focus         string            `json:"focus"`
-	CreatedAt     string            `json:"created_at"`
-	ToolVersions  map[string]string `json:"tool_versions,omitempty"`
-	Metadata      map[string]any    `json:"metadata,omitempty"`
+	SchemaVersion string `json:"schema_version"`
+	RunID         string `json:"run_id"`
+	RepoURL       string `json:"repo_url"`
+	LocalPath     string `json:"local_path"`
+	Commit        string `json:"commit"`
+	Focus         string `json:"focus"`
+	// Hint is the free-text concern the caller supplied ("I suspect the TA
+	// loading path"). It is recorded here, not only passed to the planner,
+	// because a run's result cannot be read without knowing what the run was
+	// told: the same finding means something different when the caller
+	// already named the subsystem. For a benchmark run it is the difference
+	// between measuring discovery and measuring recognition, so it has to be
+	// on the record rather than in the invocation someone has to remember.
+	Hint string `json:"hint,omitempty"`
+	// Scope is the one tree every stage of the run reads, recorded once so
+	// each consumer can check it is reading the same one. On CVE-2026-44362
+	// the fact layer analysed a full checkout while reverse_trace read a
+	// four-file fixture, and the Challenger concluded the code was
+	// unreachable — no artifact stated the disagreement, so nothing could
+	// detect it. See BUG-002 §3.2.
+	Scope        ScannedScope      `json:"scope,omitempty"`
+	CreatedAt    string            `json:"created_at"`
+	ToolVersions map[string]string `json:"tool_versions,omitempty"`
+	Metadata     map[string]any    `json:"metadata,omitempty"`
+}
+
+// ScannedScope identifies the source tree a run actually read.
+//
+// Hash is derived from the repository identity and the file count rather
+// than from the root path: the root lives under the run directory and
+// therefore differs between two runs of the same revision, which would make
+// every comparison fail. What it does detect is the case that matters — two
+// stages reading trees that hold different amounts of code. It cannot detect
+// two trees with the same identity and the same file count but different
+// bytes; a stage that needs that guarantee must compare content itself.
+type ScannedScope struct {
+	RepoURL   string `json:"repo_url,omitempty"`
+	Commit    string `json:"commit,omitempty"`
+	Root      string `json:"root,omitempty"`
+	FileCount int    `json:"file_count,omitempty"`
+	Hash      string `json:"hash,omitempty"`
 }
 
 type RepoMap struct {
@@ -133,17 +165,6 @@ type PromptSnippet struct {
 	StartLine int    `json:"start_line"`
 	EndLine   int    `json:"end_line"`
 	Content   string `json:"content"`
-}
-
-type ProjectProfile struct {
-	SchemaVersion  string   `json:"schema_version"`
-	RunID          string   `json:"run_id"`
-	Repo           RepoRef  `json:"repo"`
-	Languages      []string `json:"languages,omitempty"`
-	FrameworkHints []string `json:"framework_hints,omitempty"`
-	TopLevelDirs   []string `json:"top_level_dirs,omitempty"`
-	SensitivePaths []string `json:"sensitive_paths,omitempty"`
-	Notes          []string `json:"notes,omitempty"`
 }
 
 type KnowledgeHint struct {
@@ -525,8 +546,25 @@ type RoundAction struct {
 }
 
 type RoundObservation struct {
-	Name       string `json:"name"`
-	OK         bool   `json:"ok"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Ref names this one observation: obs:<sample>:<round>:<index>:<hash>.
+	// It is what a downstream claim cites when it says where it looked. A
+	// reason that cites nothing is free text shaped like a citation, and an
+	// audit lead built on one is BUG-003 §3.3 with extra steps.
+	Ref string `json:"ref,omitempty"`
+	// OutputBlob resolves to the UNTRUNCATED body in the blob store. Output
+	// below is an excerpt; when the two differ, Truncated says so and this is
+	// where the rest lives.
+	OutputBlob string `json:"output_blob,omitempty"`
+	// ActionIndex is the position within the round's action list. Round alone
+	// does not identify an observation — a round runs up to MaxActionsPerRound
+	// of them.
+	ActionIndex int `json:"action_index"`
+	// Phase is the planner phase this observation was made in. Narrative
+	// only; it is deliberately absent from Ref, because two --samples passes
+	// both walk both phases and a ref built from the phase would collide.
+	Phase      string `json:"phase,omitempty"`
 	Output     string `json:"output,omitempty"`
 	Error      string `json:"error,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`

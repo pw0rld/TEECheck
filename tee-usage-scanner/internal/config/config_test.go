@@ -106,3 +106,24 @@ func TestParse_DefaultLLMTimeoutFitsReasoningModels(t *testing.T) {
 		t.Fatalf("default LLM timeout = %ds, want >= 300s", cfg.LLMTimeoutSec)
 	}
 }
+
+// The dialog budget has an empirical floor. At 3 — and shared across every
+// stage before the quota became per-asking-agent — run 44362-vuln-p8's
+// arbiter reported "dialog round limit (3) reached" and closed the finding
+// with the rollback question unasked, because the verifier had already spent
+// the budget once scanner-001 started answering. Lowering this silently
+// re-creates that.
+func TestParse_DialogBudgetIsNotBackAtThree(t *testing.T) {
+	if DefaultMaxDialogRounds < 10 {
+		t.Fatalf("DefaultMaxDialogRounds = %d; 3 was measured to starve the arbiter of "+
+			"its follow-up questions once the tool-backed agent worked", DefaultMaxDialogRounds)
+	}
+	cfg, err := Parse([]string{"run", "/tmp/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxDialogRounds != DefaultMaxDialogRounds {
+		t.Fatalf("cfg.MaxDialogRounds = %d, want the package default %d",
+			cfg.MaxDialogRounds, DefaultMaxDialogRounds)
+	}
+}

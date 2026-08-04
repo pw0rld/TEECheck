@@ -46,7 +46,7 @@ func TestRun_UnsupportedRepository(t *testing.T) {
 		RunDir: t.TempDir(), Repository: "https://example.com/unregistered", Commit: "abc",
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run returned a Go error for a domain-level outcome: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRun_UnsupportedOperation(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: "no-such-operation", QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestRun_EngineUnavailable(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestRun_DatabaseBuildFailure(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRun_AnalyzeFailure(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestRun_MaterializeFailureIsError(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: "does-not-exist",
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -172,14 +172,23 @@ func TestRun_Success_VulnerableFindsLocations(t *testing.T) {
 	eng := &fakeEngine{
 		available: true,
 		analyzeResults: []codeql.Result{
-			{RuleID: "teecheck/trustir-cpp/twe-state-001", Path: "core/crypto/signed_hdr.c", StartLine: 262, EndLine: 262},
+			{
+				RuleID:    "teecheck/trustir-cpp/twe-state-001",
+				Message:   "TWE-STATE-001: producer never propagates rollback field 'version'; authority therefore checks a default version.",
+				Path:      "core/crypto/signed_hdr.c",
+				StartLine: 262, EndLine: 262,
+				Related: []codeql.RelatedLocation{
+					{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+					{Path: "core/kernel/ree_fs_ta.c", StartLine: 639, Symbol: "check_update_version"},
+				},
+			},
 		},
 	}
 	req := Request{
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -188,6 +197,20 @@ func TestRun_Success_VulnerableFindsLocations(t *testing.T) {
 	}
 	if len(fact.Locations) != 1 || fact.Locations[0].Path != "core/crypto/signed_hdr.c" {
 		t.Errorf("Locations = %+v, want the flagged producer's location", fact.Locations)
+	}
+	// The query's conclusion and the sites it names must land on the fact.
+	// Keeping only Locations is what left five agent prompts with a line
+	// number and no mention of check_update_version at all.
+	if len(fact.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want the analyze result's message carried through", fact.Findings)
+	}
+	if fact.Findings[0].Message == "" {
+		t.Error("the message is the query's answer; it must reach the fact")
+	}
+	if len(fact.Findings[0].Related) != 2 {
+		t.Errorf("Related = %+v, want both named sites", fact.Findings[0].Related)
+	} else if fact.Findings[0].Related[1].Symbol != "check_update_version" {
+		t.Errorf("Related[1] = %+v, want the authority call site", fact.Findings[0].Related[1])
 	}
 	if fact.ArtifactRef == "" {
 		t.Error("expected ArtifactRef to point at the built database (§23.3: visible run-directory artifact)")
@@ -219,7 +242,7 @@ func TestRun_Success_FixedIsCleanNotError(t *testing.T) {
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, err := Run(context.Background(), eng, req)
+	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -248,11 +271,11 @@ func TestRun_DatabaseBuiltOnceAcrossCalls(t *testing.T) {
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
 
-	first, err := Run(context.Background(), eng, req)
+	first, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	second, err := Run(context.Background(), eng, req)
+	second, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -279,7 +302,7 @@ func TestRun_DatabaseBuiltOnceAcrossCalls(t *testing.T) {
 
 func TestRun_RequestValidationIsAGoError(t *testing.T) {
 	eng := &fakeEngine{available: true}
-	_, err := Run(context.Background(), eng, Request{})
+	_, err := Run(context.Background(), eng, newTestDB(eng), Request{})
 	if err == nil {
 		t.Fatal("an invalid Request must be a Go error, not a fact with a status")
 	}
@@ -299,7 +322,7 @@ func TestRunAndPersist_WritesFactToRunDir(t *testing.T) {
 		RunDir: runDir, Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
-	fact, path, err := RunAndPersist(context.Background(), eng, req)
+	fact, path, err := RunAndPersist(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("RunAndPersist: %v", err)
 	}

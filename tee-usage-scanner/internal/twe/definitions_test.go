@@ -10,7 +10,6 @@ const validDefinitionCatalog = `twe:
   - id: TWE-BIND-001
     family: Binding
     name: Unbound Attested Subject Authority
-    query_modules: [binding/MissingSubjectBinding.ql]
     required_trustir: [claim_field, authority_subject]
 `
 
@@ -41,15 +40,14 @@ func TestLoadDefinitionsValid(t *testing.T) {
 func TestLoadDefinitionsRejects(t *testing.T) {
 	cases := map[string]string{
 		"empty catalog":       `twe: []`,
-		"missing id":          "twe:\n  - family: Binding\n    name: X\n    query_modules: [m.ql]\n    required_trustir: [r]\n",
-		"bad id format":       "twe:\n  - id: bind-001\n    family: Binding\n    name: X\n    query_modules: [m.ql]\n    required_trustir: [r]\n",
-		"bad family":          "twe:\n  - id: TWE-X-001\n    family: Nope\n    name: X\n    query_modules: [m.ql]\n    required_trustir: [r]\n",
-		"missing name":        "twe:\n  - id: TWE-X-001\n    family: Binding\n    query_modules: [m.ql]\n    required_trustir: [r]\n",
-		"no query modules":    "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    query_modules: []\n    required_trustir: [r]\n",
-		"no required trustir": "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    query_modules: [m.ql]\n    required_trustir: []\n",
-		"duplicate role":      "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    query_modules: [m.ql]\n    required_trustir: [r, r]\n",
-		"duplicate id":        "twe:\n  - {id: TWE-X-001, family: Binding, name: X, query_modules: [m.ql], required_trustir: [r]}\n  - {id: TWE-X-001, family: Binding, name: Y, query_modules: [m.ql], required_trustir: [r]}\n",
-		"unknown field":       "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    query_modules: [m.ql]\n    required_trustir: [r]\n    bogus: 1\n",
+		"missing id":          "twe:\n  - family: Binding\n    name: X\n    required_trustir: [r]\n",
+		"bad id format":       "twe:\n  - id: bind-001\n    family: Binding\n    name: X\n    required_trustir: [r]\n",
+		"bad family":          "twe:\n  - id: TWE-X-001\n    family: Nope\n    name: X\n    required_trustir: [r]\n",
+		"missing name":        "twe:\n  - id: TWE-X-001\n    family: Binding\n    required_trustir: [r]\n",
+		"no required trustir": "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    required_trustir: []\n",
+		"duplicate role":      "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    required_trustir: [r, r]\n",
+		"duplicate id":        "twe:\n  - {id: TWE-X-001, family: Binding, name: X, required_trustir: [r]}\n  - {id: TWE-X-001, family: Binding, name: Y, required_trustir: [r]}\n",
+		"unknown field":       "twe:\n  - id: TWE-X-001\n    family: Binding\n    name: X\n    required_trustir: [r]\n    bogus: 1\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

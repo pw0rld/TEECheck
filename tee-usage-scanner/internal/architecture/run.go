@@ -14,20 +14,14 @@ import (
 )
 
 // Run is the standalone entry point for the Architecture Agent stage: it
-// reads the ProjectProfileV2 and compiled TWE prior-knowledge context a
-// prior preprocessor.Run already wrote to runDir, builds an
-// ArchitectureModel via the injected client, runs it through the citation
-// validator and coverage guard, schema-validates the result, and persists
-// both the JSON model and its derived Markdown dossier.
+// reads the compiled TWE prior-knowledge context a prior preprocessor.Run
+// already wrote to runDir, builds an ArchitectureModel via the injected
+// client, runs it through the citation validator, schema-validates the
+// result, and persists both the JSON model and its derived Markdown dossier.
 func Run(cfg config.Config, client llm.Client) error {
 	manifest, err := runfs.LoadManifest(cfg.RunDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
-	}
-
-	var profile artifacts.ProjectProfileV2
-	if err := runfs.ReadJSON(runfs.ContextProjectProfilePath(cfg.RunDir), &profile); err != nil {
-		return fmt.Errorf("load project profile v2: %w", err)
 	}
 
 	// The TWE agent context is compiled once by preprocessor.Run and
@@ -46,7 +40,6 @@ func Run(cfg config.Config, client llm.Client) error {
 		RunID:      manifest.RunID,
 		Repo:       artifacts.RepoRef{URL: manifest.RepoURL, Commit: manifest.Commit, Focus: manifest.Focus},
 		RepoRoot:   manifest.LocalPath,
-		Profile:    profile,
 		TWEContext: tweContext,
 	}
 
@@ -59,7 +52,6 @@ func Run(cfg config.Config, client llm.Client) error {
 	model.Repo = in.Repo
 
 	model, enumAdjustments := NormalizeStates(model)
-	model = ApplyCoverageGuards(model, profile)
 	model, citationAdjustments := ValidateAndDowngrade(model, manifest.LocalPath)
 	adjustments := append(enumAdjustments, citationAdjustments...)
 

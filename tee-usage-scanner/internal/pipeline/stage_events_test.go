@@ -72,6 +72,8 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 	// the invisible ones.
 	wantStages := []string{
 		"preprocess",
+		"repo_index",
+		"project_map",
 		"architecture",
 		"invariants",
 		"l3_planner",

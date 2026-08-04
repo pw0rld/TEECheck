@@ -1,7 +1,7 @@
 // Package schema binds the eight canonical TEECheck data contracts (§9 of
 // the merge design) to their JSON Schema definitions and provides the one
 // runtime gate LLM-produced or otherwise untrusted JSON must pass before the
-// rest of the Go pipeline treats it as a ProjectProfile, ArchitectureModel,
+// rest of the Go pipeline treats it as an ArchitectureModel,
 // ProjectInvariant, TWEKnowledgeManifest, TWEPlaybook, ToolFact,
 // TWEInvestigation, or UnifiedFinding.
 //
@@ -31,13 +31,14 @@ import (
 //go:embed schemas/*.json
 var embedded embed.FS
 
-// Name identifies one of the eight canonical contracts by its schema file
+// Name identifies one of the canonical contracts by its schema file
 // basename (without the .json extension).
 type Name string
 
 const (
-	ProjectProfileV2       Name = "project-profile.v2"
 	ArchitectureV1         Name = "architecture.v1"
+	RepoFactsV1            Name = "repo-facts.v1"
+	ProjectMapV1           Name = "project-map.v1"
 	ProjectInvariantV1     Name = "project-invariant.v1"
 	TWEKnowledgeManifestV1 Name = "twe-knowledge-manifest.v1"
 	TWEPlaybookV1          Name = "twe-playbook.v1"
@@ -47,11 +48,12 @@ const (
 )
 
 // All lists every canonical schema name this package compiles and validates
-// against. Keep in sync with the eight schema files under schemas/ — a
-// mismatch is caught by TestEmbeddedSchemasMatchCanonical.
+// against. Keep in sync with the schema files under schemas/ — a mismatch is
+// caught by TestEmbeddedSchemasMatchCanonical.
 var All = []Name{
-	ProjectProfileV2,
 	ArchitectureV1,
+	RepoFactsV1,
+	ProjectMapV1,
 	ProjectInvariantV1,
 	TWEKnowledgeManifestV1,
 	TWEPlaybookV1,

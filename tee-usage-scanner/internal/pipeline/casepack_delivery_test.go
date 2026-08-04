@@ -195,7 +195,7 @@ func TestCasePacksReachDownstreamGlob(t *testing.T) {
 		KnowledgeRoot: knowledgeRoot,
 		Samples:       1,
 	}
-	if err := runL3Planner(cfg, client, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
 	}
 

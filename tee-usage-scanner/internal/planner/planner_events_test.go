@@ -77,7 +77,7 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 		RunID:       "test-events",
 		RepoRoot:    repoRoot,
 		RunDir:      runDir,
-		Profile:     planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Profile:     planner.PromptProfile{Focus: "tee"},
 		Client:      client,
 		Registry:    reg,
 		Budget:      defaultTestBudget(),
@@ -108,20 +108,28 @@ func TestPlannerRun_EmitsTypedEvents(t *testing.T) {
 	}
 
 	// Verify the expected event sequence for a 2-round happy path.
-	// Round 1: round_started, llm_started, llm_completed, tool_started, tool_completed, round_completed
+	// Round 1: round_started, llm_started, llm_completed, tool_started,
+	//          tool_completed, observation_recorded, round_completed
 	// Round 2: same shape but with done as the tool — done emits started/completed too.
+	//
+	// observation_recorded comes AFTER tool_call_completed and not instead of
+	// it: the ref is derived from the output body, so it cannot exist before
+	// the action returns, and for an executor-backed action the executor has
+	// already written tool_call_completed by then.
 	wantTypes := []string{
 		events.TypePlannerRoundStarted,
 		events.TypeLLMCallStarted,
 		events.TypeLLMCallCompleted,
 		events.TypeToolCallStarted,
 		events.TypeToolCallCompleted,
+		events.TypePlannerObservationRecorded,
 		events.TypePlannerRoundCompleted,
 		events.TypePlannerRoundStarted,
 		events.TypeLLMCallStarted,
 		events.TypeLLMCallCompleted,
 		events.TypeToolCallStarted,
 		events.TypeToolCallCompleted,
+		events.TypePlannerObservationRecorded,
 		events.TypePlannerRoundCompleted,
 	}
 	gotTypes := eventTypes(es)
@@ -274,7 +282,7 @@ func TestPlannerRun_RipgrepNoMatchSurfacesExitCodeInEvent(t *testing.T) {
 		RunID:    "test-no-match",
 		RepoRoot: repoRoot,
 		RunDir:   runDir,
-		Profile:  planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Profile:  planner.PromptProfile{Focus: "tee"},
 		Client:   client,
 		Registry: reg,
 		Budget:   defaultTestBudget(),
@@ -330,7 +338,7 @@ func TestPlannerRun_RipgrepFailsCleanlyWhenExecutorMissing(t *testing.T) {
 		RunID:       "test-no-exec",
 		RepoRoot:    repoRoot,
 		RunDir:      runDir,
-		Profile:     planner.PromptProfile{Focus: "tee", Languages: []string{"rust"}},
+		Profile:     planner.PromptProfile{Focus: "tee"},
 		Client:      client,
 		Registry:    reg,
 		Budget:      defaultTestBudget(),

@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 )
 
 func TestBuildSystemPrompt_MentionsActions(t *testing.T) {
 	available := []string{"list_dir", "read_file", "ripgrep", "tree_sitter_outline", "reverse_trace", "done"}
-	prompt := planner.BuildSystemPrompt(available, "", planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt(available, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 
 	for _, name := range available {
 		if !strings.Contains(prompt, name) {
@@ -22,7 +23,7 @@ func TestBuildSystemPrompt_MentionsActions(t *testing.T) {
 
 func TestBuildSystemPrompt_InjectsObligations(t *testing.T) {
 	block := "### attestation-identity-verification\nQuote and report verification."
-	prompt := planner.BuildSystemPrompt([]string{"done"}, block, planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt([]string{"done"}, block, planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	if !strings.Contains(prompt, "SECURITY OBLIGATIONS") {
 		t.Error("obligations header missing when block is non-empty")
 	}
@@ -32,14 +33,14 @@ func TestBuildSystemPrompt_InjectsObligations(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_SkipsObligationsWhenEmpty(t *testing.T) {
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	if strings.Contains(prompt, "SECURITY OBLIGATIONS") {
 		t.Error("obligations header should not appear when block is empty")
 	}
 }
 
 func TestBuildSystemPrompt_ExplainsResponseFormat(t *testing.T) {
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	if !strings.Contains(prompt, "thought") {
 		t.Error("system prompt missing 'thought' field instruction")
 	}
@@ -56,21 +57,17 @@ func TestBuildRoundPrompt_IncludesProfile(t *testing.T) {
 	budget := planner.NewDefaultBudget()
 	budget.Start()
 	profile := planner.PromptProfile{
-		RepoURL:        "https://github.com/example/foo",
-		Languages:      []string{"rust"},
-		FrameworkHints: []string{"sgx"},
-		FileCount:      1234,
+		RepoURL:   "https://github.com/example/foo",
+		Commit:    "a9386bf987d9",
+		Focus:     "tee",
+		FileCount: 1234,
 	}
 
 	prompt := planner.BuildRoundPrompt(state, profile, budget, nil)
-	if !strings.Contains(prompt, "rust") {
-		t.Error("round prompt missing language")
-	}
-	if !strings.Contains(prompt, "sgx") {
-		t.Error("round prompt missing framework hint")
-	}
-	if !strings.Contains(prompt, "1234") {
-		t.Error("round prompt missing file count")
+	for _, want := range []string{"https://github.com/example/foo", "a9386bf987d9", "tee", "1234"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("round prompt missing %q", want)
+		}
 	}
 }
 
@@ -114,6 +111,85 @@ func TestBuildRoundPrompt_IncludesRecentObservations(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "read_file") {
 		t.Error("round prompt missing recent action name")
+	}
+}
+
+// The page the browsing actions build to observationlimits.MaxBytes has to
+// reach the model at that size. Before this, every observation was cut to
+// 1500 bytes on the way into the prompt, so the 32 KiB budget bought
+// nothing: a page sized for one limit arrived under another, and the model
+// had no way to know it was reading a fraction.
+func TestBuildRoundPrompt_TheNewestRoundsObservationArrivesWhole(t *testing.T) {
+	page := strings.Repeat("x", observationlimits.MaxBytes-len("THE_LAST_CARD")) + "THE_LAST_CARD"
+
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "list_functions", OK: true, Ref: "obs:0:1:0:aaa", Output: page},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if !strings.Contains(prompt, "THE_LAST_CARD") {
+		t.Errorf("a %d-byte page was cut on the way into the prompt", len(page))
+	}
+}
+
+// A round that has scrolled back is context rather than the thing being
+// reasoned about, and two full pages per round is more prompt than the
+// reasoning they support. Cutting it is fine; cutting it silently is not —
+// the marker has to say how much went and how to get it back.
+func TestBuildRoundPrompt_AScrolledBackObservationSaysWhatItDropped(t *testing.T) {
+	page := strings.Repeat("x", observationlimits.MaxBytes-len("THE_LAST_CARD")) + "THE_LAST_CARD"
+
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "list_functions", OK: true, Ref: "obs:0:1:0:aaa", Output: page},
+		},
+	})
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 2,
+		Observations: []artifacts.RoundObservation{
+			{Name: "read_file", OK: true, Ref: "obs:0:2:0:bbb", Output: "1: fn verify_quote() {}"},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	if strings.Contains(prompt, "THE_LAST_CARD") {
+		t.Error("round 1 is no longer the newest round; rendering it whole doubles the prompt")
+	}
+	if !strings.Contains(prompt, "scrollback") {
+		t.Error("a dropped tail must say it was dropped — a bare cut reads as the whole answer")
+	}
+	if !strings.Contains(prompt, "re-run this action") {
+		t.Error("the marker must say how to get the rest back")
+	}
+	// Round 2 is the newest and must still arrive intact.
+	if !strings.Contains(prompt, "verify_quote") {
+		t.Error("the newest round's observation was cut")
+	}
+}
+
+// reason_fact_refs can only cite what the model was shown. A ref that never
+// reaches the prompt can only be invented.
+func TestBuildRoundPrompt_RendersEachObservationsRef(t *testing.T) {
+	state := planner.NewState("run-001")
+	state.AppendRound(artifacts.RoundRecord{
+		Round: 1,
+		Observations: []artifacts.RoundObservation{
+			{Name: "get_callers", OK: true, Ref: "obs:0:1:0:c0ffee123456", Output: "callers: none"},
+			{Name: "get_function_card", OK: false, Ref: "obs:0:1:1:deadbeef0000", Error: "unknown symbol_id"},
+		},
+	})
+
+	prompt := planner.BuildRoundPrompt(state, planner.PromptProfile{}, planner.NewDefaultBudget(), nil)
+	for _, ref := range []string{"obs:0:1:0:c0ffee123456", "obs:0:1:1:deadbeef0000"} {
+		if !strings.Contains(prompt, ref) {
+			t.Errorf("ref %s never reaches the model, so nothing can cite it", ref)
+		}
 	}
 }
 
@@ -212,58 +288,74 @@ func TestPlannerState_AddPlaybookDetailDedupesByID(t *testing.T) {
 	}
 }
 
-// ─── §7.5/§24: TWE/Architecture/Invariant prior-knowledge injection ──────
+// ─── Pass A / Pass B prior knowledge ────────────────────────────────────
 
-func TestBuildSystemPrompt_InjectsTWEContext(t *testing.T) {
+func TestBuildSystemPrompt_InjectsTWEContextWhileInvestigating(t *testing.T) {
 	knowledge := planner.PriorKnowledge{TWEText: "[TWE-STATE-001] Trusted State Rollback | family=State\n"}
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", knowledge)
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "", knowledge, planner.PhaseInvestigation)
 	if !strings.Contains(prompt, "TWE-STATE-001") {
-		t.Error("system prompt missing injected TWE context")
+		t.Error("the investigation prompt is missing the injected TWE context")
 	}
 	if !strings.Contains(prompt, "TWE PRIOR KNOWLEDGE") {
-		t.Error("system prompt missing TWE prior-knowledge header")
+		t.Error("the investigation prompt is missing the TWE prior-knowledge header")
 	}
 }
 
-func TestBuildSystemPrompt_InjectsArchitectureSlice(t *testing.T) {
-	model := &artifacts.ArchitectureModel{
-		Components: []artifacts.ArchitectureElement{
-			{ID: "comp:loader", Kind: "component", Name: "TA loader", State: artifacts.EvidenceObserved},
-		},
+// Pass A is project-first. On run-b the planner's first two actions were
+// twe_playbook_detail calls, because the catalog sat at the top of its
+// prompt — an agent looks for what it was shown.
+func TestBuildSystemPrompt_ReconnaissanceCarriesNoPriorKnowledge(t *testing.T) {
+	knowledge := planner.PriorKnowledge{TWEText: "[TWE-STATE-001] Trusted State Rollback | family=State\n"}
+	prompt := planner.BuildSystemPrompt(
+		[]string{"get_repository_card", "done"}, "obligations wiki text", knowledge,
+		planner.PhaseReconnaissance)
+
+	for _, banned := range []string{"TWE-STATE-001", "TWE PRIOR KNOWLEDGE", "obligations wiki text",
+		"SECURITY OBLIGATIONS", "TWE-guided"} {
+		if strings.Contains(prompt, banned) {
+			t.Errorf("the reconnaissance prompt carries %q", banned)
+		}
 	}
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{Architecture: model})
-	if !strings.Contains(prompt, "comp:loader") {
-		t.Error("system prompt missing architecture element id")
-	}
-	if !strings.Contains(prompt, "ARCHITECTURE MODEL") {
-		t.Error("system prompt missing architecture header")
+	if !strings.Contains(prompt, "understand THIS project from its own code") {
+		t.Error("the reconnaissance prompt does not say what the phase is for")
 	}
 }
 
-func TestBuildSystemPrompt_InjectsProjectInvariants(t *testing.T) {
-	invs := []artifacts.ProjectInvariant{{
-		InvariantID: "INV-STATE-001",
-		Statement:   "subkey_version must propagate to check_update_version",
-		RelatedTWEs: []string{"TWE-STATE-001"},
-	}}
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{Invariants: invs})
-	if !strings.Contains(prompt, "INV-STATE-001") {
-		t.Error("system prompt missing invariant id")
-	}
-	if !strings.Contains(prompt, "check_update_version") {
-		t.Error("system prompt missing invariant statement")
-	}
-	if !strings.Contains(prompt, "PROJECT INVARIANTS") {
-		t.Error("system prompt missing invariants header")
+// The Architecture Model and the Project Invariants are gone from BOTH
+// phases. BUG-003 is the chain they enabled: a keyword match became a
+// freshness candidate, became an architecture asset, became an invariant
+// anchored at a line nobody had read — and the Planner, handed that
+// invariant at the top of its prompt, verified it instead of reading the
+// project.
+func TestBuildSystemPrompt_NeitherPhaseCarriesArchitectureOrInvariants(t *testing.T) {
+	for _, phase := range []string{planner.PhaseReconnaissance, planner.PhaseInvestigation} {
+		prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{}, phase)
+		for _, header := range []string{"ARCHITECTURE MODEL", "PROJECT INVARIANTS"} {
+			if strings.Contains(prompt, header) {
+				t.Errorf("the %s prompt still renders %q", phase, header)
+			}
+		}
 	}
 }
 
 func TestBuildSystemPrompt_SkipsPriorKnowledgeSectionsWhenEmpty(t *testing.T) {
-	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{})
-	for _, header := range []string{"TWE PRIOR KNOWLEDGE", "ARCHITECTURE MODEL", "PROJECT INVARIANTS"} {
-		if strings.Contains(prompt, header) {
-			t.Errorf("prompt should not contain %q when PriorKnowledge is empty", header)
-		}
+	prompt := planner.BuildSystemPrompt([]string{"done"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
+	if strings.Contains(prompt, "TWE PRIOR KNOWLEDGE") {
+		t.Error("prompt should not contain a TWE header when PriorKnowledge is empty")
+	}
+}
+
+// A ref the model never reads is a ref it can only invent, so the rule that
+// a reason must carry one has to be stated where the model sees it.
+func TestBuildSystemPrompt_DocumentsOpenAuditLead(t *testing.T) {
+	prompt := planner.BuildSystemPrompt(
+		[]string{"open_audit_lead", "done"}, "", planner.PriorKnowledge{},
+		planner.PhaseReconnaissance)
+	if !strings.Contains(prompt, "reason_fact_refs") {
+		t.Error("open_audit_lead's schema never mentions reason_fact_refs")
+	}
+	if !strings.Contains(prompt, "ref=obs:") {
+		t.Error("the prompt never tells the model where a ref comes from")
 	}
 }
 
@@ -273,7 +365,7 @@ func TestBuildSystemPrompt_SkipsPriorKnowledgeSectionsWhenEmpty(t *testing.T) {
 // assertion: the rule must be stated explicitly, every run, regardless of
 // PriorKnowledge content.
 func TestBuildSystemPrompt_MissingRoleIsATaskNotAConclusion(t *testing.T) {
-	prompt := planner.BuildSystemPrompt([]string{"done", "fact_layer_query"}, "", planner.PriorKnowledge{})
+	prompt := planner.BuildSystemPrompt([]string{"done", "fact_layer_query"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	if !strings.Contains(prompt, "NEXT INVESTIGATIVE TASK") {
 		t.Error("system prompt must state that a missing role is the next task, not a conclusion")
 	}
@@ -328,7 +420,7 @@ func TestBuildRoundPrompt_OmitsInvestigationsHeaderWhenEmpty(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_DocumentsPlaybookDetailAction(t *testing.T) {
-	out := planner.BuildSystemPrompt([]string{"ripgrep", "twe_playbook_detail", "done"}, "", planner.PriorKnowledge{})
+	out := planner.BuildSystemPrompt([]string{"ripgrep", "twe_playbook_detail", "done"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	// Verify the action name appears
 	if !strings.Contains(out, "twe_playbook_detail") {
 		t.Error("system prompt must document the twe_playbook_detail action")
@@ -346,7 +438,7 @@ func TestBuildSystemPrompt_DocumentsPlaybookDetailAction(t *testing.T) {
 // (sink_catalog_lookup) or a single language (*.rs, Cargo). It must instead
 // point the planner at TWE/invariant-driven investigation.
 func TestBuildSystemPrompt_Deanchored(t *testing.T) {
-	out := planner.BuildSystemPrompt([]string{"ripgrep", "tree_sitter_outline", "done"}, "", planner.PriorKnowledge{})
+	out := planner.BuildSystemPrompt([]string{"ripgrep", "tree_sitter_outline", "done"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 	for _, banned := range []string{"sink_catalog_lookup", `globs=["*.rs"]`, "Cargo", "*.rs"} {
 		if strings.Contains(out, banned) {
 			t.Errorf("system prompt still contains anchoring text %q", banned)
@@ -369,7 +461,7 @@ func TestBuildSystemPrompt_Deanchored(t *testing.T) {
 // action at all, never mentioning the fact layer in eight rounds.
 func TestBuildSystemPrompt_EnumeratesFactLayerOperations(t *testing.T) {
 	prompt := planner.BuildSystemPrompt(
-		[]string{"fact_layer_query", "read_file"}, "", planner.PriorKnowledge{})
+		[]string{"fact_layer_query", "read_file"}, "", planner.PriorKnowledge{}, planner.PhaseInvestigation)
 
 	ops := trustirfacts.SupportedOperationStrings()
 	if len(ops) == 0 {

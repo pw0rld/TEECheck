@@ -14,6 +14,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/cases"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/challenger"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
@@ -25,7 +26,9 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/projectmap"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repofetch"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repoindex"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/staticcheck"
@@ -140,6 +143,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		runID = manifest.RunID
 	}
 	_ = rec.Emit(events.RunStarted(runID, cfg.Target, cfg.Mode, cfg.Focus))
+	_ = rec.Emit(events.RunConfig(runID, processCommand()))
 	defer func() {
 		reason := "completed"
 		errMsg := ""
@@ -194,8 +198,74 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// be traced to a stage is noise.
 	exec := &executor.LocalExecutor{Recorder: rec, Blobs: blobs}
 
+	// Acquire the tree the whole run reads, before the first stage. See
+	// acquireSourceScope: every stage from here on resolves paths against
+	// this one root, so the models, the tools and the fact layer describe
+	// the same revision.
+	// One database manager for the whole run, and two engines bound to the
+	// agents whose work they do.
+	//
+	// Engine and provider are peer dependencies: an engine runs queries, the
+	// manager owns the database's and the checkout's lifecycle. Threading
+	// one manager to every consumer is what makes "built once per run" a
+	// property of the wiring rather than a coincidence — before
+	// internal/codedb a second consumer could only have built a second
+	// database (91 seconds and 322 MB, twice) or reimplemented the path
+	// derivation and drifted from it.
+	//
+	// The two engines differ only in which agent their subprocess events are
+	// attributed to. Acquiring and extracting the repository is the index
+	// stage's work; querying the fact layer is the planner's. Attributing
+	// the 91-second extraction to a planner round — which is what happened
+	// while the build lived in the planner's first round — makes the
+	// planner's own cost unreadable.
+	indexEng := codeql.New()
+	indexEng.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent})
+	codeDB := codedb.New(indexEng,
+		executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent}))
+
+	srcRoot, pinned := acquireSourceScope(context.Background(), codeDB,
+		runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
+	scopeReason := "target directory; no pinned checkout"
+	if pinned {
+		scopeReason = fmt.Sprintf("pinned checkout of %s@%s", cfg.RepoURL, truncate(cfg.Commit, 12))
+	}
+	fmt.Printf("Source scope: %s (%s)\n", srcRoot, scopeReason)
+	_ = rec.Emit(events.SourceScopeResolved(runID, srcRoot, scopeReason))
+	stageCfg.LocalPath = srcRoot
+	// The manifest is the run's single statement of what was scanned, and
+	// most stages read the tree from it rather than from their own config:
+	// preprocess walks manifest.LocalPath, and invariants, expert and
+	// verifier resolve every citation against it. Leaving it at the target
+	// directory while the tools read the checkout would put the two scopes
+	// back — the same split BUG-002 is about, only harder to see because
+	// nothing would print it. runinit writes the manifest before this point
+	// (the checkout needs the run directory to live in), so it is corrected
+	// here rather than pre-computed.
+	if err := recordScannedRoot(runDir, srcRoot); err != nil {
+		return runDir, fmt.Errorf("record scanned root: %w", err)
+	}
+
 	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
 		return "", fmt.Errorf("preprocess: %w", err)
+	}
+
+	// 01A / 01B: the deterministic whole-repo program index, and the neutral
+	// navigation view derived from it. They run before architecture because
+	// architecture consumes the map, and before the planner because the
+	// planner browses it.
+	//
+	// The CodeQL database is built here, once. It used to be built inside
+	// the planner's first round: 91.6 seconds of the planner's own budget
+	// spent on infrastructure, and invisible as such because it arrived as a
+	// round-0 tool call.
+	if err := stage("repo_index", func() error {
+		return repoindex.Run(stageCfg, codeDB, indexEng)
+	}); err != nil {
+		return runDir, fmt.Errorf("repo index: %w", err)
+	}
+	if err := stage("project_map", func() error { return projectmap.Run(stageCfg) }); err != nil {
+		return runDir, fmt.Errorf("project map: %w", err)
 	}
 
 	// Project Understanding Layer (§3.4): the Architecture model and Project
@@ -227,7 +297,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(stageCfg, client, fetch.LocalPath, runDir, rec, blobs, exec)
+		return runL3Planner(stageCfg, client, codeDB, srcRoot, runDir, rec, blobs, exec)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -253,6 +323,14 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	fmt.Println("\n=== Reviewer Agent ===")
 
 	bus := buildPipelineBus(cfg, forAgent)
+	// Refused inter-agent queries become events. Without this the arbiter's
+	// own stated reason for capping a finding at needs_review — "follow-up
+	// queries failed (agents unavailable)" — appears nowhere in the run
+	// record; it survived only inside an LLM prompt blob.
+	bus.SetRecorder(rec, runID)
+	// Somewhere to keep the full body of an answer the bus had to cap, so the
+	// preview notice in the prompt names a location a reader can open.
+	bus.SetBlobs(blobs)
 
 	// Bus tool registrations stay under TOOL identities; they
 	// represent capability endpoints (a static-check tool, a
@@ -264,23 +342,60 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// agent as the query that provoked it.
 	scReg := scall.NewDefaultRegistryWithExecutor(executor.Bind(exec,
 		executor.Binding{RunID: runID, Agent: "scanner-001"}))
+	// The CodeQL adapter needs a prebuilt database and a query set — this run
+	// built one during l3_planner's fact-layer prefetch, and without wiring it
+	// through, scanner-001 answered every query with "a prebuilt database is
+	// required" while the database sat in the same run directory. On
+	// 2026-08-01 both of the arbiter's queries to it failed that way and it
+	// fell back to an agent with no tools at all.
+	scannerExtra := map[string]string{}
+	if db := findBuiltCodeQLDB(runDir); db != "" {
+		scannerExtra["database"] = db
+		scannerExtra["queries"] = filepath.Join(filepath.Dir(cfg.KnowledgeRoot), "codeql", "trustir", "cpp")
+	}
+	// The one tool-backed bus agent searches the same pinned checkout the
+	// planner reads and the facts came from, when the fact layer produced
+	// one. Pointed at the scanned directory it could only ever answer about
+	// the fixture: on 2026-08-01 the verifier asked it eight times for
+	// signed_hdr.h and for callers of shdr_verify_signature, and eight times
+	// it returned the lines of core/crypto/signed_hdr.c — the only file it
+	// could see. See BUG-002 §3.2.
+	scannerRoot := srcRoot
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
-		req := staticcheck.CheckRequest{
-			RepoRoot: fetch.LocalPath,
-			Keywords: strings.Fields(q.Question),
+		// Search for what the question names, not for every word in it. See
+		// searchTerms: strings.Fields put "the" and "of" into the keyword
+		// list, which matched most of the checkout.
+		terms := searchTerms(q.Question)
+		if len(terms) == 0 {
+			return agentbus.Response{
+				QueryID:   q.QueryID,
+				FromAgent: "scanner-001",
+				Answer:    noSearchableTerm,
+			}, nil
 		}
+		req := staticcheck.CheckRequest{
+			RepoRoot:  scannerRoot,
+			Keywords:  terms,
+			ExtraArgs: scannerExtra,
+		}
+		// A partial result is still a result: RunAll now reports every
+		// adapter failure while keeping what the working ones found.
 		findings, runErr := scReg.RunAll(ctx, req)
-		if runErr != nil {
+		if runErr != nil && len(findings) == 0 {
 			return agentbus.Response{}, runErr
 		}
 		var facts []string
 		for _, f := range findings {
 			facts = append(facts, fmt.Sprintf("%s:%d %s", f.Path, f.StartLine, f.Message))
 		}
+		answer := fmt.Sprintf("Found %d results for %s", len(findings), strings.Join(terms, ", "))
+		if runErr != nil {
+			answer += fmt.Sprintf(" (some adapters unavailable: %v)", runErr)
+		}
 		return agentbus.Response{
 			QueryID:   q.QueryID,
 			FromAgent: "scanner-001",
-			Answer:    fmt.Sprintf("Found %d results", len(findings)),
+			Answer:    answer,
 			Facts:     facts,
 		}, nil
 	}))
@@ -359,12 +474,7 @@ func truncate(s string, n int) string {
 // Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
-	var profile artifacts.ProjectProfile
-	if err := runfs.ReadJSON(runfs.ProjectProfilePath(runDir), &profile); err != nil {
-		return fmt.Errorf("load profile: %w", err)
-	}
-
+func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -393,7 +503,7 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	} else {
 		fmt.Printf("Warning: TWE playbook catalog not loaded (%v); twe_playbook_detail will report no catalog\n", cerr)
 	}
-	registry := actions.NewDefaultRegistryWithFacts(eng, queryPackDir, playbooks)
+	registry := actions.NewDefaultRegistryWithFacts(eng, db, queryPackDir, playbooks)
 
 	// Case Packs render a TWE's common_defenses / common_false_positives
 	// from this map (§24) — the Challenger's phase-1 instructions rely on
@@ -416,17 +526,44 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 
+	// Nothing is prefetched for the planner. The pipeline used to run the
+	// fact-layer queries the run's invariants called for and hand the
+	// resulting refs to planner.Run, which unioned them into every
+	// investigation it reported — so a lead the model reached on its own
+	// still shipped evidence the old invariant had selected, and the same
+	// facts were attached by path match to every Case Pack downstream.
+	// BUG-003 §3.3 is what that chain produces. The Planner now cites only
+	// what it executed itself; §6 says a lead's reasons must reference facts
+	// the Planner has seen, and a prefetched fact is not one of them.
+
 	samples := cfg.Samples
 	if samples <= 0 {
 		samples = 1
 	}
 
+	// The fact layer just checked out the pinned revision to build its
+	// database from, and that checkout is now kept. Read the source from it.
+	//
+	// Until now the planner's tools resolved paths against the scanned
+	// directory, which for a benchmark case is a fixture holding only the
+	// patched file. Both scopes claim to be repository@commit, so a tool's
+	// negative result in the narrow one was indistinguishable from a fact
+	// about the wide one — on CVE-2026-44362 reverse_trace reported
+	// "(no callers found)" for a function whose caller the fact layer had
+	// already located in core/kernel/ree_fs_ta.c, and the Challenger read
+	// that as the delegation path being dead code. See BUG-002 §3.2/§3.3.
+	//
+	// The fixture stays the run's identity and the understanding layer's
+	// input; only the tools widen. That is safe precisely because the two
+	// trees agree on the file under audit: the fixture's copy is
+	// byte-identical to the revision's (the benchmark oracle pins its
+	// sha256), so architecture evidence and invariants written against the
+	// fixture keep their line numbers here.
 	promptProfile := planner.PromptProfile{
-		RepoURL:        manifest.RepoURL,
-		Commit:         manifest.Commit,
-		Focus:          cfg.Focus,
-		Languages:      profile.Languages,
-		FrameworkHints: profile.FrameworkHints,
+		RepoURL: manifest.RepoURL,
+		Commit:  manifest.Commit,
+		Focus:   cfg.Focus,
+		Hint:    cfg.Hint,
 	}
 
 	var bundles []*artifacts.EvidenceBundle
@@ -438,9 +575,14 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 			fmt.Printf("\n=== Planner pass %d/%d (avoiding %d previously-covered targets) ===\n", pass, samples, len(avoid))
 		}
 		result := planner.Run(context.Background(), planner.RunConfig{
-			RunID:         manifest.RunID,
-			RepoRoot:      repoRoot,
-			RunDir:        runDir,
+			RunID:    manifest.RunID,
+			RepoRoot: srcRoot,
+			RunDir:   runDir,
+			// Every pass restarts at round 1, so without this each one's
+			// observation refs would collide with the last's — and a lead
+			// raised in pass 2 would cite pass 1's evidence, from a pass
+			// deliberately pointed at different code.
+			SampleIndex:   pass - 1,
 			Profile:       promptProfile,
 			Client:        client,
 			Registry:      registry,
@@ -559,6 +701,9 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 	// legacy HotspotIndex + RepoMap shim that used to run at this point is
 	// gone — downstream consumes these packs directly instead of
 	// re-deriving them from a synthesized 02_hotspots/01_repo_map pair.
+	// After dedup, not before: a fact attached to a pack that dedup then
+	// drops reaches nobody, which is how the 2026-07-31 run collected the
+	// right ToolFact and delivered it to no agent.
 	final := planner.DedupePacks(allPacks)
 	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
 		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
@@ -585,6 +730,13 @@ func runL3Planner(cfg config.Config, client llm.Client, repoRoot, runDir string,
 // run and the planner's agent id; per-round identity travels separately on
 // the git calls the fact layer makes, which are bound from the
 // ActionRequest that asked for them.
+// indexAgent is the agent the program index's own subprocesses are recorded
+// under: the git clone and checkout, and the CodeQL database build. It is
+// not the planner — acquiring and extracting the repository is not the
+// planner's work, and attributing it there made a 91-second extraction look
+// like a planner round.
+const indexAgent = "repo-index"
+
 func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
 	eng := codeql.New()
 	eng.Exec = executor.Bind(exec, executor.Binding{
@@ -599,4 +751,15 @@ func newFactEngine(exec executor.Executor, runID string) *codeql.Engine {
 // detect "this pass added nothing new so stop".
 func accumulatedLen(bundles []*artifacts.EvidenceBundle) int {
 	return len(DedupeCandidates(bundles))
+}
+
+// findBuiltCodeQLDB returns the CodeQL database this run's fact layer built,
+// or "" if none. trustirfacts writes it under 02_tool_facts/trustir/db/<hash>
+// and marks completion with .trustirfacts-db-built.
+func findBuiltCodeQLDB(runDir string) string {
+	matches, err := filepath.Glob(filepath.Join(runDir, "02_tool_facts", "trustir", "db", "*", ".trustirfacts-db-built"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return filepath.Dir(matches[0])
 }

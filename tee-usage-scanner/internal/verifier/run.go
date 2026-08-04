@@ -104,7 +104,7 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 		// tags so it can weight expert claims accordingly.
 		expertValidation := citations.ValidateFacts(hypothesis.CitedFacts, manifest.LocalPath)
 
-		bus.ResetDialog(pack.CaseID)
+		bus.ResetDialog(pack.CaseID, cfg.AgentID)
 		memo, err := buildMemoLLM(context.Background(), client, bus, manifest.LocalPath, pack, hypothesis, challenge, caseCtx, cfg.AgentID, cfg.LLMTemp, scFindings, expertValidation)
 		if err != nil {
 			return fmt.Errorf("verifier llm for %s: %w", pack.CaseID, err)
@@ -130,7 +130,7 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 			emitVerifierClaimEvents(rec, manifest.RunID, cfg.AgentID, memo)
 		}
 
-		if dialog := bus.GetDialog(pack.CaseID); dialog != nil && len(dialog.Rounds) > 0 {
+		if dialog := bus.GetDialog(pack.CaseID, cfg.AgentID); dialog != nil && len(dialog.Rounds) > 0 {
 			dialogPath := filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("dialog-%03d.jsonl", idx+1))
 			if err := writeDialogJSONL(dialogPath, dialog); err != nil {
 				fmt.Printf("Warning: failed to write dialog: %v\n", err)
@@ -183,6 +183,14 @@ treat each expert fact according to its tag:
                unverified and demand evidence before corroborating
   [unresolved] live repo not available; you cannot verify; note
                this in your output rather than guessing`
+
+	// to_agent is a closed vocabulary and this prompt never published it.
+	// The arbiter's did; the verifier's did not, and on run 44362-vuln-p9
+	// the verifier spent all four of its bus queries on "fact-layer" — an
+	// endpoint that does not exist. All four were refused
+	// (bus_query_failed in that run's events.jsonl) and the dispute they
+	// were meant to settle went unanswered.
+	systemPrompt += bus.VocabularyNote()
 
 	userMsg := fmt.Sprintf(`Case: %s (category: %s, priority: %s)
 Target files: %s
@@ -328,6 +336,7 @@ Static check findings (%d total):
 				ToAgent:   q.ToAgent,
 				Kind:      q.Kind,
 				Question:  q.Question,
+				Evidence:  busEvidence(pack, caseCtx),
 			})
 			if err != nil {
 				queryResults = append(queryResults, fmt.Sprintf("Query to %s failed: %v", q.ToAgent, err))

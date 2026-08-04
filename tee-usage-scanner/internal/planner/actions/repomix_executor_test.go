@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
@@ -67,7 +68,7 @@ func TestRepomixSummarize_RecordsThroughActionExecutor(t *testing.T) {
 	// The argv blob must resolve to the real command, with the resolved
 	// absolute path the handler passed rather than the LLM's relative one.
 	args := h.Blob(started.ToolArgsBlob)
-	if !hasPrefix(args, "repomix\n"+dir+"\n--style\njson\n") {
+	if !strings.HasPrefix(args, "repomix\n"+dir+"\n--style\njson\n") {
 		t.Errorf("args blob = %q, want the resolved repo root", args)
 	}
 }

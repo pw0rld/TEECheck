@@ -44,9 +44,12 @@ Rules:
     if you have not seen the actual enforcement code, say so in
     unresolved_assumptions and verification_plan rather than asserting
     the property holds.
-  - verification_plan must name concrete, checkable steps (e.g. "trace
-    subkey_version from shdr_load_pub_key into check_update_version"),
-    not vague reassurance ("ensure proper validation").
+  - verification_plan must name concrete, checkable steps — name the
+    actual function, field and call site you want traced, in this
+    project's own vocabulary — not vague reassurance ("ensure proper
+    validation"). No example is given here on purpose: the previous one
+    spelled out a benchmark case's answer, so any run on that case was
+    reading the solution out of its own system prompt.
 
 Respond with a single JSON object: { "invariants": [ ... ] }. Each entry:
   { "invariant_id": "INV-<TOPIC>-NNN", "statement": "...",
@@ -58,9 +61,8 @@ Respond with a single JSON object: { "invariants": [ ... ] }. Each entry:
     "evidence": [ { "kind": "source", "file": "...", "start_line": N,
                      "end_line": N, "note": "<symbol this cites>" } ] }`
 
-// buildUserPrompt renders the per-run context: TWE prior knowledge, the
-// already-validated ArchitectureModel (condensed), and ProjectProfile
-// evidence — the three inputs §7.4 names.
+// buildUserPrompt renders the per-run context: TWE prior knowledge and the
+// already-validated ArchitectureModel (condensed).
 func buildUserPrompt(in Input) string {
 	return fmt.Sprintf(`## TWE prior knowledge
 
@@ -70,18 +72,13 @@ func buildUserPrompt(in Input) string {
 
 %s
 
-## Project profile (condensed)
-
-%s
-
 ## Instructions
 
 Derive a small set of project-specific invariants by instantiating the
 TWE scenarios above against this specific architecture. Every invariant
 is proposed only — see the rules in the system prompt.`,
 		nonEmpty(in.TWEContext, "(no TWE prior knowledge context available for this run)"),
-		marshalCondensed(in.Model, 8000),
-		marshalCondensed(in.Profile, 4000))
+		marshalCondensed(in.Model, 8000))
 }
 
 func nonEmpty(value, fallback string) string {
