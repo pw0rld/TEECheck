@@ -286,49 +286,56 @@ nostdinc$(sm) := -nostdinc -isystem $(shell $(CC$(sm)) -print-file-name=include)
 **所以这不是"没有 include 路径"，是"用了一套被目标项目明确排除的 include 路径"。**
 后者更糟：它不会报"找不到文件"，而是安静地产出错误的类型。
 
-### 4.4 三种替代方案，实测
+### 4.4 CodeQL 的三种 build mode，全部实测
 
-均对同一棵 pinned checkout（`a9386bf`，3292 文件）执行。
+`tools/codeql/cpp/codeql-extractor.yml` 声明抽取器支持三种：
 
-**方案 A：`none` + `frontend_options` 追加 `-I`**
+```yaml
+build_modes:
+  - autobuild
+  - manual
+  - none
+```
+
+以下全部对同一棵 pinned checkout（`a9386bf`，3292 文件）执行。
+
+#### `autobuild` —— 失败，需要交叉编译器
 
 ```bash
-codeql database create <out> --language=cpp --build-mode=none --source-root=<src> \
-  -O cpp.frontend_options="-I/usr/lib/gcc/x86_64-redhat-linux/10/include" \
-  -O cpp.frontend_options="-I<src>/core/include" \
-  -O cpp.frontend_options="-I<src>/lib/libutils/ext/include" \
-  -O cpp.frontend_options="-I<src>/lib/libutils/isoc/include" \
-  -O cpp.frontend_options="-I<src>/lib/libutee/include" \
-  -O cpp.frontend_options="-I<src>/core/arch/arm/include"
+codeql database create <out> --language=cpp --build-mode=autobuild --source-root=<src>
 ```
 
-结果 —— **几乎无效**：
+autobuilder 找到了 OP-TEE 的 Makefile 并真的跑了 `make`，默认选中
+`PLATFORM=vexpress`，走到第一个编译动作才失败：
 
 ```text
-ErroneousType                          3520 → 3492   (-28，0.8%)
-<stdbool.h> 解析到 gcc 正确头的次数        0 → 3      (仍有 310 走 tr1)
-建库耗时                                        1m43s
+cpp/autobuilder: trying to run make
+  CHK     out/arm-plat-vexpress/conf.mk
+  CHK     out/arm-plat-vexpress/include/generated/conf.h      ← 生成成功
+  CC      out/arm-plat-vexpress/core/include/generated/.asm-defines.s
+/usr/bin/bash: arm-linux-gnueabihf-gcc: 未找到命令
+make: *** [mk/compile.mk:252] 错误 127
+cpp/autobuilder: No supported build command succeeded.
+A fatal error occurred: Exit status 1
 ```
 
-选项确实生效了（gcc 的 `stdbool.h` 第一次出现在数据库里），但 CodeQL 自己的搜索
-顺序压过它。`core/tee/fs_dirfile.c` 的四个 `error` 参数一个都没变。
+耗时 7 秒，**数据库未创建**。
 
-**方案 B：`none` + `-nostdinc -ffreestanding` + 显式路径**
+两个副产品值得记下：
 
-照抄 OP-TEE 自己的编译标志。结果 —— **抽取结果为 0**：
+1. **`make` 不需要交叉编译器就能生成 `include/generated/conf.h`**（366 行，742 个
+   `CFG_*` 的取值）。这推翻了本文初稿对方案 B 失败原因的解释 —— 见下。
+2. autobuild 会在源码树里留下 `out/`（6.0 MB）和 `_codeql_detected_source_root`。
+   **它污染的是整个 run 都在读的那棵 pinned checkout**，用完必须清理。
 
-```text
-CodeQL detected code written in C/C++ but could not process any of it
-using the 'none' build mode.
+#### `manual` —— 未执行，前提缺失
+
+```bash
+codeql database create <out> --language=cpp --build-mode=manual \
+  --command="make PLATFORM=vexpress-qemu_virt"
 ```
 
-原因：OP-TEE 需要 `core/include/generated/conf.h`，那是 `make` 生成的，源码树里
-不存在。742 个不同的 `CFG_*` 宏都依赖它。`-nostdinc` 一旦生效，几乎每个
-translation unit 都在第一个 include 处就失败。
-
-**方案 C：`manual --command="make PLATFORM=..."`**
-
-未执行，本机缺前提：
+本机一个交叉编译器都没有：
 
 ```text
 aarch64-none-elf-gcc      -
@@ -337,9 +344,57 @@ arm-none-eabi-gcc         -
 arm-linux-gnueabihf-gcc   -
 ```
 
-### 4.5 traced build 不是纯粹的升级
+即便装上，代价见 §4.5。
 
-即便装上交叉编译器，方案 C 也有实质代价：
+#### `none` —— 当前采用，试了四种参数组合
+
+**基线（现状）**：建库成功，3520 个 `ErroneousType`，38708 条编译错误。
+
+**变体 1：追加 `-I`** —— 建库成功，**几乎无效**：
+
+```text
+ErroneousType                          3520 → 3492   (-28，0.8%)
+<stdbool.h> 解析到 gcc 正确头的次数        0 → 3      (仍有 310 走 tr1)
+建库耗时                                        1m43s
+```
+
+选项确实生效了（gcc 的 `stdbool.h` 第一次进库），但 CodeQL 自己的搜索顺序压过它。
+`core/tee/fs_dirfile.c` 的四个 `error` 参数一个都没变。
+
+**变体 2：`-nostdinc`**（照抄 OP-TEE 自己的编译标志）—— **抽取为 0**。
+
+**变体 3：`-include <生成的 conf.h>`** —— **抽取为 0**。
+
+**变体 4：`-ffreestanding`** —— **抽取为 0**。
+
+失败信息都是同一句：
+
+```text
+CodeQL detected code written in C/C++ but could not process any of it
+using the 'none' build mode.
+```
+
+逐个隔离测试后确认，三个标志**各自单独**就足以让抽取归零：
+
+| frontend_options | 建库结果 |
+|---|---|
+| （无） | 成功 |
+| `-I<任意路径>` | 成功 |
+| `-nostdinc` | **抽取为 0** |
+| `-ffreestanding` | **抽取为 0** |
+| `-include<file>` | **抽取为 0** |
+
+也就是说：**`build-mode=none` 只接受 `-I` 这类纯追加式的选项。**任何改变头文件
+搜索基准或预置内容的标志都会让它整个停摆。而 `-I` 恰恰是唯一无法覆盖
+`<stdbool.h>` 已经解析到 tr1 的那一条 —— 能用的没用，有用的不能用。
+
+本文初稿把变体 2 的失败归因于"缺 `generated/conf.h`"。那个解释是错的：`conf.h`
+可以由 `make` 单独生成（见上），补上之后（变体 3）抽取仍然为 0，而且 `-include`
+本身就是致命项。
+
+### 4.5 `manual` traced build 不是纯粹的升级
+
+即便装上交叉编译器，`manual` 也有实质代价：
 
 | | `build-mode=none`（现状） | `manual` traced build |
 |---|---|---|
@@ -466,7 +521,7 @@ affected."
 - 代价：**所有 SymbolID 的字面值都会变**，已有 run 的索引与引用全部失效，必须重建。
 - 因此适合与任何一次需要重建索引的改动一起做。
 
-**C3. 为需要 build reachability 的场景另建一个 traced 库**
+**C3. 为需要 build reachability 的场景另建一个 `manual` traced 库**
 
 不替换现有的 none 库，而是**并存**（§4.5）：none 库负责覆盖面，traced 库负责
 "某路径在某构建目标下是否可达"。前提是装交叉编译器并选定 `PLATFORM=`。
@@ -478,10 +533,17 @@ affected."
 
 | | 为什么 |
 |---|---|
-| 追加 `-I` 修复解析 | 实测 3520 → 3492，CodeQL 自身搜索顺序压过它（§4.4 A） |
-| `-nostdinc` + 显式路径 | 抽取归零，缺 `generated/conf.h`（§4.4 B） |
-| 用 traced build 取代 none | 40 个平台只覆盖 1 个，742 个 `CFG_*` 只有一种取值（§4.5） |
+| `none` + 追加 `-I` 修复解析 | 实测 3520 → 3492，CodeQL 自身搜索顺序压过它（§4.4） |
+| `none` + `-nostdinc` / `-ffreestanding` / `-include` | 三者各自单独就让抽取归零（§4.4） |
+| `autobuild` | 跑到第一个编译动作即失败，需要交叉编译器（§4.4） |
+| 用 `manual` traced build 取代 `none` | 40 个平台只覆盖 1 个，742 个 `CFG_*` 只有一种取值（§4.5） |
 | 从 id 里删掉签名 | 301 组定义会撞车（§6） |
+
+**注**：`autobuild` 与 `manual` 都会在源码树里留下 `out/`（6.0 MB）和
+`_codeql_detected_source_root`。那棵树是整个 run 共用的 pinned checkout，
+如果将来接入这两种模式，`internal/codedb` 必须在建库后清理，否则下一个
+stage 读到的树和 `source_scope_resolved` 记录的不是同一个东西 —— 那正是
+BUG-002 的形状。
 
 ---
 
