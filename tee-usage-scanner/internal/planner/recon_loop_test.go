@@ -390,3 +390,60 @@ func firstRefIn(prompt string) string {
 	}
 	return ""
 }
+
+// The reconnaissance block is the last thing in the round prompt, so it is
+// the last instruction the model reads. On the first real run against OP-TEE
+// it ended with a checklist of things still to do — and the model replied
+// with prose describing what it was about to do, twice in a row. The run
+// died on round 6 with llm_malformed.
+func TestReconStatusBlock_EndsWithTheResponseFormat(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+	writeProjectMap(t, runDir, fiveModules()...)
+
+	client := &mockLLM{scripts: []string{
+		`{"thought":"look","actions":[{"name":"get_repository_card","args":{}}]}`,
+	}}
+	planner.Run(context.Background(), planner.RunConfig{
+		RunID: "test-blocktail", RepoRoot: repoRoot, RunDir: runDir,
+		Profile: planner.PromptProfile{Focus: "tee"},
+		Client:  client, Registry: actions.NewDefaultRegistryWithNav(),
+		Budget: reconBudget(),
+	})
+
+	body := client.sent[0].Messages[0].Content
+	if !strings.Contains(body, "=== RECONNAISSANCE ===") {
+		t.Fatal("the round prompt carries no reconnaissance block")
+	}
+	tail := body[strings.LastIndex(body, "=== RECONNAISSANCE ==="):]
+	if !strings.Contains(tail, "JSON object") {
+		t.Errorf("the last thing the model reads must say how to answer:\n%s", tail)
+	}
+}
+
+// Once the budget escape has fired, what is unmet is history rather than a
+// precondition. The first real run printed both "you still need to" and "the
+// gate is no longer blocking" in consecutive sentences.
+func TestReconStatusBlock_TheEscapeDoesNotContradictTheChecklist(t *testing.T) {
+	repoRoot, runDir := setupFixtureRepo(t)
+	writeProjectMap(t, runDir, fiveModules()...)
+
+	client := &mockLLM{scripts: []string{
+		`{"thought":"look","actions":[{"name":"get_repository_card","args":{}}]}`,
+	}}
+	planner.Run(context.Background(), planner.RunConfig{
+		RunID: "test-escape-text", RepoRoot: repoRoot, RunDir: runDir,
+		Profile: planner.PromptProfile{Focus: "tee"},
+		Client:  client, Registry: actions.NewDefaultRegistryWithNav(),
+		Budget: reconBudget(),
+	})
+
+	// The last round is the one where the allowance ran out.
+	last := client.sent[len(client.sent)-1].Messages[0].Content
+	tail := last[strings.LastIndex(last, "=== RECONNAISSANCE ==="):]
+	if !strings.Contains(tail, "no longer blocking") {
+		t.Fatalf("the escape must be stated:\n%s", tail)
+	}
+	if strings.Contains(tail, "Before you can open a lead") {
+		t.Errorf("the released gate still prints its own precondition:\n%s", tail)
+	}
+}

@@ -63,6 +63,13 @@ func totalFunctions(m artifacts.ProjectMap) int {
 
 // reconStatusBlock tells the model where it stands against the gate. A gate
 // the model cannot see is one it can only hit.
+//
+// It is the last thing in the round prompt, so it ends by restating the
+// response format. On the first real run against OP-TEE it did not, and the
+// model — reading a checklist of things to do as the final instruction —
+// replied with prose describing what it was about to do, twice in a row.
+// The run died on round 6 with llm_malformed. A checklist is not an
+// instruction to act; whatever sits last has to say how to answer.
 func reconStatusBlock(r *ReconState) string {
 	if r.Skipped() || r.Phase() == PhaseInvestigation {
 		return ""
@@ -70,18 +77,29 @@ func reconStatusBlock(r *ReconState) string {
 	var b strings.Builder
 	b.WriteString("\n=== RECONNAISSANCE ===\n")
 	fmt.Fprintf(&b, "mode: %s\n", r.Mode)
-	if unmet := r.Unmet(); unmet != "" {
-		b.WriteString("Before you can open a lead or call done, you still need to:\n")
-		b.WriteString(unmet)
-		b.WriteString("\n")
-	} else {
+
+	unmet := r.Unmet()
+	switch {
+	case r.Status() == reconStatusBudgetExhausted:
+		// Once the escape has fired, what is unmet is history, not a
+		// precondition. Printing both — "you still need to" and "the gate
+		// is no longer blocking" — told the model two opposite things in
+		// consecutive sentences.
+		b.WriteString("Your reconnaissance rounds are spent, so the gate is no longer blocking.\n")
+		if unmet != "" {
+			b.WriteString("You did not get to:\n" + unmet + "\n")
+		}
+		b.WriteString("Open a lead (open_audit_lead) on the strongest question your reading did raise, " +
+			"and say in its reason what you did not get to look at.\n")
+	case unmet != "":
+		b.WriteString("Before you can open a lead or call done, you still need to:\n" + unmet + "\n")
+	default:
 		b.WriteString("You have seen enough of this project. Open a lead (open_audit_lead) " +
 			"on the question your reading actually raised.\n")
 	}
-	if r.Status() == reconStatusBudgetExhausted {
-		b.WriteString("Your reconnaissance rounds are spent. The gate is no longer blocking: " +
-			"open a lead with what you have, and say in its reason what you did not get to look at.\n")
-	}
+
+	b.WriteString("\nReply with the JSON object described in the system prompt and nothing else — " +
+		"no prose before it, no prose after it, no markdown fence.\n")
 	return b.String()
 }
 

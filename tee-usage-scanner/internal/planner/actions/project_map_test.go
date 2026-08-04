@@ -385,3 +385,56 @@ func TestBrowsingActions_AreAdvertisedWithTheirArgs(t *testing.T) {
 		}
 	}
 }
+
+// A SymbolID is lang:file:line:name(signature), and the signature is part
+// of it. On the first real run against OP-TEE the model opened a card with
+// the full id and then asked get_callers about the same function with
+// everything after the name removed. Both refusals were correct and neither
+// said what was wrong, so the run finished with zero relation queries — the
+// one reconnaissance requirement it never met.
+func TestBrowsingActions_ADroppedSignatureIsNamedAsSuch(t *testing.T) {
+	runDir := probeIndex(t)
+
+	full := string(artifacts.MakeSymbolID("cpp", "core/crypto/signed_hdr.c", 262, "shdr_load_pub_key", "()"))
+	truncated := "cpp:core/crypto/signed_hdr.c:262:shdr_load_pub_key"
+	if full == truncated {
+		t.Fatal("the fixture must build an id whose signature can be dropped")
+	}
+
+	if res := run(t, actions.GetFunctionCardHandler{}, runDir, `{"symbol_id":"`+full+`"}`); !res.OK {
+		t.Fatalf("the fixture must hold %s: %s", full, res.Error)
+	}
+
+	for _, h := range []actions.Handler{actions.GetFunctionCardHandler{}, actions.GetCallersHandler{}} {
+		res := run(t, h, runDir, `{"symbol_id":"`+truncated+`"}`)
+		if res.OK {
+			t.Fatalf("%s accepted an id with no signature", h.Name())
+		}
+		if !strings.Contains(res.Error, full) {
+			t.Errorf("%s did not name the id that would have worked:\n%s", h.Name(), res.Error)
+		}
+		if !strings.Contains(res.Error, "signature") {
+			t.Errorf("%s did not say what was missing:\n%s", h.Name(), res.Error)
+		}
+	}
+}
+
+// Naming near matches is not choosing between them, and an id that matches
+// nothing must not be reported as a dropped signature — that would send the
+// model looking for a suffix that does not exist.
+func TestBrowsingActions_AnIdThatMatchesNothingSaysSoDifferently(t *testing.T) {
+	res := run(t, actions.GetFunctionCardHandler{}, probeIndex(t),
+		`{"symbol_id":"cpp:core/nowhere.c:1:absent"}`)
+	if res.OK {
+		t.Fatal("an id matching nothing must be refused")
+	}
+	if strings.Contains(res.Error, "signature") {
+		t.Errorf("an id with no near match must not be reported as a dropped signature:\n%s", res.Error)
+	}
+	if !strings.Contains(res.Error, "not_found_in_indexed_repository") {
+		t.Errorf("the refusal must carry a §7 ladder value:\n%s", res.Error)
+	}
+	if !strings.Contains(res.Error, "find_symbols") {
+		t.Errorf("the refusal must name what would still find it:\n%s", res.Error)
+	}
+}

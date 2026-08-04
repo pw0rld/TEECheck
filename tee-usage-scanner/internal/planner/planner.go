@@ -304,7 +304,10 @@ loop:
 			roundPrompt += "You have not inspected any files yet. Emit a done with empty candidates[] and a summary explaining what would have been needed.\n"
 		}
 
-		fmt.Fprintf(os.Stdout, "[planner] round %d/%d — calling LLM...\n", roundNum, cfg.Budget.MaxRounds)
+		// TotalRounds, not MaxRounds: reconnaissance rounds are granted on
+		// top of the investigation budget, so the ceiling grows as they are
+		// spent. The run that printed "round 6/8" had used 6 of 14.
+		fmt.Fprintf(os.Stdout, "[planner] round %d/%d — calling LLM...\n", roundNum, cfg.Budget.TotalRounds())
 
 		// Token cost for this round. A corrective re-ask ACCUMULATES onto
 		// these rather than replacing them: the round really did cost two

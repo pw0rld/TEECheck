@@ -336,7 +336,7 @@ func (h GetFunctionCardHandler) Run(_ context.Context, req ActionRequest) Action
 	}
 	c, ok := b.byID[artifacts.SymbolID(strings.TrimSpace(args.SymbolID))]
 	if !ok {
-		return fail(h.Name(), unknownSymbolNote(args.SymbolID))
+		return fail(h.Name(), unknownSymbolNote(b, args.SymbolID))
 	}
 
 	var out strings.Builder
@@ -351,13 +351,62 @@ func (h GetFunctionCardHandler) Run(_ context.Context, req ActionRequest) Action
 	return observe(h.Name(), out.String())
 }
 
-func unknownSymbolNote(id string) string {
+// maxNearMatchesNamed bounds the near-match list. A refusal is an
+// observation like any other and must stay inside the shared budget.
+const maxNearMatchesNamed = 10
+
+// unknownSymbolNote refuses a symbol_id the index does not hold.
+//
+// It first checks whether the id is a prefix of ids that do exist, because
+// that is what a dropped signature looks like: a SymbolID is
+// lang:file:line:name(signature), and on the first real run against OP-TEE
+// the model opened a card with the full id and then asked get_callers about
+// the same function with everything after the name removed. Both refusals
+// were correct and neither said what was wrong, so the run finished with
+// zero relation queries — the one reconnaissance requirement it never met.
+//
+// Naming the candidates is not choosing between them. When several
+// definitions share a prefix they are listed and the caller picks, exactly
+// as find_symbols does.
+func unknownSymbolNote(b *browseIndex, id string) string {
+	trimmed := strings.TrimSpace(id)
+	if near := b.idsBeginningWith(trimmed); len(near) > 0 {
+		shown := near
+		more := ""
+		if len(shown) > maxNearMatchesNamed {
+			shown = shown[:maxNearMatchesNamed]
+			more = fmt.Sprintf("\n  ... and %d more", len(near)-maxNearMatchesNamed)
+		}
+		return fmt.Sprintf(
+			"%s: %q is not a complete symbol_id. A symbol_id is "+
+				"lang:file:line:name(signature), and the signature is part of it — two "+
+				"definitions can agree on everything before it. %d id(s) in the index "+
+				"begin with what you sent:\n  %s%s\nAsk again with one of these, copied exactly.",
+			scopeIndexedRepository, trimmed, len(near), strings.Join(shown, "\n  "), more)
+	}
 	return fmt.Sprintf(
 		"%s: %q is not in the program index. The index holds definitions the extractor "+
 			"could see; a symbol absent here may still exist in a macro, in assembly, or "+
 			"in a translation unit that was skipped. This is not evidence that it does "+
 			"not exist — use find_symbols by name, or ripgrep.",
 		scopeIndexedRepository, id)
+}
+
+// idsBeginningWith returns the indexed ids that start with prefix, sorted.
+// An exact id is never its own near match: this is only reached when the
+// lookup already missed.
+func (b *browseIndex) idsBeginningWith(prefix string) []string {
+	if prefix == "" {
+		return nil
+	}
+	var out []string
+	for id := range b.byID {
+		if strings.HasPrefix(string(id), prefix) {
+			out = append(out, string(id))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func joinIDs(ids []artifacts.SymbolID) string {
@@ -395,7 +444,7 @@ func (h GetCallersHandler) Run(_ context.Context, req ActionRequest) ActionResul
 	}
 	c, ok := b.byID[artifacts.SymbolID(strings.TrimSpace(args.SymbolID))]
 	if !ok {
-		return fail(h.Name(), unknownSymbolNote(args.SymbolID))
+		return fail(h.Name(), unknownSymbolNote(b, args.SymbolID))
 	}
 
 	var out strings.Builder
