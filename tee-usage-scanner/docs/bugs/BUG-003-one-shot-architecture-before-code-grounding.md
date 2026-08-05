@@ -1,6 +1,18 @@
 # BUG-003：01 阶段在代码事实之前一次性生成安全架构，弱指纹被放大为错误审计方向
 
-> 状态：**设计缺陷已确认 / 待重构**
+> 状态：**Phase 1+2 已实现并实测 / Phase 3+4 未开始**
+>
+> Phase 1（Program Index、ProjectMap）与 Phase 2（Planner 运行时选目标、
+> AuditLead、CoverageLedger、Pass A/B）已落地，`runs/recon-002` 产出了
+> `repo_facts.v1.json`、`project_map.v1.json`、`audit_leads.jsonl`、
+> `coverage_ledger.json`，且 Planner 自行提出的 lead 三条理由全部可回溯到
+> 它本轮的成功观察。
+>
+> Phase 3（`formalize_invariant`、`CaseInvariantV2`、`InvariantAssessment`）与
+> Phase 4（SecurityArchitecture 后移）尚未实现。
+>
+> 已知遗留：§6.1 的 "完成最低 coverage 前不能 done" 由 reconnaissance gate
+> 实现，但该 gate 在预算内不可满足，见 BUG-006。
 > 记录日期：2026-08-02
 > 影响：01 Project Understanding、Project Invariants、Planner 的初始审计方向与 benchmark 可量化性
 > 代表运行：`runs/44362-vuln-p9`

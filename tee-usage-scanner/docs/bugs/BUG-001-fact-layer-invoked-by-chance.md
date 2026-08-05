@@ -1,6 +1,14 @@
 # BUG-001：确定性事实层的调用是偶然,不是操舵
 
-> 状态：**未修复**
+> 状态：**曾以 prefetch 缓解，2026-08-05 该缓解已被移除 / 未修复**
+>
+> `prefetchFactLayer` 是本文的第一版缓解：在 Planner 启动前按 invariant 跑好
+> fact-layer 查询，把 ref 并入每一条 investigation。BUG-003 §5 判定该通道会
+> 让旧 invariant 继续操舵 Planner，Task 8 将其整体删除。于是本文的症状回到
+> 原点：`runs/recon-002` 全程 `fact_layer_query` 调用 **0 次**，`02_tool_facts`
+> 产物 **0 个** —— 动作在 Pass A 的 registry 里，模型没有用它。
+>
+> 正确的修法不是把 prefetch 加回来，而是让 Planner 有理由调用它。
 > 记录日期：2026-07-31
 > 影响：CVE-2026-44362 —— 这个系统的 v1 验收案例,四次运行零检出
 > 路径以 `tee-usage-scanner/` 为基准

@@ -1,6 +1,14 @@
 # BUG-002：Benchmark 单文件输入与完整 CodeQL 仓库分裂，真实命中被“不可达”反证压成漏报
 
-> 状态：**诊断中 / 未修复**
+> 状态：**已修复（`acquireSourceScope`）/ 2026-08-05 实测确认**
+>
+> 一次运行只解析一次 scope，所有阶段读同一棵钉住的树。`runs/recon-002` 的
+> `source_scope_resolved` 事件记录 `.../src/df16a35bfd62a0e59aec9b4e`
+> (pinned checkout of optee_os@a9386bf987d9)，CodeQL、planner 的动作、bus 的
+> scanner 全部指向它。
+>
+> 首次真实运行时该修复曾失效：run 目录是相对路径，`git checkout` 的 WorkDir
+> 被 executor 拒绝，scope 静默回退到分支 tip。见 commit `313c2ef`。
 > 记录日期：2026-08-01
 > 影响：CVE-2026-44362 vulnerable run `runs/44362-vuln-p9`
 > 路径以 `tee-usage-scanner/` 为基准

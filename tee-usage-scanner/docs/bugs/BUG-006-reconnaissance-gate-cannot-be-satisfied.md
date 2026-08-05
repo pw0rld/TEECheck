@@ -1,6 +1,6 @@
 # BUG-006：reconnaissance gate 在预算内不可能被满足，覆盖率被钉死在 0.04%
 
-> 状态：**已确认（算术 + 两次实测）/ 已修（commit 待填）/ 待真实运行验证**
+> 状态：**已确认（算术 + 两次实测）/ 已修 `bbc9677` / 待真实运行验证**
 > 记录日期：2026-08-05
 > 影响：Planner 的项目覆盖范围、`CoverageLedger` 的意义、任何 finding 的适用范围
 > 代表运行：`runs/recon-001`、`runs/recon-002`（OP-TEE `a9386bf987d95374a6f7f4c7bcf850115e0e1a4e`）
