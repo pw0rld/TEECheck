@@ -293,3 +293,43 @@ func TestReconKeyFor_ReadsTheIdentifyingArgument(t *testing.T) {
 		}
 	}
 }
+
+// The gate's cost is measured in actions; the budget is denominated in
+// rounds. Nothing but this test converts between them, and when nothing did,
+// they disagreed: the indexed gate needed 22 successful actions and six
+// rounds at three a round afforded 18. The gate was unsatisfiable by
+// construction, so it never gated anything — it just burned six rounds and
+// stepped aside. Both real runs against OP-TEE left reconnaissance through
+// the escape, having landed 10 and 12 of the 22. See docs/bugs/BUG-006.
+func TestReconBudget_CanReachTheIndexedGate(t *testing.T) {
+	// One repository card, one listing per module floor, one card per symbol
+	// floor, one relation query. The spread floor is carried by the cards.
+	needed := 1 + reconMinModules + reconMinSymbols + 1
+
+	b := NewDefaultBudget()
+	slots := b.MaxReconRounds * DefaultActionsPerRound
+	if slots < needed {
+		t.Fatalf("the indexed gate needs %d successful actions and the reconnaissance "+
+			"budget affords %d (%d rounds x %d actions) — the gate can never be met, "+
+			"so every run leaves reconnaissance through the escape",
+			needed, slots, b.MaxReconRounds, DefaultActionsPerRound)
+	}
+
+	// Slack is part of the requirement, not a bonus. A model spends rounds
+	// deciding where to look next, and a round whose browsing action failed
+	// buys no progress — recon-001 lost two to a truncated symbol_id.
+	if slack := slots - needed; slack < DefaultActionsPerRound {
+		t.Errorf("only %d spare action(s): a single failed browse or one round "+
+			"spent thinking puts the gate out of reach again", slack)
+	}
+}
+
+// The tree-only gate is cheaper but has the same shape, and nothing else
+// checks it either.
+func TestReconBudget_CanReachTheTreeOnlyGate(t *testing.T) {
+	needed := 1 + minTreeReads // one list_dir on the root, then real reads
+	b := NewDefaultBudget()
+	if slots := b.MaxReconRounds * DefaultActionsPerRound; slots < needed {
+		t.Fatalf("the tree_only gate needs %d actions, budget affords %d", needed, slots)
+	}
+}

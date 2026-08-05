@@ -24,6 +24,18 @@ import (
 // (expert-001, challenger-001, ...).
 const DefaultPlannerAgentID = "planner-001"
 
+// DefaultActionsPerRound is how many actions one round may request.
+//
+// It is a named constant because the reconnaissance gate's cost is measured
+// in actions while the budget is denominated in rounds, and the conversion
+// between them is this number. It was a literal 3 inside Run until the two
+// were found to disagree — the gate needed 22 actions and the budget
+// afforded 18, so the gate could never be met and every run left
+// reconnaissance through the escape. See docs/bugs/BUG-006 and
+// TestReconBudget_CanReachTheIndexedGate, which is what now keeps them
+// reconcilable.
+const DefaultActionsPerRound = 3
+
 // RunConfig is the input to Run. Everything the main loop needs is
 // passed explicitly — no package-level state.
 type RunConfig struct {
@@ -36,7 +48,7 @@ type RunConfig struct {
 	Budget      Budget
 	Temperature float64
 	// MaxActionsPerRound caps how many actions the LLM may request in
-	// one round. Defaults to 3 if zero.
+	// one round. Defaults to DefaultActionsPerRound if zero.
 	MaxActionsPerRound int
 	// KnowledgeRoot is the on-disk root of the TEECheck knowledge wiki
 	// (typically cfg.KnowledgeRoot from the top-level config). When
@@ -152,7 +164,7 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 		cfg.Budget = NewDefaultBudget()
 	}
 	if cfg.MaxActionsPerRound <= 0 {
-		cfg.MaxActionsPerRound = 3
+		cfg.MaxActionsPerRound = DefaultActionsPerRound
 	}
 	if cfg.Events == nil {
 		cfg.Events = events.Nop{}

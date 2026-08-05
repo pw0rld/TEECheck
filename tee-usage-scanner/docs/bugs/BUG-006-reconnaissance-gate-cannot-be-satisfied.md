@@ -1,6 +1,6 @@
 # BUG-006：reconnaissance gate 在预算内不可能被满足，覆盖率被钉死在 0.04%
 
-> 状态：**已确认（算术 + 两次实测）/ 未修**
+> 状态：**已确认（算术 + 两次实测）/ 已修（commit 待填）/ 待真实运行验证**
 > 记录日期：2026-08-05
 > 影响：Planner 的项目覆盖范围、`CoverageLedger` 的意义、任何 finding 的适用范围
 > 代表运行：`runs/recon-001`、`runs/recon-002`（OP-TEE `a9386bf987d95374a6f7f4c7bcf850115e0e1a4e`）
@@ -147,6 +147,18 @@ func browse(r *ReconState) {
 ---
 
 ## 7. 处置
+
+**已做：A + B。**`MaxReconRounds` 6 → 10（30 槽位 vs 22 要求，余量 8），
+`MaxActionsPerRound` 的字面量 3 提为具名常量 `DefaultActionsPerRound`，并加了
+`TestReconBudget_CanReachTheIndexedGate` / `..._CanReachTheTreeOnlyGate` 把两个
+数字绑在一起。三个 fire drill 均确认能打挂：预算退回 6、gate 要求提到预算之外、
+预算刚好够但无余量。
+
+**尚未做：C、D。**覆盖范围仍未写进 finding；`recon_budget_exhausted` 仍未纳入
+验收判据。且本次修复**尚未经真实运行验证** —— gate 能否真的靠达标放行，只有跑
+一次才知道。
+
+---
 
 **A. 加一个把两个数字绑在一起的测试（先做，且必须做）**
 
