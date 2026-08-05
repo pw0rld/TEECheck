@@ -331,7 +331,13 @@ loop:
 				// Emit a completion event with Error populated so
 				// downstream consumers can pair the started/completed
 				// events even on failure.
-				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "")
+				// The bytes the client got as far as, even though the
+				// call failed — a non-2xx body or a timed-out request is
+				// exactly what needs reading afterwards.
+				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "").
+					WithWireBodies(
+						events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
+						events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw)))
 				failed.Error = err.Error()
 				_ = cfg.Events.Emit(failed)
 				return llm.GenerateResponse{}, err
@@ -362,7 +368,15 @@ loop:
 					responseBlob = ref
 				}
 			}
-			_ = cfg.Events.Emit(events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob))
+			// The wire bodies are kept alongside the readable pair, not
+			// instead of it: promptBlob is a prompt joined for a human and
+			// responseBlob is the message the parser extracted, while these
+			// two are what actually crossed the wire.
+			_ = cfg.Events.Emit(events.LLMCallCompleted(
+				cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob).
+				WithWireBodies(
+					events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
+					events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw))))
 			return genResp, nil
 		}
 
@@ -382,9 +396,16 @@ loop:
 			// because the eighth slipped is the wrong trade — the cost of
 			// re-asking is one extra call, the cost of not re-asking is the
 			// whole run.
-			fmt.Fprintf(os.Stdout, "[planner] round %d: reply was not a JSON object — re-asking once\n", roundNum)
+			// The message carries parseErr rather than a fixed sentence.
+			// It used to read "reply was not a JSON object" whatever went
+			// wrong, and on 2026-08-04 that was false: the reply WAS a JSON
+			// object, just wrapped in one the schema does not describe, and
+			// the real error was "no actions". Diagnosing it from the log
+			// alone sent the investigation the wrong way for an afternoon.
+			fmt.Fprintf(os.Stdout, "[planner] round %d: %v — re-asking once\n", roundNum, parseErr)
 			retryPrompt := roundPrompt + "\n\n=== YOUR PREVIOUS REPLY WAS REJECTED ===\n" +
-				"It contained no JSON object. Do not narrate, explain, or announce what you are about to do.\n" +
+				"It was rejected because: " + parseErr.Error() + "\n" +
+				"Do not narrate, explain, or announce what you are about to do. Do not wrap the object in another object.\n" +
 				"Reply with the JSON object described in the response format and NOTHING else — no prose before it, no prose after it, no markdown fence.\n" +
 				"Your rejected reply began: " + truncate(genResp.Text, 200) + "\n"
 			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {

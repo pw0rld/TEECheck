@@ -3,6 +3,7 @@ package agentutil
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -165,20 +166,114 @@ func findMatchingBrace(s string, openPos int) (int, bool) {
 // UnmarshalJSONObject extracts the JSON object from an LLM reply and
 // unmarshals it into out.
 func UnmarshalJSONObject[T any](text string, out *T) error {
+	return UnmarshalObjectInto(text, out)
+}
+
+// UnmarshalObjectInto is UnmarshalJSONObject for callers that have already
+// erased the target's type to any. out must be a non-nil pointer.
+//
+// internal/llm's wrapper is such a caller, and the distinction matters: a
+// generic implementation would bind T to any there, unmarshal into a fresh
+// interface, and never touch the struct the caller actually passed.
+func UnmarshalObjectInto(text string, out any) error {
 	obj, err := ExtractJSONObject(text)
 	if err != nil {
 		return err
 	}
-	// Try direct parse first
-	if err := json.Unmarshal([]byte(obj), out); err == nil {
+
+	// Raw newlines inside string values are the other shape providers emit,
+	// so each candidate gets both readings.
+	attempt := func(candidate string) error {
+		resetTarget(out)
+		if err := json.Unmarshal([]byte(candidate), out); err == nil {
+			return nil
+		}
+		resetTarget(out)
+		return json.Unmarshal([]byte(fixRawNewlinesInJSON(candidate)), out)
+	}
+
+	directErr := attempt(obj)
+	if directErr == nil && !targetIsZero(out) {
 		return nil
 	}
-	// Fix raw newlines inside JSON string values and retry
-	fixed := fixRawNewlinesInJSON(obj)
-	if err := json.Unmarshal([]byte(fixed), out); err != nil {
-		return fmt.Errorf("parse json object: %w", err)
+
+	// A parse that succeeded and produced nothing is the envelope case:
+	// json.Unmarshal ignores unknown fields, so a reply shaped
+	// {"answer": "<the real object, escaped>"} unmarshals without error and
+	// leaves every field at its zero value. Observed against glm-5.2 on
+	// 2026-08-04 — one planner round returned the correct thought/actions
+	// object nested inside a single "answer" string, the planner reported
+	// "no actions", and a round was spent re-asking for a payload already
+	// in hand.
+	if inner, ok := unwrapJSONEnvelope(obj); ok {
+		if err := attempt(inner); err == nil && !targetIsZero(out) {
+			return nil
+		}
+		// Nothing recovered. Put back whatever the reply itself said, so
+		// the caller reports on the reply rather than on the fallback.
+		_ = attempt(obj)
+	}
+
+	if directErr != nil {
+		return fmt.Errorf("parse json object: %w", directErr)
 	}
 	return nil
+}
+
+// unwrapJSONEnvelope returns the object nested inside a single-key wrapper,
+// when that is what obj is: exactly one key, whose value is a string, whose
+// content is itself a complete JSON object.
+//
+// The shape test is deliberately narrow, and it is only consulted after a
+// direct parse produced a zero value — so a reply in the expected shape is
+// never re-read this way.
+func unwrapJSONEnvelope(obj string) (string, bool) {
+	var outer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(obj), &outer); err != nil || len(outer) != 1 {
+		return "", false
+	}
+	for _, raw := range outer {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", false
+		}
+		inner, err := ExtractJSONObject(s)
+		if err != nil {
+			return "", false
+		}
+		return inner, true
+	}
+	return "", false
+}
+
+// settled follows out down to the value a caller would read: through the
+// pointer, and through the interface when the type was erased on the way in.
+func settled(out any) (reflect.Value, bool) {
+	v := reflect.ValueOf(out)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return reflect.Value{}, false
+	}
+	e := v.Elem()
+	for (e.Kind() == reflect.Interface || e.Kind() == reflect.Pointer) && !e.IsNil() {
+		e = e.Elem()
+	}
+	return e, e.IsValid()
+}
+
+// targetIsZero reports whether the parse matched no field at all. It is how
+// "parsed, but described nothing" is told apart from "parsed" without
+// knowing the target's type.
+func targetIsZero(out any) bool {
+	e, ok := settled(out)
+	return ok && e.IsZero()
+}
+
+// resetTarget clears the target between attempts, so a partial parse cannot
+// leave residue that a later attempt is then judged against.
+func resetTarget(out any) {
+	if e, ok := settled(out); ok && e.CanSet() {
+		e.Set(reflect.Zero(e.Type()))
+	}
 }
 
 // fixRawNewlinesInJSON replaces unescaped newlines inside JSON string values
