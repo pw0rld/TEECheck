@@ -2,7 +2,7 @@
 // browses from the program index.
 //
 // It carries structure and size, never a judgement about where to look:
-// selecting audit targets is a Planner runtime behaviour, and BUG-003 §3.3
+// selecting audit targets is a Planner runtime behaviour, and the amplification chain
 // traces what happens when the 01 stage decides it instead. The map never
 // embeds the capsules themselves — the measured set is 6.36 MB over 11,301
 // definitions, which no prompt can carry — so the pages are written to disk

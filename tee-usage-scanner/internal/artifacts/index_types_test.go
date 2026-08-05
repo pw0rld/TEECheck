@@ -47,7 +47,7 @@ func TestMakeSymbolID_SeparatesSameNamedDefinitions(t *testing.T) {
 }
 
 // 01 must not decide where the danger is. A judgement field on a capsule
-// would reintroduce BUG-003 §3.3's amplification chain under a new name: a
+// would reintroduce the amplification chain under a new name: a
 // lexical hit becomes a "candidate", the candidate becomes an asset, the
 // asset becomes an invariant, and the invariant anchors on a comment.
 func TestFunctionCapsule_CarriesNoVerdictFields(t *testing.T) {

@@ -37,7 +37,7 @@ func goodPayload(ref string) OpenAuditLeadPayload {
 }
 
 // A lead whose reasons cite nothing the planner looked at is a guess with a
-// citation-shaped field. BUG-003 §3.3 is exactly that: an invariant anchored
+// citation-shaped field. That is exactly the failure: an invariant anchored
 // on a line nobody had read.
 func TestOpenAuditLead_RejectsReasonsWithNoObservedFact(t *testing.T) {
 	recon, _, _ := openedRecon(t, targetID)

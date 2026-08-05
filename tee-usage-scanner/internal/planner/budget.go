@@ -54,7 +54,7 @@ type Budget struct {
 // shortfall looked like one slot; at the right one there is no slack at all.
 // The gate was therefore unsatisfiable by construction, and both real runs
 // against OP-TEE left reconnaissance through the budget escape having landed
-// 10 and 12 of the 22 actions. See docs/bugs/BUG-006.
+// 10 and 12 of the 22 actions.
 //
 // The slack matters as much as the total: a model spends rounds deciding
 // where to look next, and rounds where a browsing action fails buy no

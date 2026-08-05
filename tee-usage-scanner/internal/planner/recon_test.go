@@ -300,7 +300,7 @@ func TestReconKeyFor_ReadsTheIdentifyingArgument(t *testing.T) {
 // rounds at three a round afforded 18. The gate was unsatisfiable by
 // construction, so it never gated anything — it just burned six rounds and
 // stepped aside. Both real runs against OP-TEE left reconnaissance through
-// the escape, having landed 10 and 12 of the 22. See docs/bugs/BUG-006.
+// the escape, having landed 10 and 12 of the 22.
 func TestReconBudget_CanReachTheIndexedGate(t *testing.T) {
 	// One repository card, one listing per module floor, one card per symbol
 	// floor, one relation query. The spread floor is carried by the cards.

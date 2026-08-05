@@ -183,7 +183,7 @@ func TestFactLayerQuery_UnknownOperationIsRejectedWithTheVocabulary(t *testing.T
 // Not knowing a caller had already been found, the Planner ran reverse_trace
 // over a single-file fixture, got "(no callers found)", and the Challenger
 // turned that into "the whole path is dead code". The authority location was
-// on disk the entire time. See docs/bugs/BUG-002 §3.4.
+// on disk the entire time.
 func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) {
 	repo, commit := gitInit(t)
 	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})

@@ -187,7 +187,7 @@ func (m *Manager) State(scope Scope) string {
 // held a full, pinned checkout of the exact revision under audit for the
 // duration of one CodeQL invocation and then threw it away, while every
 // source-reading tool in the same run was pointed at a benchmark fixture
-// holding a single file. That is the split BUG-002 is about — the fact layer
+// holding a single file. That is the split this exists to prevent — the fact layer
 // answering about core/kernel/ree_fs_ta.c while reverse_trace could not see
 // the file existed.
 //

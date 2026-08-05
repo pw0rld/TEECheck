@@ -84,7 +84,7 @@ func TestVerifyScope_AcceptsTheRecordedTree(t *testing.T) {
 	}
 }
 
-// BUG-002 in one test: the fact layer analysed the full checkout while
+// The scope split in one test: the fact layer analysed the full checkout while
 // reverse_trace read the fixture, and nothing anywhere said so.
 func TestVerifyScope_RejectsADifferentTree(t *testing.T) {
 	full := tree(t, map[string]string{"a.c": "x", "b.c": "y", "c.c": "z"})

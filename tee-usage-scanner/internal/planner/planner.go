@@ -31,9 +31,8 @@ const DefaultPlannerAgentID = "planner-001"
 // between them is this number. It was a literal 3 inside Run until the two
 // were found to disagree — the gate needed 22 actions and the budget
 // afforded 18, so the gate could never be met and every run left
-// reconnaissance through the escape. See docs/bugs/BUG-006 and
-// TestReconBudget_CanReachTheIndexedGate, which is what now keeps them
-// reconcilable.
+// reconnaissance through the escape. TestReconBudget_CanReachTheIndexedGate
+// is what now keeps them reconcilable.
 const DefaultActionsPerRound = 3
 
 // RunConfig is the input to Run. Everything the main loop needs is
@@ -772,7 +771,7 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		// chosen by the run's invariants — so every investigation, however
 		// the Planner reached it, shipped evidence the old invariant had
 		// selected. Closing that channel is half of what makes a lead the
-		// Planner's own; see BUG-003.
+		// Planner's own.
 		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
 		inv, _ = investigations.Validate(inv, validationIn)
 

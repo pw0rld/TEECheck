@@ -221,7 +221,7 @@ func TestGetFunctionCard_UnknownIDCarriesItsScope(t *testing.T) {
 
 // "No callers" is only readable next to the reasons a caller can be missing.
 // Without them a consumer reads an empty list as evidence of unreachability,
-// which is exactly the inference BUG-002 turned into a wrong verdict.
+// which is exactly the inference that once became a wrong verdict.
 func TestGetCallers_StatesEveryReasonACallerCanBeMissing(t *testing.T) {
 	runDir := probeIndex(t)
 	id := artifacts.MakeSymbolID("cpp", "core/crypto/a.c", 10, "helper", "()")

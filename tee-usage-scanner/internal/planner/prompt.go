@@ -22,7 +22,7 @@ type PromptProfile struct {
 // investigating a lead of its own.
 //
 // It used to also carry the run's Architecture Model and Project
-// Invariants. Both are gone, from both passes. BUG-003 traced what they
+// Invariants. Both are gone, from both passes. A real run traced what they
 // did: a keyword match became a freshness candidate, became an
 // architecture asset, became an invariant anchored at a line nobody had
 // read — and the Planner, handed that invariant at the top of its prompt,

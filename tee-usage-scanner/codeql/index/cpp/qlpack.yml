@@ -4,7 +4,7 @@ description: >-
   Neutral whole-repo program index for C/C++. These queries answer structural
   questions only — which functions exist, who calls whom, which struct fields
   each function touches. They contain no vulnerability rule, no keyword
-  heuristic and no TWE mapping by design: docs/bugs/BUG-003 §3.3 traces how a
+  heuristic and no TWE mapping by design: a
   keyword signal computed before the investigation was amplified into a false
   audit direction, and the fix is that the 01 stage stops deciding where the
   danger is. Selecting audit targets is a Planner runtime behaviour.

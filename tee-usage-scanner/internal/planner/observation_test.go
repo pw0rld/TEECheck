@@ -10,7 +10,7 @@ import (
 // A lead that cites "the producer does not write key.version" has to point
 // at the observation that showed it. Without an id there is nothing to point
 // at, and reason_fact_refs degrades to free text shaped like a citation —
-// which is BUG-003 §3.3 with extra steps.
+// which is the same unevidenced anchor with extra steps.
 func TestMakeObservationRef_IsStableAndDistinct(t *testing.T) {
 	a := MakeObservationRef("run-1", 0, 3, 1, "sha256:aaa")
 	again := MakeObservationRef("run-1", 0, 3, 1, "sha256:aaa")

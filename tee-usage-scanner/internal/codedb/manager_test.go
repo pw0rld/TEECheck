@@ -106,7 +106,7 @@ func TestEnsureDatabase_MissBuildsOnceThenCaches(t *testing.T) {
 // invocation and then destroyed it — while every source-reading tool in the
 // same run was pointed at a benchmark fixture containing one file. The fact
 // layer would answer about core/kernel/ree_fs_ta.c and reverse_trace could
-// not see that the file existed. See docs/bugs/BUG-002 §3.2.
+// not see that the file existed.
 func TestEnsureDatabase_KeepsTheCheckoutItBuiltFrom(t *testing.T) {
 	origin := t.TempDir()
 	git(t, origin, "init", "--quiet")
@@ -145,7 +145,7 @@ func TestEnsureDatabase_KeepsTheCheckoutItBuiltFrom(t *testing.T) {
 
 // A tree left behind by an interrupted clone must not be mistaken for the
 // pinned revision: "file not found" in a half-copy reads exactly like "not
-// in the repository", which is the inference BUG-002 is about.
+// in the repository", which is the inference this prevents.
 func TestEnsureSource_IncompleteCheckoutIsRedone(t *testing.T) {
 	origin := t.TempDir()
 	git(t, origin, "init", "--quiet")
