@@ -22,7 +22,7 @@ import (
 // contradicts itself and cannot be reconciled by any later stage. On
 // CVE-2026-44362 the fact layer located a caller in core/kernel/ree_fs_ta.c
 // in the same run where reverse_trace reported the function had none, and
-// the Challenger concluded the code was unreachable. See BUG-002 §3.2.
+// the Challenger concluded the code was unreachable.
 //
 // A benchmark fixture is not a repository — it is the handful of files the
 // upstream fix touched, kept as an exact vulnerable/fixed pair. Scanning it

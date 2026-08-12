@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -101,6 +102,11 @@ type ReconState struct {
 	// not opening one.
 	symbolSpread map[string]bool
 	filesRead    map[string]bool
+	// linesRead is which line ranges of which files were actually read.
+	// SawSymbol consults it, because reading a function's source is a
+	// stronger observation than opening its index card, and holding a lead
+	// to the card alone rejected a correct one.
+	linesRead map[string][]lineRange
 
 	budgetExhausted bool
 	skipped         bool
@@ -116,6 +122,7 @@ func NewReconState(mode ReconMode) *ReconState {
 		symbolsViewed: map[string]bool{},
 		symbolSpread:  map[string]bool{},
 		filesRead:     map[string]bool{},
+		linesRead:     map[string][]lineRange{},
 	}
 }
 
@@ -191,6 +198,37 @@ func (r *ReconState) Observe(action, key string, ok bool) {
 // Unparseable args record nothing rather than an empty key.
 func (r *ReconState) ObserveAction(action string, args json.RawMessage, ok bool) {
 	r.Observe(action, reconKeyFor(action, args), ok)
+	if ok && action == "read_file" {
+		r.recordRead(args)
+	}
+}
+
+// lineRange is one span of a file that was read, 1-indexed and inclusive.
+type lineRange struct{ start, end int }
+
+// readFileLineCap mirrors the read_file handler's own cap. A request with no
+// end reads that many lines from the start, and a lead's target may sit
+// anywhere inside the span that actually arrived — so the span has to be
+// reconstructed the same way the handler computes it.
+const readFileLineCap = 500
+
+// recordRead remembers which lines of which file a successful read covered.
+func (r *ReconState) recordRead(args json.RawMessage) {
+	var a struct {
+		Path  string `json:"path"`
+		Start int    `json:"start"`
+		End   int    `json:"end"`
+	}
+	if len(args) == 0 || json.Unmarshal(args, &a) != nil || a.Path == "" {
+		return
+	}
+	if a.Start <= 0 {
+		a.Start = 1
+	}
+	if a.End <= 0 || a.End-a.Start+1 > readFileLineCap {
+		a.End = a.Start + readFileLineCap - 1
+	}
+	r.linesRead[a.Path] = append(r.linesRead[a.Path], lineRange{a.Start, a.End})
 }
 
 // reconKeyFor is the argument that identifies what an action was about.
@@ -226,11 +264,47 @@ func moduleOfSymbolID(id string) string {
 	return projectmap.ModuleOf(parts[1])
 }
 
-// SawSymbol reports whether this pass opened that definition's card. It is
-// what an audit lead's target list is checked against: a lead about a
-// function nobody opened is a guess about a name.
+// SawSymbol reports whether this pass actually looked at that definition.
+//
+// Two ways count. Opening its card with get_function_card is one. Reading
+// the source across the line it is defined on is the other, and it is the
+// stronger of the two — a card summarises, the source is the thing itself.
+//
+// It used to accept only the card. On runs/recon-003 the Planner resolved
+// shdr_load_pub_key and check_update_version with find_symbols, read
+// core/kernel/ree_fs_ta.c around the call, and raised a lead naming the
+// real defect; the lead was refused because neither symbol had been opened
+// as a card. The rule had confused how a function was observed with whether
+// it was.
+//
+// find_symbols still does not count on its own. It resolves a name to
+// candidate ids without showing any code, so a lead grounded on it alone
+// would be a question about a name — which is exactly what this check is
+// here to refuse.
 func (r *ReconState) SawSymbol(id artifacts.SymbolID) bool {
-	return r.symbolsViewed[string(id)]
+	if r.symbolsViewed[string(id)] {
+		return true
+	}
+	return r.readAcross(id)
+}
+
+// readAcross reports whether a read_file covered the line this symbol is
+// defined on. A SymbolID is lang:file:line:name(sig).
+func (r *ReconState) readAcross(id artifacts.SymbolID) bool {
+	parts := strings.SplitN(string(id), ":", 4)
+	if len(parts) < 4 {
+		return false
+	}
+	line, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return false
+	}
+	for _, span := range r.linesRead[parts[1]] {
+		if line >= span.start && line <= span.end {
+			return true
+		}
+	}
+	return false
 }
 
 // DistinctSymbolsViewed, DistinctModulesViewed and DistinctFilesRead are the

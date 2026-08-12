@@ -97,7 +97,7 @@ type UnresolvedCall struct {
 // the facts alone: on CVE-2026-44362 the capsule for shdr_load_pub_key lists
 // no direct write to shdr_pub_key.version while ree_fs_ta_open reads it.
 // Naming that "rollback candidate" here would move the judgement back into
-// 01, which is the defect BUG-003 §3.3 traces end to end.
+// 01, which is the defect this contract exists to prevent.
 type FunctionCapsule struct {
 	SymbolID SymbolID `json:"symbol_id"`
 	Name     string   `json:"name"`

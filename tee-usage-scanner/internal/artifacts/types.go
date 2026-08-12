@@ -26,7 +26,7 @@ type Manifest struct {
 	// the fact layer analysed a full checkout while reverse_trace read a
 	// four-file fixture, and the Challenger concluded the code was
 	// unreachable — no artifact stated the disagreement, so nothing could
-	// detect it. See BUG-002 §3.2.
+	// detect it.
 	Scope        ScannedScope      `json:"scope,omitempty"`
 	CreatedAt    string            `json:"created_at"`
 	ToolVersions map[string]string `json:"tool_versions,omitempty"`
@@ -551,7 +551,7 @@ type RoundObservation struct {
 	// Ref names this one observation: obs:<sample>:<round>:<index>:<hash>.
 	// It is what a downstream claim cites when it says where it looked. A
 	// reason that cites nothing is free text shaped like a citation, and an
-	// audit lead built on one is BUG-003 §3.3 with extra steps.
+	// audit lead built on one is the same unevidenced anchor with extra steps.
 	Ref string `json:"ref,omitempty"`
 	// OutputBlob resolves to the UNTRUNCATED body in the blob store. Output
 	// below is an excerpt; when the two differ, Truncated says so and this is

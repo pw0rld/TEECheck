@@ -322,7 +322,7 @@ func TestBuildSystemPrompt_ReconnaissanceCarriesNoPriorKnowledge(t *testing.T) {
 }
 
 // The Architecture Model and the Project Invariants are gone from BOTH
-// phases. BUG-003 is the chain they enabled: a keyword match became a
+// phases. This is the chain they enabled: a keyword match became a
 // freshness candidate, became an architecture asset, became an invariant
 // anchored at a line nobody had read — and the Planner, handed that
 // invariant at the top of its prompt, verified it instead of reading the

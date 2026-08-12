@@ -8,7 +8,7 @@
 >
 > **架构覆盖声明（2026-08-02）**：本文记录 2026-07-22 的融合方案及其实施历史。
 > 其中“Fingerprint/Architecture/ProjectInvariant 先于 Planner”“由前置 Invariant 驱动
-> Planner”“一次性 Architecture Model”已被 BUG-003 的运行证据否定，不再作为目标设计。
+> Planner”“一次性 Architecture Model”已被运行证据否定，不再作为目标设计。
 > 新实现必须以
 > [Scanner 架构](../tee-usage-scanner/docs/ARCHITECTURE.md) 为准；
 > 本文相关章节仅用于解释现有代码和迁移来源。

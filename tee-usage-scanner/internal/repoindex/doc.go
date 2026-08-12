@@ -2,7 +2,7 @@
 // the run's CodeQL database.
 //
 // It answers "what structure was observed" and nothing else: no priority, no
-// risk label, no TWE mapping. docs/bugs/BUG-003 §3.3 traces what happens
+// risk label, no TWE mapping. The amplification chain shows what happens
 // when the 01 stage decides where the danger is — a lexical "version" hit on
 // a UUID comment became a freshness asset, then a role, then a flow, then an
 // invariant's anchor, and the Expert only discovered it was a comment after

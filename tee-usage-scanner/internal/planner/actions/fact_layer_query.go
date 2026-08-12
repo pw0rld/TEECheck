@@ -51,7 +51,7 @@ type factLayerQueryArgs struct {
 // core/crypto/signed_hdr.c:262. Not knowing a caller had already been found,
 // it ran reverse_trace over a single-file fixture, got "(no callers found)",
 // and wrote that into counterevidence — from which the Challenger concluded
-// the whole path was dead code. See docs/bugs/BUG-002 §3.4.
+// the whole path was dead code.
 type factLayerQueryOutput struct {
 	ToolFactRef   string                   `json:"tool_fact_ref"`
 	Status        string                   `json:"status"`

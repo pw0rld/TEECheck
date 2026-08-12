@@ -5,7 +5,7 @@ package artifacts
 //
 // It is a question, not a finding. The distinction is the whole point: 01
 // produces no security anchors, and calling the Planner's current target an
-// "anchor" is what let BUG-003's chain run — a keyword match became a
+// "anchor" is what let the amplification chain run — a keyword match became a
 // freshness candidate, became an architecture asset, became an invariant
 // anchored at a line nobody had read, and every stage downstream treated the
 // last one as established fact.

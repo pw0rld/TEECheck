@@ -39,22 +39,33 @@ type Budget struct {
 
 // NewDefaultBudget returns the spec-default budget:
 //   - 8 investigation rounds
-//   - 6 reconnaissance rounds on top of them
+//   - 10 reconnaissance rounds on top of them
 //   - 120000 input+output tokens
 //   - 30s per action timeout
 //   - 10min total wall clock
 //
-// Six reconnaissance rounds is what the indexed gate costs at three actions
-// a round: the repository card, five modules listed, fifteen function cards
-// opened and one relation query is nineteen actions, and a model that spends
-// a round deciding where to look next needs the slack.
+// Ten reconnaissance rounds is what the indexed gate costs at
+// DefaultActionsPerRound actions a round, plus room to think. The gate needs
+// 1 repository card + reconMinModules listings + reconMinSymbols cards + 1
+// relation query = 22 successful actions; ten rounds afford 30.
+//
+// It was six. Six affords 18, and the comment here claimed the gate cost
+// "nineteen actions" — 1 + 5 + 15 + 1 is 22, not 19. At the wrong figure the
+// shortfall looked like one slot; at the right one there is no slack at all.
+// The gate was therefore unsatisfiable by construction, and both real runs
+// against OP-TEE left reconnaissance through the budget escape having landed
+// 10 and 12 of the 22 actions.
+//
+// The slack matters as much as the total: a model spends rounds deciding
+// where to look next, and rounds where a browsing action fails buy no
+// progress at all — recon-001 lost two to a symbol_id it had truncated.
 //
 // Per-provider tuning happens at the caller level; this is the
 // universal baseline.
 func NewDefaultBudget() Budget {
 	return Budget{
 		MaxRounds:        8,
-		MaxReconRounds:   6,
+		MaxReconRounds:   10,
 		MaxTokens:        120000,
 		PerActionTimeout: 30 * time.Second,
 		WallClock:        10 * time.Minute,

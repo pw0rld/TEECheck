@@ -293,3 +293,116 @@ func TestReconKeyFor_ReadsTheIdentifyingArgument(t *testing.T) {
 		}
 	}
 }
+
+// The gate's cost is measured in actions; the budget is denominated in
+// rounds. Nothing but this test converts between them, and when nothing did,
+// they disagreed: the indexed gate needed 22 successful actions and six
+// rounds at three a round afforded 18. The gate was unsatisfiable by
+// construction, so it never gated anything — it just burned six rounds and
+// stepped aside. Both real runs against OP-TEE left reconnaissance through
+// the escape, having landed 10 and 12 of the 22.
+func TestReconBudget_CanReachTheIndexedGate(t *testing.T) {
+	// One repository card, one listing per module floor, one card per symbol
+	// floor, one relation query. The spread floor is carried by the cards.
+	needed := 1 + reconMinModules + reconMinSymbols + 1
+
+	b := NewDefaultBudget()
+	slots := b.MaxReconRounds * DefaultActionsPerRound
+	if slots < needed {
+		t.Fatalf("the indexed gate needs %d successful actions and the reconnaissance "+
+			"budget affords %d (%d rounds x %d actions) — the gate can never be met, "+
+			"so every run leaves reconnaissance through the escape",
+			needed, slots, b.MaxReconRounds, DefaultActionsPerRound)
+	}
+
+	// Slack is part of the requirement, not a bonus. A model spends rounds
+	// deciding where to look next, and a round whose browsing action failed
+	// buys no progress — recon-001 lost two to a truncated symbol_id.
+	if slack := slots - needed; slack < DefaultActionsPerRound {
+		t.Errorf("only %d spare action(s): a single failed browse or one round "+
+			"spent thinking puts the gate out of reach again", slack)
+	}
+}
+
+// The tree-only gate is cheaper but has the same shape, and nothing else
+// checks it either.
+func TestReconBudget_CanReachTheTreeOnlyGate(t *testing.T) {
+	needed := 1 + minTreeReads // one list_dir on the root, then real reads
+	b := NewDefaultBudget()
+	if slots := b.MaxReconRounds * DefaultActionsPerRound; slots < needed {
+		t.Fatalf("the tree_only gate needs %d actions, budget affords %d", needed, slots)
+	}
+}
+
+// runs/recon-003 raised a lead naming the real defect and it was refused.
+// The Planner had resolved both symbols with find_symbols and read
+// core/kernel/ree_fs_ta.c across the call, but neither had been opened as a
+// card — and SawSymbol accepted only cards. The rule had confused how a
+// function was observed with whether it was.
+func TestReconState_ReadingASymbolsSourceCountsAsSeeingIt(t *testing.T) {
+	r := NewReconState(ReconModeIndexed)
+	const id = artifacts.SymbolID("cpp:core/kernel/ree_fs_ta.c:314:check_update_version(const char * db, uint32_t v)")
+
+	if r.SawSymbol(id) {
+		t.Fatal("nothing has been observed yet")
+	}
+	r.ObserveAction("read_file",
+		json.RawMessage(`{"path":"core/kernel/ree_fs_ta.c","start":300,"end":370}`), true)
+	if !r.SawSymbol(id) {
+		t.Error("a read spanning the definition's line is a stronger observation than its card")
+	}
+}
+
+// The span has to contain the line. Reading elsewhere in the same file says
+// nothing about a definition further down.
+func TestReconState_AReadThatMissesTheLineIsNotSeeingIt(t *testing.T) {
+	r := NewReconState(ReconModeIndexed)
+	const id = artifacts.SymbolID("cpp:core/kernel/ree_fs_ta.c:314:check_update_version()")
+
+	r.ObserveAction("read_file",
+		json.RawMessage(`{"path":"core/kernel/ree_fs_ta.c","start":1,"end":80}`), true)
+	if r.SawSymbol(id) {
+		t.Error("lines 1-80 do not show a function defined at 314")
+	}
+	// A different file entirely, covering the same line numbers.
+	r.ObserveAction("read_file",
+		json.RawMessage(`{"path":"core/tee/fs_htree.c","start":300,"end":370}`), true)
+	if r.SawSymbol(id) {
+		t.Error("the same line range in another file is not this definition")
+	}
+}
+
+// A read with no end reads to the handler's own cap, and the target may sit
+// anywhere in the span that actually arrived.
+func TestReconState_AnOpenEndedReadCoversTheHandlersCap(t *testing.T) {
+	r := NewReconState(ReconModeIndexed)
+	r.ObserveAction("read_file", json.RawMessage(`{"path":"a.c","start":100}`), true)
+
+	if !r.SawSymbol("cpp:a.c:400:f()") {
+		t.Error("an open-ended read from 100 covers line 400")
+	}
+	if r.SawSymbol("cpp:a.c:700:g()") {
+		t.Errorf("it must not claim to cover line 700 — the cap is %d lines", readFileLineCap)
+	}
+}
+
+// find_symbols resolves a name to candidate ids without showing any code. A
+// lead grounded on it alone would be a question about a name, which is what
+// this check exists to refuse.
+func TestReconState_FindSymbolsAloneIsNotSeeingASymbol(t *testing.T) {
+	r := NewReconState(ReconModeIndexed)
+	r.ObserveAction("find_symbols", json.RawMessage(`{"name":"check_update_version"}`), true)
+	if r.SawSymbol("cpp:core/kernel/ree_fs_ta.c:314:check_update_version()") {
+		t.Error("resolving a name is not looking at the code behind it")
+	}
+}
+
+// A failed read observed nothing.
+func TestReconState_AFailedReadGroundsNothing(t *testing.T) {
+	r := NewReconState(ReconModeIndexed)
+	r.ObserveAction("read_file",
+		json.RawMessage(`{"path":"core/kernel/ree_fs_ta.c","start":300,"end":370}`), false)
+	if r.SawSymbol("cpp:core/kernel/ree_fs_ta.c:314:f()") {
+		t.Error("a read that failed shows nothing")
+	}
+}

@@ -3,7 +3,7 @@
 > 状态：**Planner-Driven 目标架构 / 迁移中**
 > 更新日期：2026-08-02
 > 适用范围：`tee-usage-scanner/`
-> 设计依据：[BUG-003](./bugs/BUG-003-one-shot-architecture-before-code-grounding.md)
+> 设计依据：01 阶段不得在代码事实之前判定危险所在
 >
 > 当前代码仍主要按 `preprocess → architecture → invariants → planner` 运行；本文定义重构后的
 > 唯一目标架构，并在 §11 记录当前实现差异。旧顺序只用于解释迁移，不再指导新增实现。
@@ -101,7 +101,7 @@ Pinned full repository
 - 某个动作只能看到子目录时，结果必须标记 `scope=partial`；
 - scope 不一致的 ToolFact 不能作为当前 Case 的正面或负面证据。
 
-这条约束同时吸收 [BUG-002](./bugs/BUG-002-benchmark-scope-split-causes-false-unreachable.md) 的修复结论。
+这条约束同时吸收「一次运行只读一棵树」的修复结论。
 
 ---
 

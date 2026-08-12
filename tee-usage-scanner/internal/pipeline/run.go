@@ -238,7 +238,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// preprocess walks manifest.LocalPath, and invariants, expert and
 	// verifier resolve every citation against it. Leaving it at the target
 	// directory while the tools read the checkout would put the two scopes
-	// back — the same split BUG-002 is about, only harder to see because
+	// back — the same split as reading two different trees, only harder to see because
 	// nothing would print it. runinit writes the manifest before this point
 	// (the checkout needs the run directory to live in), so it is corrected
 	// here rather than pre-computed.
@@ -359,7 +359,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// the fixture: on 2026-08-01 the verifier asked it eight times for
 	// signed_hdr.h and for callers of shdr_verify_signature, and eight times
 	// it returned the lines of core/crypto/signed_hdr.c — the only file it
-	// could see. See BUG-002 §3.2.
+	// could see.
 	scannerRoot := srcRoot
 	bus.Register("scanner-001", agentbus.NewToolHandler("scanner", func(ctx context.Context, q agentbus.Query) (agentbus.Response, error) {
 		// Search for what the question names, not for every word in it. See
@@ -532,7 +532,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// investigation it reported — so a lead the model reached on its own
 	// still shipped evidence the old invariant had selected, and the same
 	// facts were attached by path match to every Case Pack downstream.
-	// BUG-003 §3.3 is what that chain produces. The Planner now cites only
+	// An unevidenced anchor is what that chain produces. The Planner now cites only
 	// what it executed itself; §6 says a lead's reasons must reference facts
 	// the Planner has seen, and a prefetched fact is not one of them.
 
@@ -551,7 +551,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// about the wide one — on CVE-2026-44362 reverse_trace reported
 	// "(no callers found)" for a function whose caller the fact layer had
 	// already located in core/kernel/ree_fs_ta.c, and the Challenger read
-	// that as the delegation path being dead code. See BUG-002 §3.2/§3.3.
+	// that as the delegation path being dead code.
 	//
 	// The fixture stays the run's identity and the understanding layer's
 	// input; only the tools widen. That is safe precisely because the two

@@ -303,7 +303,7 @@ func TestSchemaRepoFactsV1_RejectsAJudgementFieldOnACapsule(t *testing.T) {
 	  "capsules": [{"symbol_id":"cpp:a.c:1:f()","name":"f","module":"core","file":"a.c","line":1,"risk":"high"}]
 	}`)
 	if err := schema.Validate(schema.RepoFactsV1, withVerdict); err == nil {
-		t.Error("a capsule carrying a risk label must be rejected — that is BUG-003's amplification chain re-entering under a new name")
+		t.Error("a capsule carrying a risk label must be rejected — that is the amplification chain re-entering under a new name")
 	}
 }
 

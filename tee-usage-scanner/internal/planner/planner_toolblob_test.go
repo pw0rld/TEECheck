@@ -171,7 +171,7 @@ func roundObservations(t *testing.T, runDir string) []artifacts.RoundObservation
 // The ref is what an audit lead cites. If it does not survive to
 // rounds.jsonl and to the event stream identically, a citation cannot be
 // checked against what the planner actually saw — and an unverifiable
-// citation is the failure mode BUG-003 §3.3 documents.
+// citation is the failure mode this guards against.
 func TestPlannerRun_ObservationRefJoinsTheRoundsLogToTheEventStream(t *testing.T) {
 	repoRoot, runDir := setupFixtureRepo(t)
 	writeRepoFile(t, repoRoot, "src/small.rs", "fn main() {}\n")
