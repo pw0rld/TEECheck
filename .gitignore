@@ -13,8 +13,10 @@ tee-usage-scanner/web/vite.config.js
 tee-usage-scanner/web/vite.config.d.ts
 
 # Tool state
+.omc
 .codex
 .superpowers/
+docs/superpowers/
 
 # Run artifacts
 runs/

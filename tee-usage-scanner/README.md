@@ -12,7 +12,7 @@ empty: `fact_layer_query` returns `status: unsupported` and every finding
 rests on LLM judgement alone.
 
 Installing it is ~551 MB to download, 1.7 GB on disk, and about two minutes
-to verify end to end. See **[docs/SETUP_CODEQL.zh-CN.md](../docs/SETUP_CODEQL.zh-CN.md)**
+to verify end to end. See **[docs/SETUP_CODEQL.zh-CN.md](../docs/history/SETUP_CODEQL.zh-CN.md)**
 for the measured numbers, the install steps, an end-to-end verification, and
 the five known limitations (chief among them: only one of the nineteen TWE
 entries currently has an executable query).

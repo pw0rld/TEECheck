@@ -2,7 +2,7 @@
 #
 # Part 1 (TWE-FLOW-001 .. TWE-LEAK-002, 16 entries): migrated verbatim from
 # tee-audit's trustir/spec/twe_catalog.yml (PR-02 of the TEECheck/tee-audit
-# merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1). That catalog is
+# merge, docs/history/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1). That catalog is
 # attestation-centric (built for Web3/SGX consumers of remote attestation).
 #
 # Part 2 (below the "TEECheck-local extensions" marker, 3 entries): added by

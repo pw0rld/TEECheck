@@ -1,5 +1,5 @@
 # Migrated verbatim from tee-audit's trustir/spec/enum_registry.yml (PR-02 of
-# the TEECheck/tee-audit merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §5.3).
+# the TEECheck/tee-audit merge, docs/history/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §5.3).
 #
 # This is the fact vocabulary: the finite set of role/kind values a program
 # fact extracted from code may take. It has exactly one definition site — this

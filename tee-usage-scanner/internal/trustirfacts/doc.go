@@ -1,5 +1,5 @@
 // Package trustirfacts is the consumption end of the TrustIR-C fact layer
-// (docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §6, §23): it builds a per-commit
+// (docs/history/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §6, §23): it builds a per-commit
 // CodeQL C/C++ database, materializes a run-scoped copy of the
 // codeql/trustir/cpp query pack with a generated fact table, runs the
 // thin-shell query through the existing internal/codeql Engine, and

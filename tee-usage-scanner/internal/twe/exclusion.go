@@ -62,7 +62,7 @@ func (r ExclusionRules) Validate() error {
 // falls under any deny glob. This is the single evaluator for exclusion.yml;
 // callers outside this package (PR-03 fingerprinting, PR-05 fact extraction)
 // use it instead of hand-rolling their own vendor/generated/test path lists,
-// per docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §21: "vendor/generated/test
+// per docs/history/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §21: "vendor/generated/test
 // scope must be explicitly marked, using the migrated exclusion.yml".
 func (r ExclusionRules) Match(rel string) bool {
 	rel = strings.TrimPrefix(strings.TrimPrefix(rel, "./"), "/")

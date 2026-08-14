@@ -1,5 +1,5 @@
 # Migrated verbatim from tee-audit's trustir/spec/taxonomy.yml (PR-02 of the
-# TEECheck/tee-audit merge, docs/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1).
+# TEECheck/tee-audit merge, docs/history/TEECHECK_TEE_AUDIT_MERGE.zh-CN.md §20.1).
 #
 # The seven family keys below must line up exactly with
 # internal/twe.Family's FamilyFlow..FamilyLeakage constants —
