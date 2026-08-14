@@ -7,6 +7,7 @@ package pipeline
 // chain, none of which bear on what is under test here.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,10 +16,12 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
 // donePass builds one planner round response whose single action is `done`
@@ -231,5 +234,62 @@ func TestRunL3Planner_WriteFailureAbortsTheRun(t *testing.T) {
 	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1}
 	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err == nil {
 		t.Fatal("a failure to persist case packs must abort the run, not be swallowed into bundle.Errors")
+	}
+}
+
+// TestRunL3Planner_Pass1ErrorFailsLoudWhenNoDeterministic is the codex-R3 MEDIUM
+// branch: when planner pass 1 errors AND the deterministic lane has no supported
+// facts, the run must fail loudly rather than silently emitting zero findings.
+// FakeClient.Err makes planner.Run break on round 1 with a non-nil result.Err.
+func TestRunL3Planner_Pass1ErrorFailsLoudWhenNoDeterministic(t *testing.T) {
+	repoRoot, runDir := setupPlannerRun(t, "src/a.c")
+	client := &llmtest.FakeClient{Err: fmt.Errorf("llm unavailable")}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1}
+	err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil)
+	if err == nil {
+		t.Fatal("pass-1 error with no deterministic packs must abort the run, got nil")
+	}
+}
+
+// TestRunL3Planner_Pass1ErrorProceedsOnDeterministic is the other half of the
+// codex-R3 MEDIUM branch plus the deterministic-only evidence_bundle.json
+// (Finding 3): when planner pass 1 errors but the deterministic lane promoted a
+// grounded case, the run proceeds on that case (detection survives a planner
+// outage) AND writes a minimal evidence_bundle.json so stats do not misreport
+// the planner as absent.
+func TestRunL3Planner_Pass1ErrorProceedsOnDeterministic(t *testing.T) {
+	repoRoot, runDir := setupPlannerRun(t, "src/x.c")
+	// Inject a canned deterministic pack via the seam; the real lane is inert
+	// without a CodeQL engine.
+	orig := deterministicCasesFn
+	deterministicCasesFn = func(context.Context, trustirfacts.Engine, codedb.DatabaseProvider, string, string, string, string, string) ([]artifacts.CasePack, error) {
+		return []artifacts.CasePack{{
+			SchemaVersion: "teecheck.case_pack.v1",
+			CaseID:        "deterministic:test",
+			Category:      "state_machine",
+			Priority:      "high",
+			TargetFiles:   []string{"src/x.c"},
+			ToolFactRefs:  []string{"02_tool_facts/trustir/facts/test.json"},
+		}}, nil
+	}
+	t.Cleanup(func() { deterministicCasesFn = orig })
+
+	client := &llmtest.FakeClient{Err: fmt.Errorf("llm unavailable")}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1, MaxCases: 12}
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+		t.Fatalf("pass-1 error must proceed on deterministic packs, not abort: %v", err)
+	}
+	// The deterministic case survives a planner outage.
+	packs := readWrittenPacks(t, runDir)
+	if len(packs) != 1 || packs[0].TargetFiles[0] != "src/x.c" {
+		t.Fatalf("want the 1 deterministic pack on src/x.c, got %v", targetFilesOf(packs))
+	}
+	// A minimal evidence_bundle.json is written so collectPlanner sees the stage.
+	var bundle artifacts.EvidenceBundle
+	if err := runfs.ReadJSON(runfs.EvidenceBundlePath(runDir), &bundle); err != nil {
+		t.Fatalf("minimal deterministic-only evidence_bundle.json must be written: %v", err)
+	}
+	if bundle.PlannerMeta.TerminationReason != "deterministic_only_planner_no_bundle" {
+		t.Errorf("TerminationReason = %q, want deterministic_only_planner_no_bundle", bundle.PlannerMeta.TerminationReason)
 	}
 }

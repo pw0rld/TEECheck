@@ -37,7 +37,7 @@ import (
 
 // rollbackPlaybookYAML is a minimal, schema-valid teecheck.twe_playbook.v1
 // playbook for TWE-STATE-001 (see internal/twecontext.Playbook.Validate and
-// knowledge/twe/playbooks/rollback.yml for the real, larger version this
+// knowledge/twe/exemplars/TWE-STATE-001.yml for the real, larger version this
 // mirrors). It exists purely so runL3Planner's twecontext.Load call (in
 // internal/pipeline/run.go) has a catalog to build TWEPlaybookSummary.
 // CommonDefenses/CommonFalsePositives from — the exact fields the
@@ -64,13 +64,13 @@ trustir_hints:
   - trace_restore_or_version_to_authority
 `
 
-// setupPlaybookKnowledgeRoot creates a knowledge root whose twe/playbooks/
+// setupPlaybookKnowledgeRoot creates a knowledge root whose twe/exemplars/
 // directory contains rollbackPlaybookYAML, matching the layout
-// runL3Planner reads via filepath.Join(cfg.KnowledgeRoot, "twe", "playbooks").
+// runL3Planner reads via filepath.Join(cfg.KnowledgeRoot, "twe", "exemplars").
 func setupPlaybookKnowledgeRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	dir := filepath.Join(root, "twe", "playbooks")
+	dir := filepath.Join(root, "twe", "exemplars")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

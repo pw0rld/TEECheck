@@ -497,7 +497,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// same policy): the action then fails per call instead of the run failing.
 	var playbooks actions.PlaybookDetailSource
 	var tweCatalog *twecontext.Catalog
-	if cat, cerr := twecontext.Load(filepath.Join(cfg.KnowledgeRoot, "twe", "playbooks")); cerr == nil {
+	if cat, cerr := twecontext.Load(filepath.Join(cfg.KnowledgeRoot, "twe", "exemplars")); cerr == nil {
 		playbooks = cat
 		tweCatalog = cat
 	} else {
@@ -570,6 +570,24 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	var allPacks []artifacts.CasePack
 	var avoid []string
 
+	// P4+ automatic deterministic lane: fire the structured fact layer HERE,
+	// before the planner loop, so it is truly once-per-scan and independent of
+	// the planner's outcome. It depends only on the CodeQL engine — built
+	// during indexing, before this function runs — not on any planner
+	// candidate, which is the point: this is the only planner-independent,
+	// leakage-free detection route (see deterministic_facts.go). Seeding
+	// allPacks before the loop is what makes the pass-1 hard-error and
+	// nil-bundle paths below fall back to these grounded cases instead of
+	// aborting the run — the "independent of the planner" contract made good.
+	detPacks, derr := deterministicCasesFn(context.Background(), eng, db, queryPackDir, runDir, manifest.RepoURL, manifest.Commit, cfg.Focus)
+	if derr != nil {
+		return fmt.Errorf("deterministic fact lane: %w", derr)
+	}
+	if len(detPacks) > 0 {
+		fmt.Printf("[deterministic] promoted %d grounded case pack(s) from the fact layer\n", len(detPacks))
+	}
+	allPacks = append(allPacks, detPacks...)
+
 	for pass := 1; pass <= samples; pass++ {
 		if samples > 1 {
 			fmt.Printf("\n=== Planner pass %d/%d (avoiding %d previously-covered targets) ===\n", pass, samples, len(avoid))
@@ -616,7 +634,17 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 		}
 		if result.Err != nil {
 			if pass == 1 {
-				return fmt.Errorf("planner pass 1: %w", result.Err)
+				if len(allPacks) == 0 {
+					return fmt.Errorf("planner pass 1: %w (the deterministic fact lane also found no supported facts; check rounds.jsonl at %s)", result.Err, runfs.RoundsLogPath(runDir))
+				}
+				// Pass 1 failed but the deterministic lane already seeded
+				// grounded, CodeQL-confirmed cases into allPacks — the run has
+				// real output, so proceed on those rather than aborting. This is
+				// the "independent of the planner" contract made concrete: a
+				// planner outage no longer hides the deterministic lane's
+				// findings.
+				fmt.Fprintf(os.Stderr, "Warning: planner pass 1 failed (%v); proceeding with %d deterministic case pack(s)\n", result.Err, len(allPacks))
+				break
 			}
 			// A later pass failing is not fatal — we already have
 			// earlier-pass bundles to work with.
@@ -625,7 +653,10 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 		}
 		if result.Bundle == nil {
 			if pass == 1 {
-				return fmt.Errorf("planner pass 1 returned nil bundle")
+				if len(allPacks) == 0 {
+					return fmt.Errorf("planner pass 1 returned nil bundle and the deterministic fact lane found no supported facts; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
+				}
+				break
 			}
 			break
 		}
@@ -654,47 +685,79 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	}
 
 	if len(bundles) == 0 {
-		return fmt.Errorf("planner produced no bundles; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
-	}
-
-	// Merge into a single bundle for downstream: the first bundle's
-	// metadata (commit, repo, run_id) stays authoritative, candidates
-	// are the deduped union.
-	merged := *bundles[0]
-	merged.Candidates = DedupeCandidates(bundles)
-	mergedTokens := 0
-	mergedWall := int64(0)
-	mergedRounds := 0
-	for _, b := range bundles {
-		mergedTokens += b.PlannerMeta.TokensUsed
-		mergedWall += b.PlannerMeta.WallClockMs
-		mergedRounds += b.PlannerMeta.RoundsUsed
-	}
-	merged.PlannerMeta.TokensUsed = mergedTokens
-	merged.PlannerMeta.WallClockMs = mergedWall
-	merged.PlannerMeta.RoundsUsed = mergedRounds
-
-	if samples > 1 {
-		fmt.Printf("\n=== Multi-sample dedupe ===\n")
-		rawTotal := 0
-		for _, b := range bundles {
-			rawTotal += len(b.Candidates)
+		if len(allPacks) == 0 {
+			// Defensive invariant: with samples normalized to ≥1 above, the
+			// planner loop always runs pass 1, and pass 1's error/nil-bundle
+			// guards already return this same error when allPacks is empty. So
+			// reaching here with an empty allPacks should be impossible today —
+			// the guard is retained as a fail-loud net against a future change
+			// to those guards or the normalization, rather than silently
+			// succeeding with zero findings.
+			return fmt.Errorf("planner produced no bundles and the deterministic fact lane found no supported facts; check rounds.jsonl at %s", runfs.RoundsLogPath(runDir))
 		}
-		fmt.Printf("Total raw candidates across %d passes: %d\n", len(bundles), rawTotal)
-		fmt.Printf("Unique after dedup: %d\n", len(merged.Candidates))
-	}
+		// The planner produced no bundle (every pass failed, or pass 1 returned
+		// nil and we proceeded on the deterministic packs seeded above the
+		// loop). Write a minimal evidence_bundle.json so the stats collector
+		// (internal/stats/collector.go collectPlanner) still sees the planner
+		// stage as present and records that downstream ran on deterministic
+		// cases only; without it, evidence_bundle.json is absent and stats
+		// misreport the planner as missing.
+		if err := runfs.WriteJSON(runfs.EvidenceBundlePath(runDir), artifacts.EvidenceBundle{
+			SchemaVersion: "teecheck.evidence_bundle.v1",
+			RunID:         manifest.RunID,
+			Repo: artifacts.RepoRef{
+				URL:    manifest.RepoURL,
+				Commit: manifest.Commit,
+				Focus:  cfg.Focus,
+			},
+			PlannerMeta: artifacts.PlannerMeta{
+				TerminationReason: "deterministic_only_planner_no_bundle",
+			},
+			FinalSummary: "planner produced no bundle; downstream ran on deterministic fact-layer cases only",
+		}); err != nil {
+			return fmt.Errorf("write deterministic-only evidence bundle: %w", err)
+		}
+	} else {
+		// Merge into a single bundle for downstream: the first bundle's
+		// metadata (commit, repo, run_id) stays authoritative, candidates
+		// are the deduped union.
+		merged := *bundles[0]
+		merged.Candidates = DedupeCandidates(bundles)
+		mergedTokens := 0
+		mergedWall := int64(0)
+		mergedRounds := 0
+		for _, b := range bundles {
+			mergedTokens += b.PlannerMeta.TokensUsed
+			mergedWall += b.PlannerMeta.WallClockMs
+			mergedRounds += b.PlannerMeta.RoundsUsed
+		}
+		merged.PlannerMeta.TokensUsed = mergedTokens
+		merged.PlannerMeta.WallClockMs = mergedWall
+		merged.PlannerMeta.RoundsUsed = mergedRounds
 
-	// Persist merged bundle to the canonical evidence_bundle.json
-	// path so downstream (and stats) see a single view of truth.
-	if err := runfs.WriteJSON(runfs.EvidenceBundlePath(runDir), merged); err != nil {
-		return fmt.Errorf("write merged evidence bundle: %w", err)
+		if samples > 1 {
+			fmt.Printf("\n=== Multi-sample dedupe ===\n")
+			rawTotal := 0
+			for _, b := range bundles {
+				rawTotal += len(b.Candidates)
+			}
+			fmt.Printf("Total raw candidates across %d passes: %d\n", len(bundles), rawTotal)
+			fmt.Printf("Unique after dedup: %d\n", len(merged.Candidates))
+		}
+
+		// Persist merged bundle to the canonical evidence_bundle.json
+		// path so downstream (and stats) see a single view of truth.
+		if err := runfs.WriteJSON(runfs.EvidenceBundlePath(runDir), merged); err != nil {
+			return fmt.Errorf("write merged evidence bundle: %w", err)
+		}
 	}
 
 	// Case Packs are written exactly once, here, from the union of every
-	// pass. planner.Run deliberately writes nothing to 03_cases/ — it is
-	// called once per --samples pass, so a per-pass write would restart the
-	// case-%03d numbering each time and leave an earlier pass's
-	// higher-numbered files orphaned among the current pass's.
+	// pass plus any deterministic pack. planner.Run deliberately writes
+	// nothing to 03_cases/ — it is called once per --samples pass, so a
+	// per-pass write would restart the case-%03d numbering each time and
+	// leave an earlier pass's higher-numbered files orphaned among the
+	// current pass's.
 	//
 	// Dedupe first, cap second: capping a list that still holds duplicates
 	// would let the same finding consume two of the --max-cases slots. The
@@ -704,10 +767,14 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// After dedup, not before: a fact attached to a pack that dedup then
 	// drops reaches nobody, which is how the 2026-07-31 run collected the
 	// right ToolFact and delivered it to no agent.
+
 	final := planner.DedupePacks(allPacks)
 	if cfg.MaxCases > 0 && len(final) > cfg.MaxCases {
-		fmt.Printf("[planner] capping %d case packs at --max-cases=%d\n", len(final), cfg.MaxCases)
-		final = final[:cfg.MaxCases]
+		fmt.Printf("[planner] capping %d case packs at --max-cases=%d (tool-grounded packs preserved)\n", len(final), cfg.MaxCases)
+		// capPreservingGrounded never truncates a ToolFactRef-bearing pack to
+		// make room for a planner lead — a CodeQL-confirmed case outranks a
+		// hypothesis.
+		final = capPreservingGrounded(final, cfg.MaxCases)
 	}
 	if err := planner.Write(runDir, final); err != nil {
 		return fmt.Errorf("write case packs: %w", err)
