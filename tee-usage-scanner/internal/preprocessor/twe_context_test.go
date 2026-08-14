@@ -13,11 +13,11 @@ import (
 func TestCompileTWEKnowledgePersistsContextAndManifest(t *testing.T) {
 	knowledgeRoot := t.TempDir()
 	runDir := t.TempDir()
-	playbooks := filepath.Join(knowledgeRoot, "twe", "playbooks")
-	if err := os.MkdirAll(playbooks, 0o755); err != nil {
+	exemplars := filepath.Join(knowledgeRoot, "twe", "exemplars")
+	if err := os.MkdirAll(exemplars, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeRepoFile(t, playbooks, "test.yml", validTWEContextFixture)
+	writeRepoFile(t, exemplars, "test.yml", validTWEContextFixture)
 
 	written, err := compileTWEKnowledge(knowledgeRoot, runDir)
 	if err != nil {

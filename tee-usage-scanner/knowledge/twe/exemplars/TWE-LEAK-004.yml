@@ -1,0 +1,89 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-LEAK-004
+name: Residual or Uninitialized Memory Crosses a Boundary
+family: Leakage
+
+scenario: >
+  The trusted side allocates a buffer larger than the data it writes, or reuses
+  a buffer without clearing it, then passes or returns the whole allocation
+  across the trust boundary. The bytes beyond the written length carry prior
+  secret contents and are exposed to the less-trusted caller or to an observer.
+
+attacker_capabilities:
+  - request_an_operation_that_allocates_or_reuses_a_buffer
+  - observe_the_fullReturned_length_not_just_the_logical_payload
+  - trigger_allocation_reuse_across_secret_and_non_secret_data
+  - choose_a_size_that_maximizes_rounding_slack
+
+look_for:
+  - allocation_rounded_up_or_over_allocated_before_use
+  - memset_or_zero_call_using_the_logical_size_not_the_allocated_size
+  - buffers_returned_or_copied_out_at_the_allocated_not_written_length
+  - stack_or_heap_reuse_without_clearing_between_secret_and_exit
+  - initialization_gated_behind_a_flag_that_can_be_inactive
+  - copy_out_length_taken_from_an_attacker_influenced_field
+
+investigation_steps:
+  - enumerate_allocators_and_clear_or_init_helpers
+  - find_allocations_whose_size_is_rounded_or_over_estimated
+  - confirm_the_clear_uses_the_allocated_or_rounded_size_not_the_logical_one
+  - trace_whether_the_full_allocation_can_leave_the_trust_boundary
+  - check_for_reuse_of_a_buffer_across_secret_data_without_clearing
+  - compare_vulnerable_and_fixed_clear_extent
+
+required_evidence:
+  - an_allocation_reachable_from_an_untrusted_caller
+  - the_clear_or_init_covers_fewer_bytes_than_the_allocation_rounds_to
+  - uncleared_bytes_can_cross_the_boundary_or_be_observed
+  - the_path_is_in_production_scope_and_not_test_only
+  - the_fixed_revision_clears_the_full_rounded_or_allocated_extent
+
+common_defenses:
+  - clear_the_full_rounded_or_allocated_extent_not_the_logical_size
+  - calloc_or_zero_on_alloc_so_rounding_slack_is_defined
+  - copy_out_exactly_the_written_length_never_the_allocated_length
+  - clear_on_free_and_on_every_transition_between_data_classes
+
+common_false_positives:
+  - the_rounded_slack_is_unreachable_or_never_copied_out
+  - the_allocator_already_returns_zeroed_memory
+  - the_buffer_carries_no_prior_secret_data
+  - the_path_is_test_only
+
+related_twes:
+  - TWE-LEAK-001
+  - TWE-FLOW-002
+
+trustir_hints:
+  - label_uninitialized_memory_object
+  - label_boundary_exit
+  - label_size_source
+  - label_clear_or_zero_guard
+  - compare_vulnerable_and_fixed_clear_extent
+
+code_examples:
+  - cve: CVE-2019-1010294
+    cwe: CWE-226
+    title: TA memory zeroed for logical size, not allocation granularity
+    vulnerable: |
+      struct mobj *mobj = mobj_mm_alloc(mobj_sec_ddr, size, &tee_mm_sec_ddr);
+      if (mobj)
+          memset(mobj_get_va(mobj, 0), 0, size);
+      return mobj;
+    fixed: |
+      struct mobj *mobj = mobj_mm_alloc(mobj_sec_ddr, size, &tee_mm_sec_ddr);
+      if (mobj) {
+          size_t granularity = BIT(tee_mm_sec_ddr.shift);
+          /* Round up to allocation granularity size */
+          memset(mobj_get_va(mobj, 0), 0, ROUNDUP(size, granularity));
+      }
+      return mobj;
+    fix: >
+      Zero ROUNDUP(size, granularity), the bytes the allocator actually backs,
+      not the requested logical size.
+    why: >
+      The secure DDR allocator rounds size up to a granularity, but the TA
+      memory is cleared only for the requested logical size, leaving the rounded
+      slack bytes uncleared. Subsequent reuse of that TA memory can expose the
+      prior residual contents — sensitive information in a resource not cleared
+      before reuse (OP-TEE alloc_ta_mem).

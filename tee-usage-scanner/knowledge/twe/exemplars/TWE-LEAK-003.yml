@@ -1,0 +1,101 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-LEAK-003
+name: Secret-Dependent Timing Observable
+family: Leakage
+
+scenario: >
+  Control flow or memory access depends on a secret value, and the resulting
+  timing or control-flow difference is observable across the trust boundary.
+  The classic shapes are an early-return comparison on a secret, a data-dependent
+  loop bound, or an error path that distinguishes padding/format validity by
+  response latency, enabling a side-channel oracle.
+
+attacker_capabilities:
+  - submit_chosen_ciphertext_or_message_repeatedly
+  - measure_response_latency_or_observe_success_versus_failure
+  - trigger_the_error_or_short_circuit_path_at_will
+  - distinguish_branch_taken_or_loop_iterations_from_outside
+
+look_for:
+  - memcmp_or_strncmp_returning_early_on_a_secret_or_keyed_value
+  - a_loop_bound_or_break_condition_that_depends_on_secret_data
+  - distinct_return_paths_for_valid_versus_invalid_padding_or_format
+  - error_message_or_code_that_reveals_how_far_processing_reached
+  - secret_indexed_memory_access_without_constant_time_selection
+  - verification_that_returns_on_first_difference
+
+investigation_steps:
+  - enumerate_decryption_verify_and_unpad_entrypoints
+  - find_compares_or_loops_over_secret_or_padding_bytes
+  - test_whether_execution_time_or_path_differs_with_the_secret
+  - confirm_any_error_or_short_circuit_is_reachable_from_outside
+  - check_for_constant_time_compare_and_unconditional_scanning
+  - compare_vulnerable_and_fixed_branch_structure
+
+required_evidence:
+  - an_entrypoint_reachable_with_attacker_chosen_input_that_reaches_secret_dependent_logic
+  - a_branch_loop_or_return_whose_taken_path_or_count_depends_on_a_secret
+  - the_timing_or_control_flow_difference_is_observable_across_the_boundary
+  - the_path_is_in_production_scope_and_not_test_only
+  - the_fixed_revision_makes_the_path_constant_time_or_unconditional
+
+common_defenses:
+  - constant_time_memcmp_over_the_full_secret
+  - unconditional_scan_that_accumulates_a_bad_flag_and_returns_once
+  - uniform_error_code_and_latency_for_all_failure_modes
+  - padding_validated_in_constant_time_with_a_single_terminal_branch
+
+common_false_positives:
+  - the_secret_dependent_path_is_unreachable_from_outside
+  - the_value_is_not_secret_or_is_attacker_public
+  - a_dominating_constant_time_check_precedes_the_branch
+  - the_path_is_test_only_or_the_oracle_is_not_observable_in_practice
+
+related_twes:
+  - TWE-LEAK-001
+  - TWE-LEAK-002
+
+trustir_hints:
+  - label_secret_source
+  - label_secret_dependent_branch
+  - label_observable_sink
+  - label_constant_time_guard
+  - compare_vulnerable_and_fixed_branch_structure
+
+code_examples:
+  - cve: CVE-2026-41514
+    cwe: CWE-385
+    title: RSA-OAEP label-hash compared with early-return memcmp (Manger-style timing oracle)
+    vulnerable: |
+      if (memcmp(hash, db, lhash_len)) {
+          EMSG("Hash is not equal");
+          return TEE_ERROR_BAD_PARAMETERS;
+      }
+      for (lp_len = lhash_len; lp_len < db_len; lp_len++) {
+          if (db[lp_len] != 0)
+              break;
+      }
+      if (lp_len == db_len) {
+          EMSG("Fail to find fixed 01 in db");
+          return TEE_ERROR_BAD_PARAMETERS;
+      }
+    fixed: |
+      bad = consttime_memcmp(hash, db, lhash_len) != 0;
+      /* scan the entire db unconditionally so time reveals neither the
+       * separator position nor whether one exists */
+      for (i = lhash_len; i < db_len; i++) {
+          if (db[i] != 0 && lp_len == lhash_len)
+              lp_len = i;
+      }
+      if (lp_len >= db_len || db[lp_len] != 0x01)
+          bad = true;
+      if (bad)
+          return TEE_ERROR_BAD_PARAMETERS;
+    fix: >
+      Replace memcmp (early return) with consttime_memcmp and scan the whole db
+      unconditionally, accumulating one bad flag and returning exactly once.
+    why: >
+      memcmp returns at the first differing byte and the separator scan breaks
+      on the first non-zero, so response latency reveals the label-hash match
+      and the 0x01 separator position — a decryption/padding timing oracle
+      (Manger attack, CRYPTO 2001) over the TEE's RSA-OAEP path (OP-TEE HPRE).

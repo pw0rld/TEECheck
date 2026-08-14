@@ -87,3 +87,49 @@ trustir_hints:
   - mark_additional_trust_flow_steps_through_propagators
   - restrict_findings_to_production_scope
   - compare_vulnerable_and_fixed_check_placement
+
+code_examples:
+  - cve: CVE-2019-1010295
+    cwe: CWE-20
+    title: User-TA pointer reaches callee TA without access-rights check
+    vulnerable: |
+      static void utee_param_to_param(struct tee_ta_param *p, struct utee_params *up)
+      {
+          ...
+          case TEE_PARAM_TYPE_MEMREF_INPUT:
+          case TEE_PARAM_TYPE_MEMREF_OUTPUT:
+          case TEE_PARAM_TYPE_MEMREF_INOUT:
+              p->u[n].mem.mobj = &mobj_virt;
+              p->u[n].mem.offs = a;   /* attacker-controlled pointer */
+              p->u[n].mem.size = b;   /* attacker-controlled length  */
+              break;
+      }
+    fixed: |
+      static TEE_Result utee_param_to_param(struct user_ta_ctx *utc,
+                                            struct tee_ta_param *p,
+                                            struct utee_params *up)
+      {
+          uint32_t flags = TEE_MEMORY_ACCESS_READ | TEE_MEMORY_ACCESS_ANY_OWNER;
+          ...
+          case TEE_PARAM_TYPE_MEMREF_OUTPUT:
+          case TEE_PARAM_TYPE_MEMREF_INOUT:
+              flags |= TEE_MEMORY_ACCESS_WRITE;
+              /*FALLTHROUGH*/
+          case TEE_PARAM_TYPE_MEMREF_INPUT:
+              p->u[n].mem.mobj = &mobj_virt;
+              p->u[n].mem.offs = a;
+              p->u[n].mem.size = b;
+              if (tee_mmu_check_access_rights(utc, flags, a, b))
+                  return TEE_ERROR_ACCESS_DENIED;
+              break;
+      }
+    fix: >
+      Take the caller context (utc), derive the required access direction, and
+      gate each memory reference with tee_mmu_check_access_rights before it is
+      handed to the callee.
+    why: >
+      A user TA supplies the offset (a) and size (b) of a memory reference that
+      is passed straight through to a callee (pseudo-TA) with no check that the
+      caller actually owns that memory. The privileged callee then reads or
+      writes any address the caller names — host-controlled data reaches a
+      privileged operation without an access-rights check (OP-TEE tee_svc).

@@ -57,6 +57,32 @@ func OperationForTWE(tweID string) (Operation, bool) {
 	return op, ok
 }
 
+// TWEForOperation is the inverse of OperationForTWE: a TWE id whose question
+// this operation answers. The P4+ deterministic fact lane (internal/pipeline)
+// uses it to tag its grounded CasePacks with the playbook the downstream
+// Challenger should load for them. twebinding_test.go enforces a surjection
+// between tweOperations and operationQueries in both directions — every bound
+// operation is executable, and every executable operation is bound — so for
+// any supported operation at least one TWE exists. The mapping is not a
+// bijection: more than one TWE may answer the same operation, in which case
+// the lexicographically smallest id wins, so the answer is stable across runs
+// rather than depending on Go map iteration order. The false return is still
+// handled rather than panicked, so a future unbound operation degrades to an
+// untagged case instead of a crash.
+func TWEForOperation(op Operation) (string, bool) {
+	var matches []string
+	for twe, o := range tweOperations {
+		if o == op {
+			matches = append(matches, twe)
+		}
+	}
+	if len(matches) == 0 {
+		return "", false
+	}
+	sort.Strings(matches)
+	return matches[0], true
+}
+
 // DefaultQueryPackDir is the checked-in query pack's conventional location,
 // relative to the tee-usage-scanner module root. Request.QueryPackDir is
 // required rather than defaulted internally (this package makes no

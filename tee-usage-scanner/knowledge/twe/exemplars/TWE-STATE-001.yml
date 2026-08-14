@@ -62,8 +62,8 @@ common_false_positives:
   - the_guards_input_is_confirmed_written_from_a_live_source_on_every_call_path_to_it
 
 related_twes:
-  - TWE-STATE-REPLAY
-  - TWE-CONFIG-WEAK-MODE
+  - TWE-STATE-002
+  - TWE-CONFIG-001
 
 trustir_hints:
   - enumerate_boundary_entrypoints

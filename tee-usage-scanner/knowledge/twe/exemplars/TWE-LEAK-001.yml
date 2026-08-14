@@ -1,0 +1,95 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-LEAK-001
+name: Enclave Secret or Internal State Reaches Logs, Errors, or Metadata
+family: Leakage
+
+scenario: >
+  The trusted side writes secret material or another component's internal state
+  to an observable sink — a log line, an error message, debug output, or
+  response metadata — without first proving the data belongs to the caller or
+  is fit to expose. The sink crosses the trust boundary, so the data leaves the
+  TEE or leaves the compartment that owns it.
+
+attacker_capabilities:
+  - call_a_logging_or_debug_interface_with_a_chosen_pointer_or_value
+  - trigger_error_paths_that_format_secret_or_internal_state
+  - read_the_log_output_or_sideband_metadata_channel
+  - supply_format_arguments_or_lengths_that_select_what_is_dumped
+
+look_for:
+  - log_or_print_paths_that_dereference_a_caller_supplied_pointer
+  - error_or_debug_formatting_that_includes_keys_secrets_or_internal_buffers
+  - privileged_handlers_that_dump_memory_or_state_to_an_output_device
+  - response_or_metadata_fields_populated_from_secret_or_cross_partition_data
+  - logging_enabled_by_a_debug_or_raw_config_reachable_in_a_production_build
+  - length_or_size_taken_from_the_caller_when_copying_data_to_the_sink
+
+investigation_steps:
+  - enumerate_logging_debug_and_error_formatting_entrypoints
+  - find_paths_that_dereference_or_copy_caller_supplied_pointers_into_output
+  - trace_whether_the_pointed_data_can_be_secret_or_owned_by_another_partition
+  - check_for_an_access_rights_or_ownership_check_before_the_dump_or_log
+  - confirm_the_sink_is_observable_across_the_boundary_in_production
+  - compare_vulnerable_and_fixed_pre_dump_check
+
+required_evidence:
+  - a_log_error_or_metadata_sink_reachable_from_a_less_trusted_caller
+  - secret_or_cross_partition_state_reaches_that_sink
+  - no_ownership_or_access_check_gates_the_transfer
+  - the_sink_is_observable_in_a_production_configuration
+  - the_fixed_revision_adds_an_access_or_ownership_check_before_output
+
+common_defenses:
+  - access_rights_check_on_every_caller_supplied_pointer_before_dereference
+  - fail_closed_panic_or_deny_when_the_pointer_is_outside_the_caller_region
+  - redact_or_truncate_secret_fields_before_any_formatting
+  - gate_raw_or_debug_logging_off_by_default_in_production_builds
+
+common_false_positives:
+  - the_dumped_data_is_attacker_public_or_non_secret
+  - the_pointer_is_validated_by_a_caller_before_this_path
+  - the_sink_is_disabled_or_unreachable_in_production
+  - the_data_belongs_to_the_calling_partition_already
+
+related_twes:
+  - TWE-LEAK-002
+  - TWE-FLOW-002
+
+trustir_hints:
+  - label_secret_source
+  - label_observable_sink
+  - label_normalizer
+  - label_trust_boundary
+  - compare_vulnerable_and_fixed_pre_dump_check
+
+code_examples:
+  - cve: CVE-2023-51712
+    cwe: CWE-125
+    title: Privileged SVC dumps an ARoT-supplied pointer to stdout without an access check
+    vulnerable: |
+      case TFM_SVC_OUTPUT_UNPRIV_STRING:
+          svc_args[0] = tfm_hal_output_spm_log((const char *)svc_args[0],
+                                                svc_args[1]);
+          break;
+    fixed: |
+      case TFM_SVC_OUTPUT_UNPRIV_STRING:
+          curr_partition = GET_CURRENT_COMPONENT();
+          FIH_CALL(tfm_hal_memory_check, fih_rc, curr_partition->boundary,
+                   (uintptr_t)svc_args[0], svc_args[1], TFM_HAL_ACCESS_READABLE);
+          if (fih_eq(fih_rc, fih_int_encode(PSA_SUCCESS))) {
+              svc_args[0] = tfm_hal_output_spm_log((const char *)svc_args[0],
+                                                    svc_args[1]);
+          } else {
+              tfm_core_panic();
+          }
+          break;
+    fix: >
+      Before logging, verify with tfm_hal_memory_check that the caller's pointer
+      (svc_args[0], svc_args[1]) lies within the calling partition's boundary and
+      is readable; otherwise panic.
+    why: >
+      The SVC handler runs at the highest privilege with full memory access. It
+      dereferences and logs a pointer supplied by an ARoT partition without
+      checking the pointer belongs to that partition, so a malicious ARoT can
+      point at PRoT memory and dump it to stdout — enclave/internal state reaches
+      an observable log sink (TF-M TFMV-7).

@@ -1,0 +1,84 @@
+schema_version: teecheck.twe_playbook.v1
+id: TWE-GUARD-004
+name: Incomplete Cryptographic Verification
+family: Guard
+
+scenario: >
+  A cryptographic verification primitive checks only part of the authenticated
+  value — a truncated authentication tag, a single byte, or a length derived
+  from a field's type rather than its security length — so a forged payload
+  whose prefix matches the expected value passes verification and is treated as
+  authentic.
+
+attacker_capabilities:
+  - control_ciphertext_and_tag_or_signature
+  - choose_a_truncated_or_partial_value_to_submit
+  - observe_whether_verify_accepts_or_rejects
+  - replay_a_value_that_matches_only_the_checked_part
+
+look_for:
+  - tag_or_mac_compared_for_fewer_bytes_than_the_security_length
+  - verification_loop_bound_derived_from_sizeof_a_length_field_or_type
+  - a_verify_call_passing_a_constant_or_hardcoded_short_length
+  - early_return_on_first_mismatch_that_leaks_match_position
+  - signature_or_point_check_that_skips_a_required_component
+  - verify_invoked_with_a_length_the_caller_partially_controls
+
+investigation_steps:
+  - enumerate_aead_mac_or_signature_verify_entrypoints
+  - find_the_loop_or_compare_that_checks_the_tag_mac_or_signature
+  - confirm_the_bound_uses_the_full_security_length_not_a_type_size
+  - check_the_comparison_is_constant_time_and_complete_over_the_whole_value
+  - trace_whether_an_attacker_can_shrink_the_compared_length
+  - confirm_a_short_match_is_not_treated_as_full_authentication
+  - compare_vulnerable_and_fixed_comparison_bound
+
+required_evidence:
+  - a_verification_entrypoint_reachable_with_attacker_chosen_input
+  - the_compare_or_loop_uses_a_length_shorter_than_the_security_length
+  - a_forged_value_matching_only_the_checked_part_passes_verification
+  - the_path_is_in_production_scope_and_not_test_only
+  - the_fixed_revision_extends_the_comparison_to_the_full_length
+
+common_defenses:
+  - compare_over_the_full_length_derived_from_the_algorithm_not_a_type_size
+  - constant_time_memcmp_across_the_whole_tag
+  - reject_before_use_when_presented_tag_length_is_unexpected
+  - validate_length_against_an_algorithm_constant_before_comparing
+
+common_false_positives:
+  - the_short_compare_is_on_a_non_secret_canary_or_handshake_cookie
+  - the_full_value_is_verified_in_a_caller_before_this_short_check_runs
+  - the_value_is_self_authenticating_via_a_separate_signature
+  - the_path_is_test_or_example_only
+
+related_twes:
+  - TWE-LEAK-003
+  - TWE-GUARD-001
+
+trustir_hints:
+  - label_verification_operations
+  - label_verified_input_span
+  - label_accepted_domain_constraint
+  - compare_vulnerable_and_fixed_compare_length
+
+code_examples:
+  - cve: CVE-2023-40271
+    cwe: CWE-187
+    title: ChaCha20-Poly1305 tag verified on first 4 of 16 bytes
+    vulnerable: |
+      /* Check tag in "constant-time" */
+      for (diff = 0, i = 0; i < sizeof(tag_length); i++)
+          diff |= tag[i] ^ local_tag_buffer[i];
+    fixed: |
+      /* Check tag in "constant-time" */
+      for (diff = 0, i = 0; i < tag_length; i++)
+          diff |= tag[i] ^ local_tag_buffer[i];
+    fix: >
+      sizeof(tag_length) is the size of the length variable itself (4 bytes,
+      a size_t), not the tag length. Compare over the full tag_length bytes.
+    why: >
+      The AEAD tag-verification loop bound is sizeof(tag_length) (4) instead of
+      tag_length (up to 16). A forged tag whose first 4 bytes match the real tag
+      is accepted, so an unauthenticated payload passes as authentic —
+      incomplete cryptographic verification (TF-M CryptoCell cc3xx driver).

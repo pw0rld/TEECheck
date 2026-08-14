@@ -64,19 +64,35 @@ func estimateTokens(s string) int {
 // executable TWE Entry, it expresses a weakness scenario and an investigation
 // method without binding the knowledge to CodeQL or another tool.
 type Playbook struct {
-	SchemaVersion        string     `yaml:"schema_version" json:"schema_version"`
-	ID                   string     `yaml:"id" json:"id"`
-	Name                 string     `yaml:"name" json:"name"`
-	Family               twe.Family `yaml:"family" json:"family"`
-	Scenario             string     `yaml:"scenario" json:"scenario"`
-	AttackerCapabilities []string   `yaml:"attacker_capabilities" json:"attacker_capabilities"`
-	LookFor              []string   `yaml:"look_for" json:"look_for"`
-	InvestigationSteps   []string   `yaml:"investigation_steps" json:"investigation_steps"`
-	RequiredEvidence     []string   `yaml:"required_evidence" json:"required_evidence"`
-	CommonDefenses       []string   `yaml:"common_defenses" json:"common_defenses"`
-	CommonFalsePositives []string   `yaml:"common_false_positives" json:"common_false_positives"`
-	RelatedTWEs          []string   `yaml:"related_twes" json:"related_twes"`
-	TrustIRHints         []string   `yaml:"trustir_hints" json:"trustir_hints"`
+	SchemaVersion        string        `yaml:"schema_version" json:"schema_version"`
+	ID                   string        `yaml:"id" json:"id"`
+	Name                 string        `yaml:"name" json:"name"`
+	Family               twe.Family    `yaml:"family" json:"family"`
+	Scenario             string        `yaml:"scenario" json:"scenario"`
+	AttackerCapabilities []string      `yaml:"attacker_capabilities" json:"attacker_capabilities"`
+	LookFor              []string      `yaml:"look_for" json:"look_for"`
+	InvestigationSteps   []string      `yaml:"investigation_steps" json:"investigation_steps"`
+	RequiredEvidence     []string      `yaml:"required_evidence" json:"required_evidence"`
+	CommonDefenses       []string      `yaml:"common_defenses" json:"common_defenses"`
+	CommonFalsePositives []string      `yaml:"common_false_positives" json:"common_false_positives"`
+	RelatedTWEs          []string      `yaml:"related_twes" json:"related_twes"`
+	TrustIRHints         []string      `yaml:"trustir_hints" json:"trustir_hints"`
+	CodeExamples         []CodeExample `yaml:"code_examples,omitempty" json:"code_examples,omitempty"`
+}
+
+// CodeExample is a CVE-grounded vulnerable/fixed code pair that teaches the
+// model what this TWE looks like in real code. It is served only in the detail
+// tier (on demand via the twe_playbook_detail action), never in the brief
+// tier: source snippets are too large for the per-playbook brief ceiling and
+// must not be multiplied across every agent call.
+type CodeExample struct {
+	CVE        string `yaml:"cve" json:"cve"`
+	CWE        string `yaml:"cwe" json:"cwe"`
+	Title      string `yaml:"title" json:"title"`
+	Vulnerable string `yaml:"vulnerable" json:"vulnerable"`
+	Fixed      string `yaml:"fixed" json:"fixed"`
+	Fix        string `yaml:"fix" json:"fix"`
+	Why        string `yaml:"why" json:"why"`
 }
 
 type Catalog struct {
@@ -208,6 +224,26 @@ func (p Playbook) Validate() error {
 			return fmt.Errorf("%s: related_twes contains invalid id %q", p.ID, related)
 		}
 	}
+	for i, ex := range p.CodeExamples {
+		// Every field twe-playbook.v1.json marks required is enforced here
+		// too (cwe is optional and so unchecked). Load-time validation must
+		// not be weaker than the schema, or an exemplar that fails the schema
+		// could still load and ship to agents.
+		for _, field := range []struct {
+			name, value string
+		}{
+			{"cve", ex.CVE},
+			{"title", ex.Title},
+			{"vulnerable", ex.Vulnerable},
+			{"fixed", ex.Fixed},
+			{"fix", ex.Fix},
+			{"why", ex.Why},
+		} {
+			if strings.TrimSpace(field.value) == "" {
+				return fmt.Errorf("%s: code_examples[%d].%s is required", p.ID, i, field.name)
+			}
+		}
+	}
 	if tokens := estimateTokens(compileDetailBlock(p)); tokens > maxDetailContextTokens {
 		return fmt.Errorf(
 			"%s: detail context is ~%d tokens, which exceeds the %d-token ceiling; shrink the playbook — this is checked at load so an oversized playbook fails during preprocess, not when an agent pulls it",
@@ -265,7 +301,17 @@ func clonePlaybook(p Playbook) Playbook {
 	p.CommonFalsePositives = cloneStrings(p.CommonFalsePositives)
 	p.RelatedTWEs = cloneStrings(p.RelatedTWEs)
 	p.TrustIRHints = cloneStrings(p.TrustIRHints)
+	p.CodeExamples = cloneCodeExamples(p.CodeExamples)
 	return p
+}
+
+func cloneCodeExamples(in []CodeExample) []CodeExample {
+	if in == nil {
+		return nil
+	}
+	out := make([]CodeExample, len(in))
+	copy(out, in)
+	return out
 }
 
 // cloneStrings copies s into an independent slice. Unlike
@@ -348,7 +394,49 @@ func compileDetailBlock(p Playbook) string {
 	writeField(&b, "False positives", p.CommonFalsePositives)
 	writeField(&b, "Related", p.RelatedTWEs)
 	writeField(&b, "Tool hints", p.TrustIRHints)
+	writeCodeExamples(&b, p.CodeExamples)
 	return b.String()
+}
+
+// writeCodeExamples renders CVE-grounded code pairs verbatim (no whitespace
+// folding — the source layout is the point) under the detail tier only. The
+// detail-tier ceiling (maxDetailContextTokens) is enforced by Validate on the
+// whole compileDetailBlock output, so an oversized example set fails the run
+// closed at load time rather than being silently truncated.
+func writeCodeExamples(out *strings.Builder, examples []CodeExample) {
+	if len(examples) == 0 {
+		return
+	}
+	out.WriteString("Code examples:\n")
+	for _, ex := range examples {
+		cwe := strings.TrimSpace(ex.CWE)
+		if cwe != "" {
+			fmt.Fprintf(out, "  - %s (%s): %s\n", ex.CVE, cwe, strings.TrimSpace(ex.Title))
+		} else {
+			fmt.Fprintf(out, "  - %s: %s\n", ex.CVE, strings.TrimSpace(ex.Title))
+		}
+		out.WriteString("    vulnerable:\n")
+		out.WriteString(indentBlock(ex.Vulnerable, "      "))
+		out.WriteString("    fixed:\n")
+		out.WriteString(indentBlock(ex.Fixed, "      "))
+		fmt.Fprintf(out, "    fix: %s\n", strings.Join(strings.Fields(ex.Fix), " "))
+		fmt.Fprintf(out, "    why: %s\n", strings.Join(strings.Fields(ex.Why), " "))
+	}
+}
+
+// indentBlock prefixes every line of s with pad. Code examples are rendered
+// verbatim, so unlike writeField the interior whitespace and newlines are
+// preserved.
+func indentBlock(s, pad string) string {
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		lines[i] = pad + line
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func writeField(out *strings.Builder, label string, values []string) {

@@ -22,7 +22,24 @@
     "common_defenses": {"$ref": "#/$defs/non_empty_strings"},
     "common_false_positives": {"$ref": "#/$defs/non_empty_strings"},
     "related_twes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "trustir_hints": {"$ref": "#/$defs/non_empty_strings"}
+    "trustir_hints": {"$ref": "#/$defs/non_empty_strings"},
+    "code_examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cve", "title", "vulnerable", "fixed", "fix", "why"],
+        "properties": {
+          "cve": {"type": "string", "minLength": 1},
+          "cwe": {"type": "string"},
+          "title": {"type": "string", "minLength": 1},
+          "vulnerable": {"type": "string", "minLength": 1},
+          "fixed": {"type": "string", "minLength": 1},
+          "fix": {"type": "string", "minLength": 1},
+          "why": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": false,
   "$defs": {

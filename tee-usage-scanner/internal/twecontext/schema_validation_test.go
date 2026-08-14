@@ -61,7 +61,7 @@ func TestPlaybookValidatesAgainstSchema(t *testing.T) {
 }
 
 func TestShippedRollbackPlaybookValidatesAgainstSchema(t *testing.T) {
-	dir := filepath.Join("..", "..", "knowledge", "twe", "playbooks")
+	dir := filepath.Join("..", "..", "knowledge", "twe", "exemplars")
 	catalog, err := Load(dir)
 	if err != nil {
 		t.Fatalf("load shipped playbooks: %v", err)

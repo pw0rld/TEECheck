@@ -10,15 +10,15 @@ import (
 )
 
 // compileTWEKnowledge persists the complete prior-knowledge catalog for a run.
-// Missing playbooks are tolerated during migration so old custom knowledge
+// Missing exemplars are tolerated during migration so old custom knowledge
 // roots keep working; once the directory exists, malformed knowledge is fatal.
 func compileTWEKnowledge(knowledgeRoot, runDir string) (bool, error) {
-	dir := filepath.Join(knowledgeRoot, "twe", "playbooks")
+	dir := filepath.Join(knowledgeRoot, "twe", "exemplars")
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("stat playbook directory: %w", err)
+		return false, fmt.Errorf("stat exemplar directory: %w", err)
 	}
 	catalog, err := twecontext.Load(dir)
 	if err != nil {
