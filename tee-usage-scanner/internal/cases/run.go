@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
@@ -73,7 +74,7 @@ func Enrich(cfg config.Config) error {
 		if err := runfs.ReadJSON(p, &pack); err != nil {
 			return fmt.Errorf("read case pack %s: %w", p, err)
 		}
-		pack.Snippets = collectSnippets(manifest.LocalPath, pack.TargetFiles, pack.TargetSymbols)
+		pack.Snippets = mergeSnippets(pack.Snippets, collectSnippets(manifest.LocalPath, pack.TargetFiles, pack.TargetSymbols))
 		hints, err := knowledge.LookupForCase(cfg.KnowledgeRoot, pack, 4)
 		if err != nil {
 			return fmt.Errorf("lookup knowledge for %s: %w", pack.CaseID, err)
@@ -151,6 +152,61 @@ func collectGraphFacts(hotspot artifacts.Hotspot) []string {
 		facts = append(facts, "symbols: "+strings.Join(hotspot.Symbols, ", "))
 	}
 	return facts
+}
+
+// mergeSnippets combines pre-existing pack snippets with freshly collected
+// ones, deduped by (path, start line). Pre-existing snippets come first: on
+// the deterministic fact lane they are the DEFINITIONS the finding turns on
+// (producer/authority bodies, produced structs — internal/pipeline
+// evidence_window.go), and Enrich's generic collector would otherwise
+// overwrite them with first-mention windows of the same files, recreating
+// exactly the evidence-window gap the enrichment exists to close. Planner
+// packs arrive here with no snippets, so for them mergeSnippets is an
+// identity over the collected list.
+func mergeSnippets(existing, collected []artifacts.PromptSnippet) []artifacts.PromptSnippet {
+	if len(existing) == 0 {
+		return collected
+	}
+	seen := make(map[string]bool, len(existing)+len(collected))
+	out := make([]artifacts.PromptSnippet, 0, len(existing)+len(collected))
+	for _, s := range existing {
+		key := s.Path + ":" + strconv.Itoa(s.StartLine)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	for _, s := range collected {
+		key := s.Path + ":" + strconv.Itoa(s.StartLine)
+		if seen[key] {
+			continue
+		}
+		// A collected snippet redundant with an existing (definition)
+		// snippet of the same file adds nothing — in EITHER containment
+		// direction: a first-mention window inside the definition slice,
+		// or the generic whole-file snippet of a small file that contains
+		// it (the OP-TEE producer case: a 411-line whole-file snippet over
+		// a 30-line definition). Existing-first ordering already prefers
+		// the curated definition.
+		redundant := false
+		for _, e := range existing {
+			if e.Path != s.Path {
+				continue
+			}
+			if (s.StartLine >= e.StartLine && s.EndLine <= e.EndLine) ||
+				(e.StartLine >= s.StartLine && e.EndLine <= s.EndLine) {
+				redundant = true
+				break
+			}
+		}
+		if redundant {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // snippetSmallFileLineCap controls when collectSnippets returns the

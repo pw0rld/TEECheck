@@ -30,7 +30,7 @@ func TestFactCasePack_GroundsLocationsAndToolFactRef(t *testing.T) {
 		},
 	}
 	pack := factCasePack(fact, "02_tool_facts/trustir/facts/foo.json",
-		trustirfacts.OperationRollbackVersionPropagation, "tee")
+		trustirfacts.OperationRollbackVersionPropagation, "tee", nil)
 
 	if pack.SchemaVersion != "teecheck.case_pack.v1" {
 		t.Errorf("SchemaVersion = %q, want teecheck.case_pack.v1", pack.SchemaVersion)
@@ -67,7 +67,7 @@ func TestFactCasePack_FallsBackWhenNoMessage(t *testing.T) {
 		Status:    trustirfacts.StatusSuccess,
 		Locations: []artifacts.ToolLocation{{Path: "a.c", StartLine: 1}},
 	}
-	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee")
+	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee", nil)
 	if len(pack.TargetFiles) != 1 || pack.TargetFiles[0] != "a.c" {
 		t.Errorf("TargetFiles = %v", pack.TargetFiles)
 	}
@@ -140,7 +140,7 @@ func TestFactCasePack_SetsStructuralMissingLinks(t *testing.T) {
 			},
 		},
 	}
-	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee")
+	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee", nil)
 
 	if len(pack.MissingLinks) == 0 {
 		t.Fatalf("MissingLinks empty; structural-only pack must name the untraced dataflow so the gate is honest")
@@ -169,7 +169,7 @@ func TestFactCasePack_MissingLinksFallbackNoSymbols(t *testing.T) {
 		Status:    trustirfacts.StatusSuccess,
 		Locations: []artifacts.ToolLocation{{Path: "a.c", StartLine: 1}},
 	}
-	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee")
+	pack := factCasePack(fact, "f.json", trustirfacts.OperationRollbackVersionPropagation, "tee", nil)
 	if len(pack.MissingLinks) != 1 {
 		t.Fatalf("MissingLinks = %v, want exactly one generic entry", pack.MissingLinks)
 	}

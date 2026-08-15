@@ -579,7 +579,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// allPacks before the loop is what makes the pass-1 hard-error and
 	// nil-bundle paths below fall back to these grounded cases instead of
 	// aborting the run — the "independent of the planner" contract made good.
-	detPacks, derr := deterministicCasesFn(context.Background(), eng, db, queryPackDir, runDir, manifest.RepoURL, manifest.Commit, cfg.Focus)
+	detPacks, derr := deterministicCasesFn(context.Background(), eng, db, queryPackDir, runDir, srcRoot, manifest.RepoURL, manifest.Commit, cfg.Focus)
 	if derr != nil {
 		return fmt.Errorf("deterministic fact lane: %w", derr)
 	}

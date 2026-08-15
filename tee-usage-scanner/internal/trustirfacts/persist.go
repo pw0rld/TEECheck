@@ -20,10 +20,13 @@ import (
 // ToolFact is documented as immutable after persistence (see
 // artifacts.ToolFact's doc comment): if a file already exists at the target
 // path, Persist treats it as already-written and returns its path without
-// rewriting. FactID is deterministic in (repository, commit, operation) —
-// see Request.factID — so an existing file at that path was written by an
-// earlier call with identical inputs, not a different fact that happens to
-// collide.
+// rewriting — UNLESS the two facts were produced by different fact tables.
+// FactID is deterministic in (repository, commit, operation) — see
+// Request.factID — but SetFactTable can change the table driving a run
+// within the same run directory, and silently reusing the earlier fact
+// would misreport the new table's result as persisted evidence. A
+// fact-table digest mismatch is therefore an error: the caller reruns in
+// a fresh run directory (or with the same table as the earlier fact).
 func Persist(runDir string, fact artifacts.ToolFact) (string, error) {
 	path := runfs.TrustIRToolFactPath(runDir, fact.FactID)
 	// Always absolute: see the note above on validateToolFactRefs.
@@ -31,6 +34,12 @@ func Persist(runDir string, fact artifacts.ToolFact) (string, error) {
 		path = abs
 	}
 	if _, err := os.Stat(path); err == nil {
+		var existing artifacts.ToolFact
+		if rerr := runfs.ReadJSON(path, &existing); rerr == nil &&
+			(existing.FactTableSHA256 != fact.FactTableSHA256 || existing.FactSource != fact.FactSource) {
+			return "", fmt.Errorf("tool fact %s already persisted at %s under a different fact table (source %q digest %q, new %q %q): rerun in a fresh run directory or restore the original table",
+				fact.FactID, path, existing.FactSource, existing.FactTableSHA256, fact.FactSource, fact.FactTableSHA256)
+		}
 		return path, nil
 	}
 

@@ -161,6 +161,13 @@ var knownFactTables = map[string]FactTable{
 	},
 }
 
+// FactTableFor exposes the repository → fact-table lookup to pipeline
+// consumers. The P4+ evidence window (internal/pipeline/evidence_window.go)
+// needs ProducedStructs to slice the struct definitions the downstream
+// chain could not otherwise see; same lookup and precedence as the
+// internal path.
+func FactTableFor(repository string) (FactTable, bool) { return factTableFor(repository) }
+
 // factTableFor looks up the fact table for a repository: an LLM-annotated
 // table registered via SetFactTable (factsource.go) takes priority, falling
 // through to the deterministic knownFactTables fixture when none is

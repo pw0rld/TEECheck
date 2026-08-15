@@ -262,7 +262,7 @@ func TestRunL3Planner_Pass1ErrorProceedsOnDeterministic(t *testing.T) {
 	// Inject a canned deterministic pack via the seam; the real lane is inert
 	// without a CodeQL engine.
 	orig := deterministicCasesFn
-	deterministicCasesFn = func(context.Context, trustirfacts.Engine, codedb.DatabaseProvider, string, string, string, string, string) ([]artifacts.CasePack, error) {
+	deterministicCasesFn = func(context.Context, trustirfacts.Engine, codedb.DatabaseProvider, string, string, string, string, string, string) ([]artifacts.CasePack, error) {
 		return []artifacts.CasePack{{
 			SchemaVersion: "teecheck.case_pack.v1",
 			CaseID:        "deterministic:test",

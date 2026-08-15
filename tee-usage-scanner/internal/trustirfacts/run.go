@@ -2,6 +2,9 @@ package trustirfacts
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -61,6 +64,20 @@ const toolName = "trustir-cpp"
 //     success (e.g. the fixed revision, where the structural gap the query
 //     looks for is genuinely absent) — see §6.5: an empty result proves
 //     "no match found within the modeled scope", not "no vulnerability".
+//
+// tableDigest returns the SHA-256 hex of the fact table's canonical JSON
+// serialization. Go's encoding/json emits struct fields in declaration
+// order with sorted map keys, so the digest is stable for a given table
+// value and changes exactly when the table changes.
+func tableDigest(t FactTable) (string, error) {
+	data, err := json.Marshal(t)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Request) (artifacts.ToolFact, error) {
 	if err := req.validate(); err != nil {
 		return artifacts.ToolFact{}, err
@@ -71,6 +88,17 @@ func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Reques
 	table, ok := factTableFor(req.Repository)
 	if !ok {
 		return unsupportedFact(base, fmt.Sprintf("no deterministic fact table for repository %q (LLM annotation pipeline not yet built, §23.2)", req.Repository)), nil
+	}
+	// Structural provenance (fact_source + fact_table_sha256): which table
+	// revision produced this fact, and from which source. The
+	// blind-discovery protocol scores only llm_annotated facts; shipped
+	// fixtures are regression aids.
+	base.FactSource = "shipped_fixture"
+	if isLLMFactTable(req.Repository) {
+		base.FactSource = "llm_annotated"
+	}
+	if sum, err := tableDigest(table); err == nil {
+		base.FactTableSHA256 = sum
 	}
 	if _, ok := operationQueries[req.Operation]; !ok {
 		return unsupportedFact(base, fmt.Sprintf("operation %q not implemented by the cpp fact layer", req.Operation)), nil

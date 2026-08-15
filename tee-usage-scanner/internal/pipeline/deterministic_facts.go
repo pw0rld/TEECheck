@@ -17,6 +17,11 @@ import (
 // engine is unavailable). The swap restores via t.Cleanup.
 var deterministicCasesFn = deterministicFactCases
 
+// evidenceSnippetsFn is the seam for the evidence-window enrichment: the
+// real implementation reads the run's repo facts and slices source; tests
+// swap it to avoid needing an index fixture.
+var evidenceSnippetsFn = deterministicEvidenceSnippets
+
 // deterministicFactCases is the P4+ automatic deterministic lane: it fires
 // the structured fact layer (trustirfacts.Run) once per scan, for every
 // operation the layer supports, independent of whether the planner chose to
@@ -53,13 +58,14 @@ var deterministicCasesFn = deterministicFactCases
 // planner.DedupePacks runs (see runL3Planner), so a deterministic pack that
 // lands on the same file as a planner lead merges with it losslessly — absorb
 // unions ToolFactRefs — rather than occupying a second --max-cases slot.
-func deterministicFactCases(ctx context.Context, eng trustirfacts.Engine, db codedb.DatabaseProvider, queryPackDir, runDir, repoURL, commit, focus string) ([]artifacts.CasePack, error) {
+func deterministicFactCases(ctx context.Context, eng trustirfacts.Engine, db codedb.DatabaseProvider, queryPackDir, runDir, repoRoot, repoURL, commit, focus string) ([]artifacts.CasePack, error) {
 	if eng == nil || !eng.Available() {
 		// Mirrors FactLayerQueryHandler's fail-closed stance: no engine means
 		// the lane is inert for this run, never a fabricated clean bill.
 		return nil, nil
 	}
 	var packs []artifacts.CasePack
+	var funcIndex map[string][]functionDef
 	for _, op := range trustirfacts.SupportedOperations() {
 		fact, factPath, err := trustirfacts.RunAndPersist(ctx, eng, db, trustirfacts.Request{
 			RunDir:       runDir,
@@ -87,7 +93,25 @@ func deterministicFactCases(ctx context.Context, eng trustirfacts.Engine, db cod
 			// clean bill.
 			continue
 		}
-		packs = append(packs, factCasePack(fact, factPath, op, focus))
+		// Evidence window: the pack's structural anchor is complete, but the
+		// downstream chain judges IMPACT from what it can see. Attach the
+		// definitions (producer, authority, produced + referenced structs)
+		// so the arbiter's confidence reflects the evidence actually
+		// available, not a window that happened to miss the authority's body
+		// (see evidence_window.go). The function index (~32 MB on OP-TEE)
+		// loads once per lane pass, not per positive fact.
+		var tablePtr *trustirfacts.FactTable
+		if table, ok := trustirfacts.FactTableFor(repoURL); ok {
+			tablePtr = &table
+		}
+		if funcIndex == nil {
+			funcIndex = loadFunctionIndex(runDir)
+			if funcIndex == nil {
+				funcIndex = map[string][]functionDef{}
+			}
+		}
+		snippets := evidenceSnippetsFn(repoRoot, funcIndex, fact, tablePtr)
+		packs = append(packs, factCasePack(fact, factPath, op, focus, snippets))
 	}
 	return packs, nil
 }
@@ -103,7 +127,7 @@ func deterministicFactCases(ctx context.Context, eng trustirfacts.Engine, db cod
 // casepacks.goMerge) and can merge it with any planner case on the same file.
 // TargetSymbols are recovered from the finding's named (related) sites — the
 // primary location carries no symbol by design (run.go's toolLocations).
-func factCasePack(fact artifacts.ToolFact, factPath string, op trustirfacts.Operation, focus string) artifacts.CasePack {
+func factCasePack(fact artifacts.ToolFact, factPath string, op trustirfacts.Operation, focus string, snippets []artifacts.PromptSnippet) artifacts.CasePack {
 	seen := map[string]bool{}
 	targetFiles := make([]string, 0, len(fact.Locations))
 	for _, loc := range fact.Locations {
@@ -166,6 +190,11 @@ func factCasePack(fact artifacts.ToolFact, factPath string, op trustirfacts.Oper
 		MissingLinks:     missingLinks,
 		RequiredEvidence: requiredEvidence,
 		CoverageGaps:     coverageGaps,
+		// Snippets carry the evidence window: definition bodies of the
+		// finding's producer/authority plus produced-struct definitions.
+		// Enrich (internal/cases) MERGES its generic snippets with these
+		// rather than overwriting, so the definitions survive delivery.
+		Snippets: snippets,
 	}
 }
 

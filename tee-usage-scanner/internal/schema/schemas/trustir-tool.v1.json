@@ -135,6 +135,19 @@
         "arguments_sha256": {
           "type": "string"
         },
+        "fact_source": {
+          "type": "string",
+          "enum": [
+            "shipped_fixture",
+            "llm_annotated"
+          ],
+          "description": "Where the fact table driving this fact came from: \"shipped_fixture\" (knownFactTables) or \"llm_annotated\" (SetFactTable). Provenance for the blind-discovery vs fixture-regression protocol."
+        },
+        "fact_table_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 (hex) of the canonical serialization of the resolved fact table, so a finding can name the exact table revision that produced it."
+        },
         "status": {
           "enum": [
             "success",

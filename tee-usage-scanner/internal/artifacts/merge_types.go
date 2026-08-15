@@ -212,6 +212,18 @@ type ToolFact struct {
 	Operation       string `json:"operation"`
 	RepoCommit      string `json:"repo_commit"`
 	ArgumentsSHA256 string `json:"arguments_sha256,omitempty"`
+	// FactSource records where the fact table driving this fact came from:
+	// "shipped_fixture" (knownFactTables) or "llm_annotated" (SetFactTable).
+	// Structural provenance for the blind-discovery vs fixture-regression
+	// protocol: a fixture-sourced fact must never be scored as independent
+	// discovery, and this field is what makes that rule checkable per fact
+	// rather than per run.
+	FactSource string `json:"fact_source,omitempty"`
+	// FactTableSHA256 is the SHA-256 of the canonical serialization of the
+	// resolved fact table, so a finding can name the exact table revision
+	// that produced it (the same repository can yield different tables as
+	// annotations evolve).
+	FactTableSHA256 string `json:"fact_table_sha256,omitempty"`
 	Status          string `json:"status"`
 	// Locations is deliberately NOT omitempty. A successful query that
 	// matched nothing used to serialise with no locations key at all,
