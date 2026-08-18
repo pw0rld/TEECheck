@@ -166,6 +166,17 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - Focused CodeQL, run-initialization, and pipeline tests pass; the pipeline
   package completed in 58.1 seconds.
 
+### 2026-08-19 05:15 HKT - Pilot command preflight
+
+- RED: the pilot's explicit `--llm-max-tokens 32768` control was rejected
+  because the `run` parser initialized this setting from the environment but
+  did not register the corresponding CLI flag used by the stage commands.
+- GREEN: `run` now exposes the same flag and a focused parser regression proves
+  that the resolved configuration retains the requested value. Config tests,
+  vet, and diff checks pass.
+- This changes configuration plumbing only. Detection logic remains frozen
+  before any pilot result is observed.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.

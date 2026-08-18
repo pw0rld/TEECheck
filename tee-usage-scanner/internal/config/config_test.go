@@ -36,6 +36,20 @@ func TestParseRun_ResolvesTransportAndReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestParseRun_AcceptsLLMMaxTokens(t *testing.T) {
+	t.Setenv("TEECHECK_LLM_API_KEY", "test-key")
+	t.Setenv("TEECHECK_LLM_BASE_URL", "https://example.test/v1")
+	t.Setenv("TEECHECK_LLM_MODEL", "gpt-5.6-terra")
+
+	cfg, err := Parse([]string{"run", ".", "--llm-max-tokens", "32768"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.LLMMaxTokens != 32768 {
+		t.Fatalf("LLMMaxTokens = %d, want 32768", cfg.LLMMaxTokens)
+	}
+}
+
 func TestParseRun_RejectsUnknownResponsesControls(t *testing.T) {
 	for _, tc := range []struct {
 		name string

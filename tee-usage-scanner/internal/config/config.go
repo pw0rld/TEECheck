@@ -520,6 +520,7 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport: chat_completions or responses")
 	fs.StringVar(&cfg.LLMReasoningEffort, "llm-reasoning-effort", cfg.LLMReasoningEffort, "Reasoning effort for Responses models")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
+	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
 	// Extract target (non-flag arg) before parsing so it can appear anywhere
 	var flagArgs []string
