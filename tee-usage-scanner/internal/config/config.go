@@ -598,6 +598,24 @@ func usageError(msg string) error {
 
 func validateProviderConfig(cfg Config, context string) error {
 	cfg = cfg.WithLLMProviderDefaults()
+	if cfg.LLMTransport != LLMTransportChatCompletions && cfg.LLMTransport != LLMTransportResponses {
+		return fmt.Errorf("%s has unsupported LLM transport %q; use chat_completions or responses", context, cfg.LLMTransport)
+	}
+	if cfg.LLMTransport == LLMTransportResponses && cfg.LLMProvider != LLMProviderOpenAI {
+		return fmt.Errorf("%s transport responses requires provider openai", context)
+	}
+	if cfg.LLMReasoningEffort != "" {
+		if cfg.LLMTransport != LLMTransportResponses {
+			return fmt.Errorf("%s reasoning effort requires the responses transport", context)
+		}
+		supported := map[string]bool{
+			"none": true, "minimal": true, "low": true,
+			"medium": true, "high": true, "xhigh": true,
+		}
+		if !supported[cfg.LLMReasoningEffort] {
+			return fmt.Errorf("%s has unsupported reasoning effort %q", context, cfg.LLMReasoningEffort)
+		}
+	}
 	if cfg.LLMBaseURL == "" {
 		return fmt.Errorf("%s requires --llm-base-url or TEECHECK_LLM_BASE_URL when using llm mode", context)
 	}

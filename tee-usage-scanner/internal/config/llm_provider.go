@@ -26,7 +26,9 @@ func NormalizeLLMProvider(value string) string {
 
 func (cfg Config) WithLLMProviderDefaults() Config {
 	cfg.LLMProvider = NormalizeLLMProvider(cfg.LLMProvider)
-	if strings.TrimSpace(cfg.LLMTransport) == "" {
+	cfg.LLMTransport = strings.ToLower(strings.TrimSpace(cfg.LLMTransport))
+	cfg.LLMReasoningEffort = strings.ToLower(strings.TrimSpace(cfg.LLMReasoningEffort))
+	if cfg.LLMTransport == "" {
 		cfg.LLMTransport = LLMTransportChatCompletions
 	}
 	switch cfg.LLMProvider {

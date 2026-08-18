@@ -15,12 +15,14 @@ import (
 
 func TestLiveLLMDataSource(t *testing.T) {
 	runLiveLLMDataSourceTest(t, config.Config{
-		LLMProvider:   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
-		LLMBaseURL:    os.Getenv("TEECHECK_LLM_BASE_URL"),
-		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
-		LLMModel:      os.Getenv("TEECHECK_LLM_MODEL"),
-		LLMTimeoutSec: 60,
-		LLMTemp:       0.1,
+		LLMProvider:        firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:         os.Getenv("TEECHECK_LLM_BASE_URL"),
+		LLMAPIKey:          firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:           os.Getenv("TEECHECK_LLM_MODEL"),
+		LLMTransport:       os.Getenv("TEECHECK_LLM_TRANSPORT"),
+		LLMReasoningEffort: os.Getenv("TEECHECK_LLM_REASONING_EFFORT"),
+		LLMTimeoutSec:      60,
+		LLMTemp:            0.1,
 	})
 }
 

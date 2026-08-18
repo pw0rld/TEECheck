@@ -83,6 +83,43 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - Fresh build metadata reports the repository VCS revision and dirty state;
   focused run-init, pipeline, config, and artifact tests pass.
 
+### 2026-08-19 02:40 HKT - Native Responses transport
+
+- RED: Responses-focused client tests reached `/chat/completions`; incomplete
+  Responses envelopes lost their usage accounting and produced a generic parse
+  error.
+- GREEN: the OpenAI client now dispatches explicitly between the compatible
+  Chat Completions default and native Responses. Responses requests persist raw
+  request/response bytes, send `store=false`, apply the configured reasoning
+  effort and output-token limit, support JSON mode, and preserve usage on
+  incomplete responses.
+- Startup validation rejects unknown transports/reasoning levels and rejects
+  reasoning settings that would not be transmitted.
+- First live Terra-high run: basic and JSON checks passed; the agent-style JSON
+  request received HTTP 400 because this endpoint requires the word `json` in
+  an input message, while the native client had put the system prompt in the
+  separate `instructions` field.
+- RED/GREEN follow-up: system prompts now travel as `role=system` input messages,
+  matching the previously working proxy wire shape. A second direct live run
+  passed basic connectivity, JSON output, and the agent-style structured query
+  in 17.31 seconds. The compatibility proxy is no longer required for Terra.
+
+### 2026-08-19 03:15 HKT - Deterministic report completeness
+
+- RED: a fake narrative that named only one of two findings became the entire
+  report; evidence, the other finding, planner metrics, and packet content past
+  8 KB were absent. A provider error aborted report generation completely.
+- GREEN: `findings.json` is now the authoritative report source. Every finding
+  is deterministically sorted and rendered with locations, evidence, and all
+  structured arbiter sections. Planner metrics and every review packet are
+  appended without truncation.
+- The model is restricted to a labeled, non-authoritative two-paragraph
+  narrative over bounded finding summaries. Provider failure falls back to an
+  offline narrative notice and still writes the factual report.
+- Real-artifact smoke check: the vulnerable Terra control produced a 20,103-byte
+  offline report containing its deterministic finding in both index and detail;
+  the complete 5,415-byte review packet is embedded.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -95,8 +132,8 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Findings validation | Invalid status persisted in focused arbiter test | Artifact, schema, and arbiter packages pass | Complete |
 | Run validator | Missing implementation/CLI reproduced by focused tests | Synthetic corruptions rejected; vulnerable control valid; fixed control rejects historical null | Complete |
 | Provenance | Hard-coded versions and absent model/budget controls reproduced | Actual build/VCS, resolved LLM controls, and planner limits verified in manifest | Complete |
-| Responses transport | Pending | Pending | Not started |
-| Report completeness | Pending | Pending | Not started |
+| Responses transport | Native tests hit chat path; live JSON agent request reproduced provider input constraint | Unit suite and all three direct Terra-high live checks pass | Complete |
+| Report completeness | Fake narrative omitted one of two findings and provider failure aborted output | Deterministic completeness/fallback tests and real vulnerable-control smoke pass | Complete |
 | Planner accounting | Pending | Pending | Not started |
 | Executor timeout | Existing 200 ms test takes about 5 s | Pending | Confirmed defect |
 | Offline full suite | Config, executor, and Repomix failures observed | Pending | Confirmed defect |

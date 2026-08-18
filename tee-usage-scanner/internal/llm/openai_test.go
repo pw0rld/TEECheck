@@ -81,6 +81,104 @@ func TestOpenAIClientGenerate(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientGenerate_ResponsesTransport(t *testing.T) {
+	type requestBody struct {
+		Model           string              `json:"model"`
+		Input           []map[string]string `json:"input"`
+		Instructions    string              `json:"instructions"`
+		MaxOutputTokens int                 `json:"max_output_tokens"`
+		Store           bool                `json:"store"`
+		Reasoning       map[string]string   `json:"reasoning"`
+		Text            map[string]any      `json:"text"`
+		Temperature     *float64            `json:"temperature"`
+	}
+
+	var got requestBody
+	client := NewOpenAIClient(config.Config{
+		LLMBaseURL: "https://example.test/v1", LLMAPIKey: "test-key",
+		LLMModel: "gpt-5.6-terra", LLMTransport: "responses",
+		LLMReasoningEffort: "high", LLMTimeoutSec: 5, LLMMaxTokens: 40000,
+	})
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(bytes.NewBufferString(`{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"ok\":true}"}]}],
+				"usage":{"input_tokens":17,"output_tokens":5,"total_tokens":22,"output_tokens_details":{"reasoning_tokens":2}}
+			}`)),
+		}, nil
+	})}
+
+	resp, err := client.Generate(context.Background(), GenerateRequest{
+		SystemPrompt: "system instructions",
+		Messages:     []Message{{Role: "user", Content: "hello"}},
+		JSONMode:     true,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got.Model != "gpt-5.6-terra" || got.Instructions != "" {
+		t.Fatalf("request = %+v", got)
+	}
+	if len(got.Input) != 2 || got.Input[0]["role"] != "system" ||
+		got.Input[0]["content"] != "system instructions" || got.Input[1]["content"] != "hello" {
+		t.Fatalf("input = %+v", got.Input)
+	}
+	if got.Reasoning["effort"] != "high" || got.MaxOutputTokens != 40000 || got.Store {
+		t.Fatalf("responses controls = %+v", got)
+	}
+	if got.Text == nil {
+		t.Fatal("JSONMode did not reach Responses text.format")
+	}
+	if got.Temperature != nil {
+		t.Fatal("reasoning Responses request must omit temperature")
+	}
+	if resp.Text != `{"ok":true}` || resp.Usage.TotalTokens != 22 || resp.Usage.PromptTokens != 17 {
+		t.Fatalf("response = %+v", resp)
+	}
+	if !strings.Contains(resp.RawRequest, `"max_output_tokens":40000`) || !strings.Contains(resp.Raw, `"resp_1"`) {
+		t.Fatalf("wire bodies were not retained: request=%s response=%s", resp.RawRequest, resp.Raw)
+	}
+}
+
+func TestOpenAIClientGenerate_ResponsesIncompleteIsError(t *testing.T) {
+	client := NewOpenAIClient(config.Config{
+		LLMBaseURL: "https://example.test/v1", LLMAPIKey: "k", LLMModel: "m",
+		LLMTransport: "responses", LLMReasoningEffort: "high", LLMTimeoutSec: 5,
+	})
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(bytes.NewBufferString(`{
+				"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},
+				"output":[],"usage":{"input_tokens":10,"output_tokens":32768,"total_tokens":32778}
+			}`)),
+		}, nil
+	})}
+
+	resp, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err == nil {
+		t.Fatal("incomplete Responses result must fail the call")
+	}
+	for _, want := range []string{"incomplete", "max_output_tokens", "llm-max-tokens"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+	if resp.Usage.TotalTokens != 32778 || resp.Raw == "" || resp.RawRequest == "" {
+		t.Fatalf("incomplete response lost diagnostics: %+v", resp)
+	}
+}
+
 // A caller that does NOT ask for JSON must not get response_format — some
 // OpenAI-compatible endpoints reject the field, so it is sent only on request.
 func TestOpenAIClientGenerate_NoJSONModeSendsNoResponseFormat(t *testing.T) {

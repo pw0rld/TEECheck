@@ -36,6 +36,26 @@ func TestParseRun_ResolvesTransportAndReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestParseRun_RejectsUnknownResponsesControls(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "transport", args: []string{"--llm-transport", "completionz"}},
+		{name: "reasoning effort", args: []string{"--llm-transport", "responses", "--llm-reasoning-effort", "extreme"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEECHECK_LLM_API_KEY", "test-key")
+			t.Setenv("TEECHECK_LLM_BASE_URL", "https://example.test/v1")
+			t.Setenv("TEECHECK_LLM_MODEL", "gpt-5.6-terra")
+			args := append([]string{"run", "."}, tc.args...)
+			if _, err := Parse(args); err == nil {
+				t.Fatalf("Parse accepted invalid controls: %v", tc.args)
+			}
+		})
+	}
+}
+
 // ─── The API key must never reach the usage output ───────────────────
 
 // On 2026-07-28 a live API key was printed to a terminal and into a task log

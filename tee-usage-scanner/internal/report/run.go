@@ -14,52 +14,49 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
-// Run generates a unified audit report from a completed TEECheck run.
-// An LLM synthesizes a cross-finding executive summary, coverage
-// analysis, and per-finding sections from the raw review packets.
-//
-// Output: <runDir>/08_report/REPORT.md
+type reviewPacket struct {
+	Name    string
+	Content string
+}
+
+// Run writes an authoritative factual report from structured artifacts. The
+// optional model contributes only a labeled narrative; it cannot add, remove,
+// reorder, or truncate findings and review packets.
 func Run(cfg config.Config, client llm.Client) error {
-	runDir := cfg.RunDir
-	if runDir == "" {
+	if cfg.RunDir == "" {
 		return fmt.Errorf("--run-dir is required")
 	}
-
-	manifest, err := runfs.LoadManifest(runDir)
+	manifest, err := runfs.LoadManifest(cfg.RunDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-
 	var findings artifacts.Findings
-	if err := runfs.ReadJSON(runfs.ArbiterFindingsPath(runDir), &findings); err != nil {
+	if err := runfs.ReadJSON(runfs.ArbiterFindingsPath(cfg.RunDir), &findings); err != nil {
 		return fmt.Errorf("load findings: %w", err)
 	}
-
-	// Load all review packets
-	packetPaths, _ := filepath.Glob(filepath.Join(runfs.ArbiterPacketsDir(runDir), "review-*.md"))
-	sort.Strings(packetPaths)
-	var packets []string
-	for _, p := range packetPaths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		packets = append(packets, string(data))
+	if err := findings.Validate(); err != nil {
+		return fmt.Errorf("validate findings: %w", err)
+	}
+	if findings.RunID != manifest.RunID {
+		return fmt.Errorf("findings run_id %q does not match manifest run_id %q", findings.RunID, manifest.RunID)
 	}
 
-	// Load planner metadata if available
-	var bundle artifacts.EvidenceBundle
-	hasPlannerMeta := false
-	if err := runfs.ReadJSON(runfs.EvidenceBundlePath(runDir), &bundle); err == nil {
-		hasPlannerMeta = true
-	}
-
-	reportContent, err := generateLLMReport(client, manifest, findings, packets, bundle, hasPlannerMeta)
+	packets, err := loadReviewPackets(cfg.RunDir)
 	if err != nil {
-		return fmt.Errorf("generate llm report: %w", err)
+		return err
 	}
+	var bundle artifacts.EvidenceBundle
+	hasPlannerMeta := runfs.ReadJSON(runfs.EvidenceBundlePath(cfg.RunDir), &bundle) == nil
 
-	reportDir := filepath.Join(runDir, "08_report")
+	narrative, narrativeErr := generateNarrative(client, manifest, findings, bundle, hasPlannerMeta)
+	if narrativeErr != nil || strings.TrimSpace(narrative) == "" {
+		narrative = fmt.Sprintf(
+			"Narrative unavailable. The authoritative sections below record %d finding(s) from the validated findings artifact.",
+			len(findings.Findings))
+	}
+	reportContent := buildReport(manifest, findings, packets, bundle, hasPlannerMeta, narrative)
+
+	reportDir := filepath.Join(cfg.RunDir, "08_report")
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		return fmt.Errorf("create report dir: %w", err)
 	}
@@ -71,79 +68,195 @@ func Run(cfg config.Config, client llm.Client) error {
 	return nil
 }
 
-func generateLLMReport(client llm.Client, manifest artifacts.Manifest, findings artifacts.Findings, packets []string, bundle artifacts.EvidenceBundle, hasPlannerMeta bool) (string, error) {
-	systemPrompt := `You are a senior TEE security auditor writing the final unified report for a TEECheck audit run. You receive:
-1. A findings summary (JSON) with status, severity, confidence for each finding
-2. The full review packets (markdown) for every finding — each contains Expert hypothesis, Challenger objections, Verifier evidence, and Arbiter judgment
-3. Optional planner metadata (candidates, coverage, tokens)
-
-Your job: produce a single, comprehensive markdown audit report that:
-- Starts with an executive summary (2-3 paragraphs: what was audited, key results, recommended actions)
-- Lists EVERY finding with its full analysis — do NOT omit or minimize any finding regardless of confidence level
-- For each finding include: status, severity, confidence, file(s), the core observation, evidence, and recommended human follow-up
-- Orders findings by severity desc then confidence desc, but includes ALL of them
-- Ends with a coverage section (what directories/crates were audited, what was missed)
-- Ends with concrete next steps for the human reviewer
-
-Rules:
-- Include ALL findings. The human reviewer decides what to prioritize, not you.
-- Use the exact evidence and citations from the review packets — do not invent new claims.
-- Mark each finding with its verifier status (corroborated / contested / inconclusive) prominently.
-- Write in English. Use markdown formatting. Be direct and specific.`
-
-	var userMsgParts []string
-
-	// Findings summary
-	userMsgParts = append(userMsgParts, "## Findings Summary (JSON)\n")
-	findingsLines := []string{}
-	for _, f := range findings.Findings {
-		findingsLines = append(findingsLines, fmt.Sprintf("- %s | status=%s | severity=%s | confidence=%s | files=%v",
-			f.FindingID, f.Status, f.Severity, f.Confidence, f.Files))
+func loadReviewPackets(runDir string) ([]reviewPacket, error) {
+	paths, err := filepath.Glob(filepath.Join(runfs.ArbiterPacketsDir(runDir), "review-*.md"))
+	if err != nil {
+		return nil, fmt.Errorf("list review packets: %w", err)
 	}
-	userMsgParts = append(userMsgParts, strings.Join(findingsLines, "\n"))
+	sort.Strings(paths)
+	packets := make([]reviewPacket, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read review packet %s: %w", path, err)
+		}
+		packets = append(packets, reviewPacket{Name: filepath.Base(path), Content: string(data)})
+	}
+	return packets, nil
+}
 
-	// Planner metadata
+func generateNarrative(client llm.Client, manifest artifacts.Manifest, findings artifacts.Findings, bundle artifacts.EvidenceBundle, hasPlannerMeta bool) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("no narrative client")
+	}
+	var input strings.Builder
+	fmt.Fprintf(&input, "Run %s audited %s at %s with focus %s.\n", manifest.RunID, manifest.RepoURL, manifest.Commit, manifest.Focus)
+	fmt.Fprintf(&input, "Validated findings count: %d.\n", len(findings.Findings))
+	for _, finding := range sortedFindings(findings.Findings) {
+		fmt.Fprintf(&input, "- %s: status=%s severity=%s confidence=%s summary=%s\n",
+			finding.FindingID, finding.Status, finding.Severity, finding.Confidence,
+			truncateText(finding.Summary, 500))
+	}
 	if hasPlannerMeta {
-		userMsgParts = append(userMsgParts, fmt.Sprintf("\n\n## Planner Metadata\n- Candidates: %d\n- Rounds: %d\n- Tokens: %d\n- Wall clock: %dms\n- Termination: %s",
-			len(bundle.Candidates), bundle.PlannerMeta.RoundsUsed, bundle.PlannerMeta.TokensUsed,
-			bundle.PlannerMeta.WallClockMs, bundle.PlannerMeta.TerminationReason))
-
-		var candLines []string
-		for _, c := range bundle.Candidates {
-			candLines = append(candLines, fmt.Sprintf("  - %s [%s, %s] paths=%v", c.ID, c.Kind, c.Priority, c.Paths))
-		}
-		userMsgParts = append(userMsgParts, "\n- Candidate list:\n"+strings.Join(candLines, "\n"))
-	}
-
-	userMsgParts = append(userMsgParts, fmt.Sprintf("\n\n## Run Info\n- Repo: %s\n- Commit: %s\n- Run ID: %s",
-		manifest.RepoURL, manifest.Commit, manifest.RunID))
-
-	// All review packets
-	userMsgParts = append(userMsgParts, "\n\n## Full Review Packets\n")
-	for i, pkt := range packets {
-		// Cap each packet to avoid blowing context
-		content := pkt
-		if len(content) > 8000 {
-			content = content[:8000] + "\n... (truncated)"
-		}
-		userMsgParts = append(userMsgParts, fmt.Sprintf("\n### Packet %d/%d\n%s", i+1, len(packets), content))
-	}
-
-	userMsg := strings.Join(userMsgParts, "")
-
-	// Cap total input
-	if len(userMsg) > 120000 {
-		userMsg = userMsg[:120000] + "\n\n... (remaining packets truncated to fit context window)"
+		fmt.Fprintf(&input, "Planner: candidates=%d rounds=%d/%d tokens=%d termination=%s.\n",
+			len(bundle.Candidates), bundle.PlannerMeta.RoundsUsed, bundle.PlannerMeta.RoundsBudget,
+			bundle.PlannerMeta.TokensUsed, bundle.PlannerMeta.TerminationReason)
 	}
 
 	resp, err := client.Generate(context.Background(), llm.GenerateRequest{
-		SystemPrompt: systemPrompt,
-		Messages:     []llm.Message{{Role: "user", Content: userMsg}},
-		Temperature:  0.1, // Low temperature for factual report
+		SystemPrompt: `Write two short paragraphs for the non-authoritative narrative section of a TEECheck report. Summarize only the supplied facts and suggest human review priorities. Do not restate detailed evidence, invent claims, or omit caveats. The structured report is authoritative.`,
+		Messages:     []llm.Message{{Role: "user", Content: input.String()}},
+		Temperature:  0.1,
 	})
 	if err != nil {
-		return "", fmt.Errorf("llm generate: %w", err)
+		return "", err
+	}
+	return strings.TrimSpace(resp.Text), nil
+}
+
+func buildReport(manifest artifacts.Manifest, findings artifacts.Findings, packets []reviewPacket, bundle artifacts.EvidenceBundle, hasPlannerMeta bool, narrative string) string {
+	ordered := sortedFindings(findings.Findings)
+	var b strings.Builder
+	b.WriteString("# TEECheck Audit Report\n\n")
+	b.WriteString("> Structured artifacts are authoritative. The narrative is model-generated and non-authoritative.\n\n")
+	b.WriteString("## Run\n\n")
+	b.WriteString("| Field | Value |\n|---|---|\n")
+	fmt.Fprintf(&b, "| Run ID | `%s` |\n| Repository | `%s` |\n| Commit | `%s` |\n| Focus | `%s` |\n| Findings | %d |\n",
+		manifest.RunID, manifest.RepoURL, manifest.Commit, manifest.Focus, len(ordered))
+	if manifest.Build != nil {
+		fmt.Fprintf(&b, "| TEECheck build | `%s` |\n| Go version | `%s` |\n| Scanner revision | `%s` |\n| Scanner tree modified | %t |\n",
+			manifest.Build.Version, manifest.Build.GoVersion, manifest.Build.VCSRevision, manifest.Build.VCSModified)
+	}
+	if manifest.Configuration != nil {
+		llmConfig := manifest.Configuration.LLM
+		fmt.Fprintf(&b, "| LLM provider | `%s` |\n| LLM model | `%s` |\n| LLM transport | `%s` |\n| Reasoning effort | `%s` |\n| Per-call output tokens | %d |\n",
+			llmConfig.Provider, llmConfig.Model, llmConfig.Transport, llmConfig.ReasoningEffort, llmConfig.MaxOutputTokens)
+	}
+	b.WriteString("\n")
+
+	b.WriteString("## Narrative\n\n")
+	b.WriteString(narrative)
+	b.WriteString("\n\n")
+
+	b.WriteString("## Findings Index\n\n")
+	if len(ordered) == 0 {
+		b.WriteString("No findings were emitted. This is not proof that no issue exists; consult planner coverage and run integrity.\n\n")
+	} else {
+		b.WriteString("| Finding | Status | Severity | Confidence | Summary |\n|---|---|---|---|---|\n")
+		for _, finding := range ordered {
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s |\n",
+				finding.FindingID, finding.Status, finding.Severity, finding.Confidence, tableText(finding.Summary))
+		}
+		b.WriteString("\n")
 	}
 
-	return resp.Text, nil
+	b.WriteString("## Finding Details\n\n")
+	for _, finding := range ordered {
+		renderFinding(&b, finding)
+	}
+
+	b.WriteString("## Planner And Coverage\n\n")
+	if !hasPlannerMeta {
+		b.WriteString("Planner metadata is unavailable.\n\n")
+	} else {
+		fmt.Fprintf(&b, "| Metric | Value |\n|---|---:|\n| Candidates | %d |\n| Rounds | %d / %d |\n| Tokens | %d |\n| Wall clock (ms) | %d |\n| Termination | `%s` |\n\n",
+			len(bundle.Candidates), bundle.PlannerMeta.RoundsUsed, bundle.PlannerMeta.RoundsBudget,
+			bundle.PlannerMeta.TokensUsed, bundle.PlannerMeta.WallClockMs, bundle.PlannerMeta.TerminationReason)
+		if len(bundle.Candidates) > 0 {
+			b.WriteString("### Candidates\n\n")
+			for _, candidate := range bundle.Candidates {
+				fmt.Fprintf(&b, "- `%s` (%s, %s): %s\n", candidate.ID, candidate.Kind, candidate.Priority, strings.Join(candidate.Paths, ", "))
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("## Review Packets\n\n")
+	if len(packets) == 0 {
+		b.WriteString("No review packets were present.\n")
+	}
+	for _, packet := range packets {
+		fmt.Fprintf(&b, "### `%s`\n\n", packet.Name)
+		b.WriteString(packet.Content)
+		if !strings.HasSuffix(packet.Content, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func renderFinding(b *strings.Builder, finding artifacts.FindingItem) {
+	fmt.Fprintf(b, "### `%s`: %s\n\n", finding.FindingID, finding.Summary)
+	fmt.Fprintf(b, "| Field | Value |\n|---|---|\n| Slice | `%s` |\n| Status | %s |\n| Severity | %s |\n| Confidence | %s |\n",
+		finding.SliceID, finding.Status, finding.Severity, finding.Confidence)
+	fmt.Fprintf(b, "| Files | %s |\n| Locations | %s |\n\n",
+		tableText(strings.Join(finding.Files, ", ")), tableText(formatLocations(finding.Locations)))
+	renderList(b, "Evidence", finding.Evidence)
+	if finding.Sections == nil {
+		return
+	}
+	sections := finding.Sections
+	renderList(b, "Anchored Tool Facts", sections.AnchoredToolFacts)
+	renderList(b, "Architecture Evidence Status", sections.ArchitectureEvidenceStatus)
+	renderList(b, "Invariant Verification Status", sections.InvariantVerificationStatus)
+	renderText(b, "Expert Hypothesis", sections.ExpertHypothesis)
+	renderText(b, "Independent Challenger Result", sections.IndependentChallengerResult)
+	renderText(b, "Verifier Resolution", sections.VerifierResolution)
+	renderList(b, "Remaining Coverage Gaps", sections.RemainingCoverageGaps)
+	renderList(b, "Human Review Questions", sections.HumanReviewQuestions)
+}
+
+func renderList(b *strings.Builder, title string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "#### %s\n\n", title)
+	for _, value := range values {
+		fmt.Fprintf(b, "- %s\n", value)
+	}
+	b.WriteString("\n")
+}
+
+func renderText(b *strings.Builder, title, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	fmt.Fprintf(b, "#### %s\n\n%s\n\n", title, value)
+}
+
+func sortedFindings(findings []artifacts.FindingItem) []artifacts.FindingItem {
+	ordered := append([]artifacts.FindingItem(nil), findings...)
+	rank := map[string]int{"high": 3, "medium": 2, "low": 1}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if rank[ordered[i].Severity] != rank[ordered[j].Severity] {
+			return rank[ordered[i].Severity] > rank[ordered[j].Severity]
+		}
+		if rank[ordered[i].Confidence] != rank[ordered[j].Confidence] {
+			return rank[ordered[i].Confidence] > rank[ordered[j].Confidence]
+		}
+		return ordered[i].FindingID < ordered[j].FindingID
+	})
+	return ordered
+}
+
+func formatLocations(locations []artifacts.FindingLocation) string {
+	values := make([]string, 0, len(locations))
+	for _, location := range locations {
+		values = append(values, fmt.Sprintf("%s:%d", location.Path, location.StartLine))
+	}
+	return strings.Join(values, ", ")
+}
+
+func tableText(value string) string {
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+func truncateText(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }

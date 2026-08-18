@@ -76,7 +76,10 @@ func main() {
 		bus := buildCuratorBus(cfg, client)
 		err = feedback.RunWithBus(cfg, client, os.Stdout, bus)
 	case "report":
-		client := llm.NewClient(cfg)
+		var client llm.Client
+		if cfg.LLMBaseURL != "" && cfg.LLMAPIKey != "" && cfg.LLMModel != "" {
+			client = llm.NewClient(cfg)
+		}
 		err = report.Run(cfg, client)
 	case "validate-run":
 		validation := runvalidate.Validate(cfg.RunDir)

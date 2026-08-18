@@ -13,27 +13,38 @@ import (
 )
 
 type OpenAIClient struct {
-	baseURL     string
-	apiKey      string
-	model       string
-	httpClient  *http.Client
-	temperature float64
-	maxTokens   int
+	baseURL         string
+	apiKey          string
+	model           string
+	httpClient      *http.Client
+	temperature     float64
+	maxTokens       int
+	transport       string
+	reasoningEffort string
 }
 
 func NewOpenAIClient(cfg config.Config) *OpenAIClient {
 	cfg = cfg.WithLLMProviderDefaults()
 	return &OpenAIClient{
-		baseURL:     strings.TrimRight(cfg.LLMBaseURL, "/"),
-		apiKey:      cfg.LLMAPIKey,
-		model:       cfg.LLMModel,
-		httpClient:  newHTTPClient(cfg.LLMTimeoutSec),
-		temperature: cfg.LLMTemp,
-		maxTokens:   maxTokensOrDefault(cfg.LLMMaxTokens),
+		baseURL:         strings.TrimRight(cfg.LLMBaseURL, "/"),
+		apiKey:          cfg.LLMAPIKey,
+		model:           cfg.LLMModel,
+		httpClient:      newHTTPClient(cfg.LLMTimeoutSec),
+		temperature:     cfg.LLMTemp,
+		maxTokens:       maxTokensOrDefault(cfg.LLMMaxTokens),
+		transport:       cfg.LLMTransport,
+		reasoningEffort: cfg.LLMReasoningEffort,
 	}
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+	if c.transport == config.LLMTransportResponses {
+		return c.generateResponses(ctx, req)
+	}
+	return c.generateChatCompletions(ctx, req)
+}
+
+func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	body := openAIChatRequest{
 		Model:       c.model,
 		Messages:    buildMessages(req.SystemPrompt, req.Messages),
@@ -100,6 +111,78 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 	return out, nil
 }
 
+func (c *OpenAIClient) generateResponses(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
+	input := make([]map[string]string, 0, len(req.Messages)+1)
+	// Keep the system prompt inside input rather than the separate
+	// instructions field. Responses JSON mode validates that an input
+	// message mentions JSON; several agents put that requirement in their
+	// system prompt only, and this is also the wire shape used by the
+	// previously successful compatibility proxy.
+	if req.SystemPrompt != "" {
+		input = append(input, map[string]string{
+			"role": "system", "content": req.SystemPrompt,
+		})
+	}
+	for _, message := range req.Messages {
+		input = append(input, map[string]string{
+			"role": message.Role, "content": message.Content,
+		})
+	}
+	body := openAIResponsesRequest{
+		Model:           c.model,
+		Input:           input,
+		MaxOutputTokens: c.maxTokens,
+		Store:           false,
+	}
+	if c.reasoningEffort != "" {
+		body.Reasoning = &openAIReasoning{Effort: c.reasoningEffort}
+	} else {
+		temperature := req.Temperature
+		if temperature == 0 {
+			temperature = c.temperature
+		}
+		body.Temperature = &temperature
+	}
+	if req.JSONMode {
+		body.Text = &openAIResponsesText{Format: openAIResponseFormat{Type: "json_object"}}
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return GenerateResponse{}, fmt.Errorf("marshal llm request: %w", err)
+	}
+	out := GenerateResponse{RawRequest: string(payload)}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(payload))
+	if err != nil {
+		return out, fmt.Errorf("build llm request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return out, fmt.Errorf("llm request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	out.Raw = string(respBody)
+	if err != nil {
+		return out, fmt.Errorf("read llm response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return out, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	text, usage, err := parseOpenAIResponses(respBody)
+	out.Text = text
+	out.Usage = usage
+	if err != nil {
+		return out, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
+	}
+	return out, nil
+}
+
 type openAIChatRequest struct {
 	Model          string                `json:"model"`
 	Messages       []map[string]string   `json:"messages"`
@@ -111,6 +194,89 @@ type openAIChatRequest struct {
 
 type openAIResponseFormat struct {
 	Type string `json:"type"`
+}
+
+type openAIResponsesRequest struct {
+	Model           string               `json:"model"`
+	Instructions    string               `json:"instructions,omitempty"`
+	Input           []map[string]string  `json:"input"`
+	Reasoning       *openAIReasoning     `json:"reasoning,omitempty"`
+	MaxOutputTokens int                  `json:"max_output_tokens,omitempty"`
+	Store           bool                 `json:"store"`
+	Text            *openAIResponsesText `json:"text,omitempty"`
+	Temperature     *float64             `json:"temperature,omitempty"`
+}
+
+type openAIReasoning struct {
+	Effort string `json:"effort"`
+}
+
+type openAIResponsesText struct {
+	Format openAIResponseFormat `json:"format"`
+}
+
+type openAIResponsesResponse struct {
+	Status            string `json:"status"`
+	Error             any    `json:"error"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Output []struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+	Usage struct {
+		InputTokens   int `json:"input_tokens"`
+		OutputTokens  int `json:"output_tokens"`
+		TotalTokens   int `json:"total_tokens"`
+		OutputDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
+	} `json:"usage"`
+}
+
+func parseOpenAIResponses(body []byte) (string, Usage, error) {
+	var parsed openAIResponsesResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", Usage{}, fmt.Errorf("decode json response: %w", err)
+	}
+	usage := Usage{
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
+		TotalTokens:      parsed.Usage.TotalTokens,
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	var parts []string
+	for _, output := range parsed.Output {
+		for _, content := range output.Content {
+			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
+				parts = append(parts, content.Text)
+			}
+		}
+	}
+	text := strings.Join(parts, "\n")
+	if parsed.Status != "" && parsed.Status != "completed" {
+		reason := parsed.IncompleteDetails.Reason
+		if reason == "" {
+			reason = "unspecified"
+		}
+		if reason == "max_output_tokens" {
+			return text, usage, fmt.Errorf("response status=%s reason=%s; raise --llm-max-tokens or TEECHECK_LLM_MAX_TOKENS", parsed.Status, reason)
+		}
+		return text, usage, fmt.Errorf("response status=%s reason=%s", parsed.Status, reason)
+	}
+	if parsed.Error != nil {
+		return text, usage, fmt.Errorf("response error: %v", parsed.Error)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", usage, fmt.Errorf("no output_text content found in response")
+	}
+	return text, usage, nil
 }
 
 type openAIChatResponse struct {
