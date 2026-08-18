@@ -19,6 +19,35 @@ func TestDedupeCandidates_NoBundlesIsEmpty(t *testing.T) {
 	}
 }
 
+func TestMergeEvidenceBundles_AccountsForEveryPass(t *testing.T) {
+	b1 := &artifacts.EvidenceBundle{
+		RunID: "run-1",
+		PlannerMeta: artifacts.PlannerMeta{
+			RoundsUsed: 10, RoundsBudget: 18, TokensUsed: 70000,
+			WallClockMs: 1000, TerminationReason: "aggregate_token_budget",
+		},
+	}
+	b2 := &artifacts.EvidenceBundle{
+		RunID: "run-1",
+		PlannerMeta: artifacts.PlannerMeta{
+			RoundsUsed: 7, RoundsBudget: 18, TokensUsed: 50000,
+			WallClockMs: 800, TerminationReason: "llm_done", Truncated: true,
+		},
+	}
+
+	merged := pipeline.MergeEvidenceBundles([]*artifacts.EvidenceBundle{b1, b2})
+	meta := merged.PlannerMeta
+	if meta.RoundsUsed != 17 || meta.RoundsBudget != 36 || meta.TokensUsed != 120000 || meta.WallClockMs != 1800 {
+		t.Fatalf("aggregate meta = %+v", meta)
+	}
+	if meta.TerminationReason != "multi_sample" || !meta.Truncated || meta.PassCount != 2 {
+		t.Fatalf("multi-sample meta = %+v", meta)
+	}
+	if len(meta.Passes) != 2 || meta.Passes[0].TerminationReason != "aggregate_token_budget" || meta.Passes[1].TerminationReason != "llm_done" {
+		t.Fatalf("pass summaries = %+v", meta.Passes)
+	}
+}
+
 func TestDedupeCandidates_KeepsUniquePaths(t *testing.T) {
 	b1 := &artifacts.EvidenceBundle{Candidates: []artifacts.Candidate{
 		mkCand("a", []string{"attest/verifier/src/dcap.rs"}, []string{"verify"}),

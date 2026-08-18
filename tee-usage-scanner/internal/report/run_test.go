@@ -25,6 +25,7 @@ func TestRun_DeterministicallyIncludesEveryFindingAndFullPacket(t *testing.T) {
 		"finding-high", "finding-low", "evidence-high", "evidence-low",
 		"core/high.c:42", "human-question-high", "PACKET_TAIL_MUST_SURVIVE",
 		"Candidates", "120001", "aggregate_token_budget",
+		"module-unreviewed", "budget_exhausted", "Modules reviewed",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report omitted %q", want)
@@ -93,6 +94,20 @@ func reportFixture(t *testing.T) string {
 		TerminationReason: "aggregate_token_budget",
 	}}
 	if err := runfs.WriteJSON(runfs.EvidenceBundlePath(dir), bundle); err != nil {
+		t.Fatal(err)
+	}
+	coverage := artifacts.CoverageLedger{
+		SchemaVersion: "teecheck.coverage_ledger.v1", RunID: "report-run",
+		ModulesTotal: 10, ModulesReviewed: 2,
+		FunctionCapsulesTotal: 100, FunctionCapsulesReviewed: 7,
+		UnreviewedClusters: []string{"module-unreviewed"},
+		BySample: []artifacts.SampleCoverage{{
+			SampleIndex: 0, ReconMode: "indexed", ReconStatus: "budget_exhausted",
+			ModulesReviewed: []string{"core"}, CapsulesReviewed: 7, FilesRead: 3,
+			RelationQueriesRun: 1, RoundsUsed: 10, ReconRoundsUsed: 10, LeadsOpened: 1,
+		}},
+	}
+	if err := runfs.WriteJSON(runfs.CoverageLedgerPath(dir), coverage); err != nil {
 		t.Fatal(err)
 	}
 	packet := strings.Repeat("packet body\n", 900) + "PACKET_TAIL_MUST_SURVIVE\n"

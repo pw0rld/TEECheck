@@ -120,6 +120,28 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
   offline report containing its deterministic finding in both index and detail;
   the complete 5,415-byte review packet is embedded.
 
+### 2026-08-19 04:05 HKT - Runtime and test reliability
+
+- Executor RED: a command with a 200 ms timeout returned after 5.00 seconds
+  because the shell was killed while its child retained the output pipes.
+- Executor GREEN: Unix commands now run in their own process group and context
+  cancellation kills the group. The same test completes in 0.20 seconds; the
+  timeout event regression also passes.
+- Planner accounting RED: multi-sample merge summed rounds/tokens but retained
+  only pass 1's round budget, termination reason, truncation state, and errors.
+- Planner accounting GREEN: aggregate budgets and usage now sum consistently;
+  `termination_reason=multi_sample` is explicit, and per-pass rounds, budgets,
+  tokens, wall time, termination, and truncation are preserved.
+- Coverage visibility: the final report now renders coverage-ledger totals,
+  per-sample recon status and actions, and the full unreviewed-cluster list.
+- Hermeticity: the dialog-budget test now declares its provider prerequisites;
+  Repomix unit tests use the existing fake-`npx` harness; non-Git local sources
+  no longer treat commit `unknown` as a checkout target; pipeline fixtures are
+  copied outside the parent Git repository.
+- Combined verification passes for executor, pipeline, report, stats, config,
+  Repomix, and planner actions. The pipeline package completed in 54.5 seconds
+  without a network acquisition attempt.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -134,9 +156,9 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Provenance | Hard-coded versions and absent model/budget controls reproduced | Actual build/VCS, resolved LLM controls, and planner limits verified in manifest | Complete |
 | Responses transport | Native tests hit chat path; live JSON agent request reproduced provider input constraint | Unit suite and all three direct Terra-high live checks pass | Complete |
 | Report completeness | Fake narrative omitted one of two findings and provider failure aborted output | Deterministic completeness/fallback tests and real vulnerable-control smoke pass | Complete |
-| Planner accounting | Pending | Pending | Not started |
-| Executor timeout | Existing 200 ms test takes about 5 s | Pending | Confirmed defect |
-| Offline full suite | Config, executor, and Repomix failures observed | Pending | Confirmed defect |
+| Planner accounting | Mixed aggregate/pass-1 metadata reproduced | Aggregate and per-pass accounting regression passes | Complete |
+| Executor timeout | 200 ms timeout returned after 5.00 s | Process-group cancellation returns in 0.20 s | Complete |
+| Offline full suite | Config, executor, Repomix, and pipeline acquisition leaks observed | Affected package set passes hermetically; full suite pending | In progress |
 
 ## Pilot Ledger
 

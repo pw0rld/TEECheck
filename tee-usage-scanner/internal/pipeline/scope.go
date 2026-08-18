@@ -36,7 +36,7 @@ import (
 // truthful one. What must never happen is reading the narrow tree while
 // reporting about the wide one.
 func acquireSourceScope(ctx context.Context, db *codedb.Manager, runDir, repository, commit, fallback string) (string, bool) {
-	if repository == "" || commit == "" {
+	if repository == "" || commit == "" || commit == "unknown" {
 		return fallback, false
 	}
 	scope := codedb.Scope{RunDir: runDir, Repository: repository, Commit: commit}

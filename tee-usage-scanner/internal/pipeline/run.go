@@ -731,19 +731,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 		// Merge into a single bundle for downstream: the first bundle's
 		// metadata (commit, repo, run_id) stays authoritative, candidates
 		// are the deduped union.
-		merged := *bundles[0]
-		merged.Candidates = DedupeCandidates(bundles)
-		mergedTokens := 0
-		mergedWall := int64(0)
-		mergedRounds := 0
-		for _, b := range bundles {
-			mergedTokens += b.PlannerMeta.TokensUsed
-			mergedWall += b.PlannerMeta.WallClockMs
-			mergedRounds += b.PlannerMeta.RoundsUsed
-		}
-		merged.PlannerMeta.TokensUsed = mergedTokens
-		merged.PlannerMeta.WallClockMs = mergedWall
-		merged.PlannerMeta.RoundsUsed = mergedRounds
+		merged := MergeEvidenceBundles(bundles)
 
 		if samples > 1 {
 			fmt.Printf("\n=== Multi-sample dedupe ===\n")

@@ -6,13 +6,21 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events/eventstest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/repomix"
 )
 
 func TestPackAndFormat(t *testing.T) {
-	if !repomix.Available() {
-		t.Skip("npx not available, skipping repomix test")
-	}
+	eventstest.FakeBinary(t, "npx", `
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then OUT="$a"; fi
+  prev="$a"
+done
+cat > "$OUT" <<'BODY'
+{"directoryStructure":"main.rs\n","files":{"main.rs":"pub fn verify_quote() {}\n"}}
+BODY
+`)
 
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.rs"), []byte(`

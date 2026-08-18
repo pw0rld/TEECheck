@@ -7,6 +7,44 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
+// MergeEvidenceBundles produces the canonical multi-sample bundle without
+// making pass 1's budget and termination look like aggregate values.
+func MergeEvidenceBundles(bundles []*artifacts.EvidenceBundle) artifacts.EvidenceBundle {
+	if len(bundles) == 0 {
+		return artifacts.EvidenceBundle{}
+	}
+	merged := *bundles[0]
+	merged.Candidates = DedupeCandidates(bundles)
+	merged.Errors = nil
+	merged.PlannerMeta = artifacts.PlannerMeta{
+		TerminationReason: bundles[0].PlannerMeta.TerminationReason,
+		PassCount:         len(bundles),
+		Passes:            make([]artifacts.PlannerPassMeta, 0, len(bundles)),
+	}
+	if len(bundles) > 1 {
+		merged.PlannerMeta.TerminationReason = "multi_sample"
+	}
+	for index, bundle := range bundles {
+		meta := bundle.PlannerMeta
+		merged.PlannerMeta.RoundsUsed += meta.RoundsUsed
+		merged.PlannerMeta.RoundsBudget += meta.RoundsBudget
+		merged.PlannerMeta.TokensUsed += meta.TokensUsed
+		merged.PlannerMeta.WallClockMs += meta.WallClockMs
+		merged.PlannerMeta.Truncated = merged.PlannerMeta.Truncated || meta.Truncated
+		merged.PlannerMeta.Passes = append(merged.PlannerMeta.Passes, artifacts.PlannerPassMeta{
+			SampleIndex:       index,
+			RoundsUsed:        meta.RoundsUsed,
+			RoundsBudget:      meta.RoundsBudget,
+			TokensUsed:        meta.TokensUsed,
+			WallClockMs:       meta.WallClockMs,
+			TerminationReason: meta.TerminationReason,
+			Truncated:         meta.Truncated,
+		})
+		merged.Errors = append(merged.Errors, bundle.Errors...)
+	}
+	return merged
+}
+
 // candidateKey is the dedupe identity for a candidate in the
 // multi-sample audit mode. Two candidates collide iff:
 //

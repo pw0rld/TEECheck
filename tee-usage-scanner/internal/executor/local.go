@@ -64,6 +64,7 @@ func (e *LocalExecutor) Run(ctx context.Context, req Request) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, req.Command, req.Args...)
+	configureProcessCancellation(cmd)
 	if req.WorkDir != "" {
 		// A relative working directory is resolved twice: once here, and
 		// again by any tool that was handed the same path as an argument.

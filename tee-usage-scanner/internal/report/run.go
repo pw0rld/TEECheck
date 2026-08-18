@@ -47,6 +47,8 @@ func Run(cfg config.Config, client llm.Client) error {
 	}
 	var bundle artifacts.EvidenceBundle
 	hasPlannerMeta := runfs.ReadJSON(runfs.EvidenceBundlePath(cfg.RunDir), &bundle) == nil
+	var coverage artifacts.CoverageLedger
+	hasCoverage := runfs.ReadJSON(runfs.CoverageLedgerPath(cfg.RunDir), &coverage) == nil
 
 	narrative, narrativeErr := generateNarrative(client, manifest, findings, bundle, hasPlannerMeta)
 	if narrativeErr != nil || strings.TrimSpace(narrative) == "" {
@@ -54,7 +56,7 @@ func Run(cfg config.Config, client llm.Client) error {
 			"Narrative unavailable. The authoritative sections below record %d finding(s) from the validated findings artifact.",
 			len(findings.Findings))
 	}
-	reportContent := buildReport(manifest, findings, packets, bundle, hasPlannerMeta, narrative)
+	reportContent := buildReport(manifest, findings, packets, bundle, hasPlannerMeta, coverage, hasCoverage, narrative)
 
 	reportDir := filepath.Join(cfg.RunDir, "08_report")
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
@@ -114,7 +116,7 @@ func generateNarrative(client llm.Client, manifest artifacts.Manifest, findings 
 	return strings.TrimSpace(resp.Text), nil
 }
 
-func buildReport(manifest artifacts.Manifest, findings artifacts.Findings, packets []reviewPacket, bundle artifacts.EvidenceBundle, hasPlannerMeta bool, narrative string) string {
+func buildReport(manifest artifacts.Manifest, findings artifacts.Findings, packets []reviewPacket, bundle artifacts.EvidenceBundle, hasPlannerMeta bool, coverage artifacts.CoverageLedger, hasCoverage bool, narrative string) string {
 	ordered := sortedFindings(findings.Findings)
 	var b strings.Builder
 	b.WriteString("# TEECheck Audit Report\n\n")
@@ -169,6 +171,25 @@ func buildReport(manifest artifacts.Manifest, findings artifacts.Findings, packe
 			}
 			b.WriteString("\n")
 		}
+	}
+	if hasCoverage {
+		b.WriteString("### Coverage Ledger\n\n")
+		fmt.Fprintf(&b, "| Metric | Reviewed | Total |\n|---|---:|---:|\n| Modules reviewed | %d | %d |\n| Function capsules reviewed | %d | %d |\n| Leads open | %d |  |\n\n",
+			coverage.ModulesReviewed, coverage.ModulesTotal,
+			coverage.FunctionCapsulesReviewed, coverage.FunctionCapsulesTotal,
+			coverage.LeadsOpen)
+		if len(coverage.BySample) > 0 {
+			b.WriteString("#### Per-Sample Coverage\n\n")
+			b.WriteString("| Sample | Recon mode | Recon status | Modules | Capsules | Files | Relation queries | Rounds | Recon rounds | Leads |\n|---:|---|---|---:|---:|---:|---:|---:|---:|---:|\n")
+			for _, sample := range coverage.BySample {
+				fmt.Fprintf(&b, "| %d | %s | %s | %d | %d | %d | %d | %d | %d | %d |\n",
+					sample.SampleIndex, sample.ReconMode, sample.ReconStatus,
+					len(sample.ModulesReviewed), sample.CapsulesReviewed, sample.FilesRead,
+					sample.RelationQueriesRun, sample.RoundsUsed, sample.ReconRoundsUsed, sample.LeadsOpened)
+			}
+			b.WriteString("\n")
+		}
+		renderList(&b, "Unreviewed Clusters", coverage.UnreviewedClusters)
 	}
 
 	b.WriteString("## Review Packets\n\n")

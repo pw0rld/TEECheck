@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -20,10 +21,14 @@ func probeConfig(t *testing.T, mode string) config.Config {
 		t.Fatal("failed to resolve current file")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	target := filepath.Join(t.TempDir(), "sample_repo")
+	if err := os.CopyFS(target, os.DirFS(filepath.Join(root, "testdata", "sample_repo"))); err != nil {
+		t.Fatalf("copy sample repository: %v", err)
+	}
 	outputDir := t.TempDir()
 	return config.Config{
 		Command:       "run",
-		Target:        filepath.Join(root, "testdata", "sample_repo"),
+		Target:        target,
 		Mode:          mode,
 		Focus:         "runtime",
 		RunID:         "pipeline-stage-001",

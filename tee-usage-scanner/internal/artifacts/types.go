@@ -531,6 +531,20 @@ type EvidenceBundle struct {
 }
 
 type PlannerMeta struct {
+	RoundsUsed        int               `json:"rounds_used"`
+	RoundsBudget      int               `json:"rounds_budget"`
+	TokensUsed        int               `json:"tokens_used"`
+	WallClockMs       int64             `json:"wall_clock_ms"`
+	TerminationReason string            `json:"termination_reason"`
+	Truncated         bool              `json:"truncated"`
+	PassCount         int               `json:"pass_count,omitempty"`
+	Passes            []PlannerPassMeta `json:"passes,omitempty"`
+}
+
+// PlannerPassMeta preserves each independent sample's accounting when the
+// canonical evidence bundle contains their merged candidate union.
+type PlannerPassMeta struct {
+	SampleIndex       int    `json:"sample_index"`
 	RoundsUsed        int    `json:"rounds_used"`
 	RoundsBudget      int    `json:"rounds_budget"`
 	TokensUsed        int    `json:"tokens_used"`

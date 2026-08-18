@@ -167,6 +167,9 @@ func TestParse_DialogBudgetIsNotBackAtThree(t *testing.T) {
 		t.Fatalf("DefaultMaxDialogRounds = %d; 3 was measured to starve the arbiter of "+
 			"its follow-up questions once the tool-backed agent worked", DefaultMaxDialogRounds)
 	}
+	t.Setenv("TEECHECK_LLM_API_KEY", "test-key")
+	t.Setenv("TEECHECK_LLM_BASE_URL", "https://example.test/v1")
+	t.Setenv("TEECHECK_LLM_MODEL", "test-model")
 	cfg, err := Parse([]string{"run", "/tmp/x"})
 	if err != nil {
 		t.Fatal(err)
