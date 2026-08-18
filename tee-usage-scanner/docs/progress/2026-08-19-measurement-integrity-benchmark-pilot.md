@@ -142,6 +142,17 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
   Repomix, and planner actions. The pipeline package completed in 54.5 seconds
   without a network acquisition attempt.
 
+### 2026-08-19 04:35 HKT - Full code-change verification gate
+
+- `GOCACHE=/tmp/teecheck-gocache go test ./... -count=1`: PASS across every
+  package. The longest package (`internal/repoindex`) completed in 149.2 seconds;
+  the full run exited zero.
+- `GOCACHE=/tmp/teecheck-gocache go vet ./...`: PASS.
+- Fresh `cmd/teecheck` build: PASS.
+- `git diff --check`: PASS.
+- Worktree contains no uncommitted scanner source changes at this checkpoint;
+  the unrelated parent `../.omx/` entry remains untouched.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -158,7 +169,7 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Report completeness | Fake narrative omitted one of two findings and provider failure aborted output | Deterministic completeness/fallback tests and real vulnerable-control smoke pass | Complete |
 | Planner accounting | Mixed aggregate/pass-1 metadata reproduced | Aggregate and per-pass accounting regression passes | Complete |
 | Executor timeout | 200 ms timeout returned after 5.00 s | Process-group cancellation returns in 0.20 s | Complete |
-| Offline full suite | Config, executor, Repomix, and pipeline acquisition leaks observed | Affected package set passes hermetically; full suite pending | In progress |
+| Offline full suite | Config, executor, Repomix, and pipeline acquisition leaks observed | Full test suite, vet, build, and diff check pass | Complete |
 
 ## Pilot Ledger
 
