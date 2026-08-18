@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/report"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runvalidate"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/verifier"
 )
 
@@ -76,6 +78,16 @@ func main() {
 	case "report":
 		client := llm.NewClient(cfg)
 		err = report.Run(cfg, client)
+	case "validate-run":
+		validation := runvalidate.Validate(cfg.RunDir)
+		var data []byte
+		data, err = json.MarshalIndent(validation, "", "  ")
+		if err == nil {
+			fmt.Println(string(data))
+			if !validation.Valid {
+				err = fmt.Errorf("run validation failed with %d issue(s)", len(validation.Issues))
+			}
+		}
 	case "run", "plan":
 		// Since M4 (T2.1), `plan` is a convenience alias for
 		// `run --mode llm`. config.parsePlan forces cfg.Mode = "llm"

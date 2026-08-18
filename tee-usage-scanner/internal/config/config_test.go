@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+func TestParseValidateRun(t *testing.T) {
+	cfg, err := Parse([]string{"validate-run", "--run-dir", "/tmp/run-1"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Command != "validate-run" || cfg.RunDir != "/tmp/run-1" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if _, err := Parse([]string{"validate-run"}); err == nil {
+		t.Fatal("Parse accepted validate-run without --run-dir")
+	}
+}
+
 // ─── The API key must never reach the usage output ───────────────────
 
 // On 2026-07-28 a live API key was printed to a terminal and into a task log

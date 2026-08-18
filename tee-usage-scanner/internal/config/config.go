@@ -78,6 +78,8 @@ func Parse(args []string) (Config, error) {
 		return parseArbiter(args[1:])
 	case "report":
 		return parseReport(args[1:])
+	case "validate-run":
+		return parseValidateRun(args[1:])
 	case "curator":
 		return parseCurator(args[1:])
 	case "run":
@@ -91,6 +93,19 @@ func Parse(args []string) (Config, error) {
 	default:
 		return Config{}, usageError(fmt.Sprintf("unknown subcommand: %s", args[0]))
 	}
+}
+
+func parseValidateRun(args []string) (Config, error) {
+	fs := flag.NewFlagSet("validate-run", flag.ContinueOnError)
+	cfg := Config{Command: "validate-run"}
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory to validate")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if cfg.RunDir == "" {
+		return Config{}, fmt.Errorf("validate-run requires --run-dir")
+	}
+	return cfg, nil
 }
 
 func parseKnowledgeInit(args []string) (Config, error) {
@@ -568,7 +583,7 @@ func parsePlan(args []string) (Config, error) {
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck validate-run --run-dir DIR\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateProviderConfig(cfg Config, context string) error {
