@@ -177,9 +177,87 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - This changes configuration plumbing only. Detection logic remains frozen
   before any pilot result is observed.
 
+### 2026-08-19 06:55 HKT - Six-pair Terra-high pilot complete
+
+- Executed 12 sequential scans from 00:57:52 to 02:40:43 HKT using scanner
+  revision `7d1b5616e4264d905a833cf0b1b9b283a28e32c1`, CodeQL `2.24.0`, one
+  sample, no target hint, native Responses, Terra high reasoning, and an
+  explicit 32,768-output-token limit.
+- Every run used a pinned full upstream checkout rather than only the fixture
+  subset. Every manifest records the repository, revision, source scope, model
+  configuration, planner limits, scanner build, and CodeQL version.
+- All 12 bundles pass `teecheck validate-run`. Across 205 LLM calls there were
+  zero recorded LLM failures, tool failures, or truncations.
+- The batch consumed 1,488,350 planner tokens (mean 124,029 per run) and wrote
+  approximately 12 GB of artifacts.
+- Machine-readable selection, per-run results, raw runner log, and score live
+  under `TEECheck/.omc/artifacts/benchmark-pilot-2026-08-19/` and remain
+  ignored by Git.
+
+Secret-free command template (the credential was loaded only into
+`TEECHECK_LLM_API_KEY` from the ignored local auth file):
+
+```bash
+GOCACHE=/tmp/teecheck-gocache go run ./evaluator/runner \
+  -cases /tmp/teecheck-benchmark-pilot-20260819-cases -mode evaluate \
+  -results ../.omc/artifacts/benchmark-pilot-2026-08-19/runs -timeout 60m \
+  -scanner-command "/tmp/teecheck-pilot run {input} --repo-url {repository} --commit {revision} --focus tee --run-id scan --output-dir {run_dir} --knowledge-root /home/payson/Documents/AI4Security/TEE-Usage/TEECheck/tee-usage-scanner/knowledge --max-cases 8 --max-hotspots 8 --samples 1 --llm-provider openai --llm-base-url http://43.110.35.69:8080/v1 --llm-model gpt-5.6-terra --llm-transport responses --llm-reasoning-effort high --llm-timeout-seconds 900 --llm-max-tokens 32768"
+```
+
+| Case | Vulnerable score / findings | Fixed score / findings | Pair | Primary pipeline observation |
+|---|---:|---:|---:|---|
+| `CVE-2019-0876` | FN / 0 | TN / 0 | Fail | Both planners ended reconnaissance without a candidate. |
+| `CVE-2020-16273` | FN / 0 | TN / 0 | Fail | Both planners exhausted the aggregate token budget. |
+| `CVE-2021-44421` | FN / 0 | TN / 0 | Fail | Both planners exhausted the aggregate token budget. |
+| `CVE-2023-42811` | FN / 0 | FP / 1 | Fail | Rust index had zero function-card pages; only the fixed side opened an autonomous candidate. |
+| `CVE-2025-46733` | FN / 1 | TN / 1 | Fail | Deterministic lane emitted the same incidental, non-target property on both sides. |
+| `CVE-2026-44362` | TP / 1 | TN / 0 | Pass | Deterministic lane caught and discriminated the known rollback control; autonomous planner added no candidate. |
+
+- Target-matching totals are TP=1, FP=1, FN=5, TN=5, precision=0.5000,
+  recall=0.1667, F1=0.2500, specificity=0.8333, and paired pass rate 1/6.
+- These totals are diagnostic, not a valid in-scope headline metric: all six
+  checked-in oracles omit `twe_family`, so the evaluator places every case in
+  the out-of-scope track and leaves the in-scope track empty. Inventing those
+  classifications during this pilot would invalidate the frozen measurement.
+- The scorer uses target-specific matching. `CVE-2025-46733` therefore reports
+  FN/TN even though both variants contain one incidental finding; reporting
+  must make this distinction more prominent.
+
+### 2026-08-19 07:10 HKT - Benchmark report integrity follow-up
+
+- RED: the scorer derived F1 from already rounded precision/recall and wrote
+  `0.250037498125...` instead of the exact count-derived value `0.25`.
+- GREEN: F1 now uses `2*TP / (2*TP + FP + FN)`. The focused regression and
+  full runner package pass; the pilot score was regenerated without changing
+  any case classification.
+- The runner suite also exposed a stale knowledge-layout assumption. Its
+  holdout-leak guard now recursively scans every YAML file under the current
+  `knowledge/twe` tree rather than requiring a removed `playbooks` directory.
+
+### 2026-08-19 07:30 HKT - Final verification
+
+- Scanner: `GOCACHE=/tmp/teecheck-gocache go test ./... -count=1`, `go vet
+  ./...`, and a fresh `cmd/teecheck` build all pass. `internal/repoindex` was
+  the longest package at 149.6 seconds.
+- Benchmark: full tests, `go vet ./...`, and a fresh evaluator-runner build all
+  pass.
+- Benchmark vet initially exposed `testing.T.Context()` despite the module's
+  declared Go 1.23 compatibility. The test now uses `context.Background()`;
+  no production behavior changed.
+- `git diff --check`, tracked-diff credential scan, selection JSON validation,
+  and all 12 JSONL result records pass.
+- All 12 pilot run bundles were revalidated after execution and remain valid.
+
 ## Current Status
 
-`IN PROGRESS`: measurement-integrity repair pass.
+`COMPLETE`: measurement-integrity repair and six-pair diagnostic pilot.
+
+The pipeline is operational and its run artifacts are now reproducible,
+complete, and machine-validatable. Current detection capability is narrow: it
+reliably discriminates the demonstrated deterministic rollback control, but
+this pilot provides no evidence that the Terra-driven autonomous planner can
+discover an unseen vulnerable target. General benchmark readiness requires the
+P0 items below.
 
 ## Verification Ledger
 
@@ -194,19 +272,65 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Planner accounting | Mixed aggregate/pass-1 metadata reproduced | Aggregate and per-pass accounting regression passes | Complete |
 | Executor timeout | 200 ms timeout returned after 5.00 s | Process-group cancellation returns in 0.20 s | Complete |
 | Offline full suite | Config, executor, Repomix, and pipeline acquisition leaks observed | Full test suite, vet, build, and diff check pass | Complete |
+| CodeQL provenance | CodeQL version/status absent | Recorded probe reports `2.24.0` in all pilot manifests | Complete |
+| Pilot run integrity | No cross-run validation evidence | All 12 bundles validate; zero LLM/tool failures or truncations | Complete |
+| Benchmark arithmetic | Rounded inputs produced imprecise F1 JSON | Count-derived F1 regression and regenerated score | Complete |
 
 ## Pilot Ledger
 
-Pilot execution is gated on the measurement-integrity checklist in the design
-document. No pilot result will be treated as valid before its run bundle passes
-the new validator.
+Pilot execution and validation are complete. Authoritative ignored artifacts:
+
+- `selection.json`: frozen selection and secret-free controls.
+- `results.jsonl`: 12 normalized per-variant records.
+- `runner.log`: complete sequential execution log.
+- `runs/score.json` and `runs/score.md`: target-matching evaluator output.
+- `runs/<case>/<variant>/scan/`: complete scanner bundle for each variant.
+
+## Prioritized Improvements
+
+1. **P0 - Restore a defensible capability track.** Add sourced scope/family
+   metadata or a separate reviewed property-family annotation layer, validate
+   its completeness before scoring, and refuse to publish an in-scope headline
+   when the selected set contains zero classified in-scope cases.
+2. **P0 - Repair autonomous discovery economics.** Separate reconnaissance and
+   investigation token budgets, reserve budget for `open_audit_lead`/`done`,
+   stop repeating unchanged repository context, and add a completion policy
+   that prevents 8/12 runs from ending only because aggregate input tokens
+   crossed 120,000. The current planner opened just one candidate across all 12
+   runs, and that candidate occurred on a fixed variant.
+3. **P0 - Tighten deterministic fact promotion.** Record why a fact is relevant
+   to the active property, carry negative/guard evidence into promotion, and
+   test non-differential paired revisions. The same incidental rollback signal
+   survived on both sides of `CVE-2025-46733` despite not matching that target.
+4. **P1 - Make index coverage explicit and actionable.** Emit language,
+   extractor, module, symbol, function-card, and unsupported-file coverage in a
+   versioned artifact. Zero Rust function-card pages must be a visible partial
+   coverage state, not merely a console line.
+5. **P1 - Separate target score from incidental findings.** Add explicit
+   `target_observed`, `total_findings`, and `incidental_findings` fields so a
+   target-specific TN with one unrelated finding is never summarized simply as
+   `clean`.
+6. **P1 - Reduce paired-run cost.** Cache immutable source clones and CodeQL
+   packs safely by repository/revision/tool version, add disk preflight and
+   cleanup policy, and retain only the database data needed for replay. The
+   first Open Enclave extraction temporarily exceeded 6 GB and dominated run
+   time.
+7. **P2 - Measure stability.** After P0 fixes, repeat a small balanced set with
+   at least three seeds/samples and report candidate/finding agreement. The
+   RustCrypto fixed-only candidate shows that one-sample results are not enough
+   to characterize model behavior.
 
 ## Open Risks
 
-- Native Responses support may expose provider-specific response differences.
-- Planner prompt input dominates its aggregate token budget even when Terra
-  returns short, valid actions.
-- The deterministic OP-TEE fixture proves target-specific discrimination but
-  does not measure blind generalization.
+- All selected oracles currently lack TWE-family metadata, so the evaluator's
+  in-scope capability track is empty.
+- Planner prompt input dominates its aggregate token budget; 11/12 runs ended
+  in `max_tokens` or `recon_incomplete` and no vulnerable run gained an
+  autonomous candidate.
+- The deterministic OP-TEE control proves target-specific discrimination but
+  not blind generalization.
+- Rust indexing can produce modules with zero function-card pages without
+  elevating the run to a partial-coverage status.
+- One sample per variant cannot quantify LLM variance.
 - The local model credential remains stored only under ignored `.omc/local/`
   with mode `0600`; it must never enter tracked files or test fixtures.

@@ -132,24 +132,28 @@ func TestKnowledgeDoesNotLeakHoldoutCases(t *testing.T) {
 		forbidden[fn] = id
 	}
 
-	playbookDir := filepath.Join("..", "..", "..", "tee-usage-scanner", "knowledge", "twe", "playbooks")
-	entries, err := os.ReadDir(playbookDir)
-	if err != nil {
-		t.Fatalf("read playbook dir: %v", err)
-	}
+	knowledgeDir := filepath.Join(repoRoot, "tee-usage-scanner", "knowledge", "twe")
 	checked := 0
-	for _, e := range entries {
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if e.IsDir() || (ext != ".yml" && ext != ".yaml") {
-			continue
+	err = filepath.WalkDir(knowledgeDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		scanFileForLeaks(t, filepath.Join(playbookDir, e.Name()), e.Name(), forbidden)
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if entry.IsDir() || (ext != ".yml" && ext != ".yaml") {
+			return nil
+		}
+		displayName, err := filepath.Rel(knowledgeDir, path)
+		if err != nil {
+			return err
+		}
+		scanFileForLeaks(t, path, displayName, forbidden)
 		checked++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk TWE knowledge: %v", err)
 	}
 	if checked == 0 {
-		t.Fatal("no playbooks were checked; the path to the playbook directory is wrong")
+		t.Fatal("no TWE knowledge files were checked; the knowledge path is wrong")
 	}
-
-	catalogPath := filepath.Join("..", "..", "..", "tee-usage-scanner", "knowledge", "twe", "definitions", "catalog.yml")
-	scanFileForLeaks(t, catalogPath, "catalog.yml", forbidden)
 }

@@ -78,6 +78,15 @@ func TestBuildScoreReportsFalseNegativeAndFalsePositive(t *testing.T) {
 	}
 }
 
+func TestTrackMetricsF1UsesConfusionMatrixCounts(t *testing.T) {
+	metrics := trackMetrics{Totals: scoreTotals{TP: 1, FP: 1, FN: 5, TN: 5}}
+	metrics.finalize()
+
+	if metrics.F1 != 0.25 {
+		t.Fatalf("F1 = %.12f, want 0.25", metrics.F1)
+	}
+}
+
 // TestMatchFindingRequiresFamily: for an in-scope case, a finding on the right
 // file whose id carries no family tag (or the wrong one) must not match — the
 // mechanism is file AND class, not file alone.

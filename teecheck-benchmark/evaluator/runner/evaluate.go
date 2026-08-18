@@ -105,9 +105,7 @@ func (t *trackMetrics) finalize() {
 	t.Precision = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FP)
 	t.Recall = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FN)
 	t.Specificity = ratio(t.Totals.TN, t.Totals.TN+t.Totals.FP)
-	if t.Precision+t.Recall > 0 {
-		t.F1 = 2 * t.Precision * t.Recall / (t.Precision + t.Recall)
-	}
+	t.F1 = ratio(2*t.Totals.TP, 2*t.Totals.TP+t.Totals.FP+t.Totals.FN)
 	t.PairedRate = ratio(t.PairedPasses, t.Cases)
 }
 

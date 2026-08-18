@@ -1,9 +1,12 @@
 package llm
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestClientRequiresConfiguration(t *testing.T) {
-	if _, err := (Client{}).Complete(t.Context(), "test"); err == nil {
+	if _, err := (Client{}).Complete(context.Background(), "test"); err == nil {
 		t.Fatal("expected configuration error")
 	}
 }
