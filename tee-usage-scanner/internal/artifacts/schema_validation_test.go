@@ -269,6 +269,38 @@ func TestSchemaFindingV3(t *testing.T) {
 	}
 }
 
+func TestSchemaFindingsV2(t *testing.T) {
+	valid := Findings{
+		SchemaVersion: "teecheck.findings.v2",
+		RunID:         "run-001",
+		Findings:      []FindingItem{},
+	}
+	if err := schema.Validate(schema.FindingsV2, marshalJSON(t, valid)); err != nil {
+		t.Fatalf("valid empty findings container rejected: %v", err)
+	}
+
+	withFinding := valid
+	withFinding.Findings = []FindingItem{{
+		FindingID: "f-1", SliceID: "case-1", Status: "needs_review",
+		Severity: "medium", Confidence: "low", Summary: "requires review",
+		Locations: []FindingLocation{{Path: "src/a.c", StartLine: 7}},
+		Sections:  &ArbiterSections{RemainingCoverageGaps: []string{"call edge unresolved"}},
+	}}
+	if err := schema.Validate(schema.FindingsV2, marshalJSON(t, withFinding)); err != nil {
+		t.Fatalf("valid finding rejected: %v", err)
+	}
+
+	nullFindings := []byte(`{"schema_version":"teecheck.findings.v2","run_id":"run-001","findings":null}`)
+	if err := schema.Validate(schema.FindingsV2, nullFindings); err == nil {
+		t.Fatal("schema accepted null findings")
+	}
+	badStatus := withFinding
+	badStatus.Findings[0].Status = "invented"
+	if err := schema.Validate(schema.FindingsV2, marshalJSON(t, badStatus)); err == nil {
+		t.Fatal("schema accepted unknown finding status")
+	}
+}
+
 // The Go struct cannot stop a later stage from writing an extra field into
 // repo_facts.json by hand, or a different language's producer from adding
 // one. additionalProperties:false on the capsule is what makes "01 states

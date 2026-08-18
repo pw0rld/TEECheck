@@ -44,6 +44,7 @@ const (
 	TWEPlaybookV1          Name = "twe-playbook.v1"
 	TrustIRToolV1          Name = "trustir-tool.v1"
 	TWEInvestigationV1     Name = "twe-investigation.v1"
+	FindingsV2             Name = "findings.v2"
 	FindingV3              Name = "finding.v3"
 )
 
@@ -59,6 +60,7 @@ var All = []Name{
 	TWEPlaybookV1,
 	TrustIRToolV1,
 	TWEInvestigationV1,
+	FindingsV2,
 	FindingV3,
 }
 

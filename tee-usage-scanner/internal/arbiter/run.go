@@ -157,6 +157,7 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 	findings := artifacts.Findings{
 		SchemaVersion: "teecheck.findings.v2",
 		RunID:         manifest.RunID,
+		Findings:      make([]artifacts.FindingItem, 0),
 	}
 	count := 0
 	for idx, casePath := range casePaths {
@@ -201,6 +202,9 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 			}
 		}
 		count++
+	}
+	if err := findings.Validate(); err != nil {
+		return fmt.Errorf("validate arbiter findings: %w", err)
 	}
 	if err := runfs.WriteJSON(runfs.ArbiterFindingsPath(cfg.RunDir), findings); err != nil {
 		return fmt.Errorf("write arbiter findings: %w", err)

@@ -30,6 +30,23 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - Three read-only mapping lanes started for artifact contracts, transport/report,
   and runtime reliability.
 
+### 2026-08-19 00:20 HKT - Empty findings contract
+
+- RED: `TestRunWithBus_EmptyFindingsSerializesArray` failed because a zero-case
+  arbiter result decoded `findings` as nil.
+- GREEN: the arbiter now initializes the collection explicitly; the focused
+  regression passes and emits an empty JSON array.
+
+### 2026-08-19 00:45 HKT - Findings validation and schema
+
+- RED: model output with `status=invented_status` was persisted successfully;
+  the focused arbiter regression demonstrated the missing validation gate.
+- GREEN: `Findings.Validate` now enforces the v2 schema version, non-null array,
+  required identifiers/summary, and closed status/severity/confidence values.
+- Added canonical and embedded `findings.v2.json` schemas with drift tests.
+- Verification: `go test ./internal/artifacts ./internal/schema ./internal/arbiter
+  -count=1` passes.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -38,8 +55,8 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 
 | Area | Red evidence | Green evidence | Status |
 |---|---|---|---|
-| Empty findings array | Pending | Pending | Not started |
-| Findings validation | Pending | Pending | Not started |
+| Empty findings array | Nil slice reproduced in focused arbiter test | Focused arbiter regression passes | Complete |
+| Findings validation | Invalid status persisted in focused arbiter test | Artifact, schema, and arbiter packages pass | Complete |
 | Run validator | Pending | Pending | Not started |
 | Provenance | Pending | Pending | Not started |
 | Responses transport | Pending | Pending | Not started |
@@ -63,4 +80,3 @@ the new validator.
   does not measure blind generalization.
 - The local model credential remains stored only under ignored `.omc/local/`
   with mode `0600`; it must never enter tracked files or test fixtures.
-
