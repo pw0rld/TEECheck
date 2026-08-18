@@ -7,6 +7,27 @@ import (
 	"testing"
 )
 
+func TestEngineVersion(t *testing.T) {
+	bin, _ := fakeCodeQL(t, `{"version":"2.24.0"}`, "", "", 0)
+	e := NewWithBin(bin)
+
+	got, err := e.Version(context.Background())
+	if err != nil {
+		t.Fatalf("Version returned error: %v", err)
+	}
+	if got != "2.24.0" {
+		t.Fatalf("Version = %q, want 2.24.0", got)
+	}
+}
+
+func TestEngineVersionRejectsMalformedOutput(t *testing.T) {
+	bin, _ := fakeCodeQL(t, "not-json", "", "", 0)
+
+	if _, err := NewWithBin(bin).Version(context.Background()); err == nil {
+		t.Fatal("Version accepted malformed output")
+	}
+}
+
 func TestAvailable(t *testing.T) {
 	// Absolute path to an existing regular file → available.
 	f := filepath.Join(t.TempDir(), "codeql")

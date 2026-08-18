@@ -153,6 +153,19 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - Worktree contains no uncommitted scanner source changes at this checkpoint;
   the unrelated parent `../.omx/` entry remains untouched.
 
+### 2026-08-19 05:00 HKT - CodeQL provenance gate
+
+- RED: the manifest recorded the scanner and Go versions but omitted CodeQL,
+  so a benchmark result could not prove which deterministic analysis engine
+  produced its repository index.
+- GREEN: the CodeQL engine now probes `version --format=json` through the
+  run's recording executor and persists the normalized version in
+  `tool_versions.codeql`. Unavailable and failed probes are represented
+  explicitly as `unavailable` and `error` rather than silently omitted.
+- The installed pilot engine reports CodeQL `2.24.0`.
+- Focused CodeQL, run-initialization, and pipeline tests pass; the pipeline
+  package completed in 58.1 seconds.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -164,7 +177,7 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Empty findings array | Nil slice reproduced in focused arbiter test | Focused arbiter regression passes | Complete |
 | Findings validation | Invalid status persisted in focused arbiter test | Artifact, schema, and arbiter packages pass | Complete |
 | Run validator | Missing implementation/CLI reproduced by focused tests | Synthetic corruptions rejected; vulnerable control valid; fixed control rejects historical null | Complete |
-| Provenance | Hard-coded versions and absent model/budget controls reproduced | Actual build/VCS, resolved LLM controls, and planner limits verified in manifest | Complete |
+| Provenance | Hard-coded versions and absent model/budget/CodeQL controls reproduced | Actual build/VCS, resolved LLM controls, planner limits, and CodeQL version/status verified in manifest | Complete |
 | Responses transport | Native tests hit chat path; live JSON agent request reproduced provider input constraint | Unit suite and all three direct Terra-high live checks pass | Complete |
 | Report completeness | Fake narrative omitted one of two findings and provider failure aborted output | Deterministic completeness/fallback tests and real vulnerable-control smoke pass | Complete |
 | Planner accounting | Mixed aggregate/pass-1 metadata reproduced | Aggregate and per-pass accounting regression passes | Complete |

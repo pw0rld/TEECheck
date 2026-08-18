@@ -231,6 +231,17 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// planner's own cost unreadable.
 	indexEng := codeql.New()
 	indexEng.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent})
+	codeqlVersion := "unavailable"
+	if indexEng.Available() {
+		var versionErr error
+		codeqlVersion, versionErr = indexEng.Version(context.Background())
+		if versionErr != nil {
+			codeqlVersion = "error"
+		}
+	}
+	if err := runinit.RecordToolVersion(runDir, "codeql", codeqlVersion); err != nil {
+		return runDir, fmt.Errorf("record CodeQL version: %w", err)
+	}
 	codeDB := codedb.New(indexEng,
 		executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent}))
 

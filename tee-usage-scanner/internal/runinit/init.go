@@ -130,6 +130,28 @@ func RecordPlannerLimits(runDir string, limits artifacts.PlannerLimits) error {
 	return nil
 }
 
+// RecordToolVersion adds one resolved tool version or explicit status to the
+// manifest after the pipeline has constructed the tool that will be used.
+func RecordToolVersion(runDir, name, version string) error {
+	path := filepath.Join(runDir, "00_manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	var manifest artifacts.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse manifest: %w", err)
+	}
+	if manifest.ToolVersions == nil {
+		manifest.ToolVersions = make(map[string]string)
+	}
+	manifest.ToolVersions[name] = version
+	if err := writeJSON(path, manifest); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	return nil
+}
+
 func writeJSON(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

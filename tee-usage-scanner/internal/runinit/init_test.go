@@ -110,3 +110,26 @@ func TestRunCreatesManifestAndStageDirs(t *testing.T) {
 		t.Fatalf("run configuration = %+v", got)
 	}
 }
+
+func TestRecordToolVersion(t *testing.T) {
+	tmp := t.TempDir()
+	runDir, err := Run(config.Config{RunID: "run", OutputDir: tmp}, time.Now())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if err := RecordToolVersion(runDir, "codeql", "2.24.0"); err != nil {
+		t.Fatalf("RecordToolVersion returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(runDir, "00_manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest artifacts.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	if got := manifest.ToolVersions["codeql"]; got != "2.24.0" {
+		t.Fatalf("codeql tool version = %q, want 2.24.0", got)
+	}
+}

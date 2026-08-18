@@ -2,6 +2,7 @@ package codeql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 const (
 	codeqlCreateTimeout  = 2 * time.Hour
 	codeqlAnalyzeTimeout = 1 * time.Hour
+	codeqlVersionTimeout = 30 * time.Second
 )
 
 // codeqlMaxOutputBytes caps the console streams. CodeQL's stdout/stderr
@@ -84,6 +86,29 @@ func (e *Engine) Available() bool {
 	}
 	_, err := exec.LookPath(e.bin)
 	return err == nil
+}
+
+// Version returns the CodeQL CLI version reported by the executable used by
+// this engine. The probe routes through the same executor as database work so
+// provenance collection is visible in the run event stream.
+func (e *Engine) Version(ctx context.Context) (string, error) {
+	if !e.Available() {
+		return "", fmt.Errorf("codeql not available (bin=%q)", e.bin)
+	}
+	res := e.run(ctx, "codeql-version", []string{"version", "--format=json"}, codeqlVersionTimeout, "")
+	if err := res.Err(); err != nil {
+		return "", fmt.Errorf("codeql version failed: %w\n%s", err, tail(res.Combined(), 2000))
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(res.Stdout, &payload); err != nil {
+		return "", fmt.Errorf("parse codeql version: %w", err)
+	}
+	if strings.TrimSpace(payload.Version) == "" {
+		return "", fmt.Errorf("parse codeql version: response has no version")
+	}
+	return strings.TrimSpace(payload.Version), nil
 }
 
 // CreateDBOptions configures a database build.
