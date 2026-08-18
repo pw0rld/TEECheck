@@ -121,6 +121,16 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	if err != nil {
 		return "", fmt.Errorf("init run: %w", err)
 	}
+	plannerBudget := planner.NewDefaultBudget()
+	if err := runinit.RecordPlannerLimits(runDir, artifacts.PlannerLimits{
+		MaxInvestigationRounds: plannerBudget.MaxRounds,
+		MaxReconRounds:         plannerBudget.MaxReconRounds,
+		MaxAggregateTokens:     plannerBudget.MaxTokens,
+		PerActionTimeoutMs:     plannerBudget.PerActionTimeout.Milliseconds(),
+		WallClockTimeoutMs:     plannerBudget.WallClock.Milliseconds(),
+	}); err != nil {
+		return runDir, fmt.Errorf("record planner limits: %w", err)
+	}
 
 	stageCfg := cfg
 	stageCfg.RunDir = runDir

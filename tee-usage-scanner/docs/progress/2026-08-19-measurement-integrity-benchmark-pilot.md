@@ -66,6 +66,23 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 - The wider config package still fails its already-recorded ambient-environment
   test; that remains assigned to the runtime/test-hermeticity pass.
 
+### 2026-08-19 01:55 HKT - Build, model, and budget provenance
+
+- RED: the manifest still reported `teecheck=harness-prototype` and
+  `go=1.25.0`; it had no build, transport, reasoning-effort, resolved LLM, or
+  planner-limit fields. The main `run` parser also discarded transport and
+  reasoning environment settings.
+- GREEN: manifests now contain actual Go build metadata (version, Go version,
+  VCS revision, modified state), secret-free resolved run/LLM configuration,
+  and the planner's real aggregate limits.
+- The API key is never persisted. A boolean records only whether a credential
+  was present, allowing an operator to distinguish an authenticated run from a
+  missing-credential setup without leaking the credential.
+- `run` now resolves `TEECHECK_LLM_TRANSPORT` / `--llm-transport` and
+  `TEECHECK_LLM_REASONING_EFFORT` / `--llm-reasoning-effort`.
+- Fresh build metadata reports the repository VCS revision and dirty state;
+  focused run-init, pipeline, config, and artifact tests pass.
+
 ## Current Status
 
 `IN PROGRESS`: measurement-integrity repair pass.
@@ -77,7 +94,7 @@ run a small diverse benchmark pilot and classify failures by pipeline stage.
 | Empty findings array | Nil slice reproduced in focused arbiter test | Focused arbiter regression passes | Complete |
 | Findings validation | Invalid status persisted in focused arbiter test | Artifact, schema, and arbiter packages pass | Complete |
 | Run validator | Missing implementation/CLI reproduced by focused tests | Synthetic corruptions rejected; vulnerable control valid; fixed control rejects historical null | Complete |
-| Provenance | Pending | Pending | Not started |
+| Provenance | Hard-coded versions and absent model/budget controls reproduced | Actual build/VCS, resolved LLM controls, and planner limits verified in manifest | Complete |
 | Responses transport | Pending | Pending | Not started |
 | Report completeness | Pending | Pending | Not started |
 | Planner accounting | Pending | Pending | Not started |

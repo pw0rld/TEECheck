@@ -20,6 +20,22 @@ func TestParseValidateRun(t *testing.T) {
 	}
 }
 
+func TestParseRun_ResolvesTransportAndReasoningEffort(t *testing.T) {
+	t.Setenv("TEECHECK_LLM_API_KEY", "test-key")
+	t.Setenv("TEECHECK_LLM_BASE_URL", "https://example.test/v1")
+	t.Setenv("TEECHECK_LLM_MODEL", "gpt-5.6-terra")
+	t.Setenv("TEECHECK_LLM_TRANSPORT", "responses")
+	t.Setenv("TEECHECK_LLM_REASONING_EFFORT", "high")
+
+	cfg, err := Parse([]string{"run", "."})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.LLMTransport != "responses" || cfg.LLMReasoningEffort != "high" {
+		t.Fatalf("transport=%q reasoning_effort=%q", cfg.LLMTransport, cfg.LLMReasoningEffort)
+	}
+}
+
 // ─── The API key must never reach the usage output ───────────────────
 
 // On 2026-07-28 a live API key was printed to a terminal and into a task log

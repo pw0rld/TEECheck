@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,13 +16,25 @@ import (
 func TestRunCreatesManifestAndStageDirs(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := config.Config{
-		Command:   "init-run",
-		RunID:     "oasis-runtime-001",
-		RepoURL:   "https://github.com/oasisprotocol/oasis-sdk",
-		LocalPath: "/tmp/oasis-sdk",
-		Commit:    "8a7f441",
-		Focus:     "runtime",
-		OutputDir: tmp,
+		Command:            "init-run",
+		RunID:              "oasis-runtime-001",
+		RepoURL:            "https://github.com/oasisprotocol/oasis-sdk",
+		LocalPath:          "/tmp/oasis-sdk",
+		Commit:             "8a7f441",
+		Focus:              "runtime",
+		OutputDir:          tmp,
+		Mode:               "llm",
+		Samples:            2,
+		MaxCases:           24,
+		LLMProvider:        "openai",
+		LLMBaseURL:         "https://example.test/v1",
+		LLMAPIKey:          "secret-must-not-be-persisted",
+		LLMModel:           "gpt-5.6-terra",
+		LLMTransport:       "responses",
+		LLMReasoningEffort: "high",
+		LLMTimeoutSec:      600,
+		LLMMaxTokens:       32768,
+		LLMTemp:            0.2,
 	}
 
 	runRoot, err := Run(cfg, time.Date(2026, 4, 1, 10, 0, 0, 0, time.FixedZone("+0800", 8*3600)))
@@ -63,10 +77,36 @@ func TestRunCreatesManifestAndStageDirs(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("parse manifest: %v", err)
 	}
+	if strings.Contains(string(data), "secret-must-not-be-persisted") {
+		t.Fatal("manifest persisted the LLM API key")
+	}
 	if manifest.RunID != "oasis-runtime-001" {
 		t.Fatalf("unexpected run id: %s", manifest.RunID)
 	}
 	if manifest.Focus != "runtime" {
 		t.Fatalf("unexpected focus: %s", manifest.Focus)
+	}
+	if manifest.ToolVersions["go"] != runtime.Version() {
+		t.Fatalf("go tool version = %q, want %q", manifest.ToolVersions["go"], runtime.Version())
+	}
+	if manifest.ToolVersions["teecheck"] == "harness-prototype" {
+		t.Fatal("manifest retained the hard-coded prototype version")
+	}
+	if manifest.Build == nil || manifest.Build.GoVersion != runtime.Version() {
+		t.Fatalf("build provenance = %+v", manifest.Build)
+	}
+	if manifest.Configuration == nil {
+		t.Fatal("manifest has no resolved run configuration")
+	}
+	got := manifest.Configuration
+	if got.LLM.Provider != "openai" || got.LLM.Model != "gpt-5.6-terra" ||
+		got.LLM.Transport != "responses" || got.LLM.ReasoningEffort != "high" {
+		t.Fatalf("LLM provenance = %+v", got.LLM)
+	}
+	if got.LLM.APIKeyPresent != true {
+		t.Fatal("test setup should record that a credential was present without storing it")
+	}
+	if got.Samples != 2 || got.MaxCases != 24 {
+		t.Fatalf("run configuration = %+v", got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm/llmtest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/pipeline"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 func probeConfig(t *testing.T, mode string) config.Config {
@@ -62,6 +63,17 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 	runDir, err := pipeline.RunWithClient(cfg, fake)
 	if err != nil {
 		t.Fatalf("pipeline run failed: %v", err)
+	}
+	manifest, err := runfs.LoadManifest(runDir)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.Configuration == nil || manifest.Configuration.Planner == nil {
+		t.Fatal("completed pipeline did not record planner limits")
+	}
+	limits := manifest.Configuration.Planner
+	if limits.MaxInvestigationRounds != 8 || limits.MaxReconRounds != 10 || limits.MaxAggregateTokens != 120000 {
+		t.Fatalf("planner limits = %+v", limits)
 	}
 
 	all := readEvents(t, runDir)

@@ -3,8 +3,10 @@ package config
 import "strings"
 
 const (
-	LLMProviderOpenAI = "openai"
-	LLMProviderGLM    = "glm"
+	LLMProviderOpenAI           = "openai"
+	LLMProviderGLM              = "glm"
+	LLMTransportChatCompletions = "chat_completions"
+	LLMTransportResponses       = "responses"
 
 	defaultGLMBaseURL    = "https://api.z.ai/api/anthropic"
 	defaultGLMModel      = "glm-4.7"
@@ -24,6 +26,9 @@ func NormalizeLLMProvider(value string) string {
 
 func (cfg Config) WithLLMProviderDefaults() Config {
 	cfg.LLMProvider = NormalizeLLMProvider(cfg.LLMProvider)
+	if strings.TrimSpace(cfg.LLMTransport) == "" {
+		cfg.LLMTransport = LLMTransportChatCompletions
+	}
 	switch cfg.LLMProvider {
 	case LLMProviderGLM:
 		if strings.TrimSpace(cfg.LLMBaseURL) == "" {

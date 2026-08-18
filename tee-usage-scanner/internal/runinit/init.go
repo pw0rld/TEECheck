@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 func Run(cfg config.Config, now time.Time) (string, error) {
+	cfg = cfg.WithLLMProviderDefaults()
 	runID := strings.TrimSpace(cfg.RunID)
 	if runID == "" {
 		runID = defaultRunID(cfg, now)
@@ -37,6 +40,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 		}
 	}
 
+	build := currentBuildProvenance()
 	manifest := artifacts.Manifest{
 		SchemaVersion: "teecheck.manifest.v1",
 		RunID:         runID,
@@ -47,8 +51,29 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 		Hint:          cfg.Hint,
 		CreatedAt:     now.Format(time.RFC3339),
 		ToolVersions: map[string]string{
-			"teecheck": "harness-prototype",
-			"go":       "1.25.0",
+			"teecheck": build.Version,
+			"go":       build.GoVersion,
+		},
+		Build: &build,
+		Configuration: &artifacts.RunConfiguration{
+			Command:         cfg.Command,
+			Mode:            cfg.Mode,
+			Samples:         cfg.Samples,
+			MaxCases:        cfg.MaxCases,
+			MaxHotspots:     cfg.MaxHotspots,
+			MaxDialogRounds: cfg.MaxDialogRounds,
+			StaticTools:     cfg.StaticTools,
+			LLM: artifacts.LLMConfiguration{
+				Provider:        cfg.LLMProvider,
+				BaseURL:         cfg.LLMBaseURL,
+				Model:           cfg.LLMModel,
+				Transport:       cfg.LLMTransport,
+				ReasoningEffort: cfg.LLMReasoningEffort,
+				TimeoutSeconds:  cfg.LLMTimeoutSec,
+				MaxOutputTokens: cfg.LLMMaxTokens,
+				Temperature:     cfg.LLMTemp,
+				APIKeyPresent:   cfg.LLMAPIKey != "",
+			},
 		},
 	}
 
@@ -58,6 +83,51 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 	}
 
 	return runRoot, nil
+}
+
+func currentBuildProvenance() artifacts.BuildProvenance {
+	build := artifacts.BuildProvenance{
+		Version:   "unknown",
+		GoVersion: runtime.Version(),
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return build
+	}
+	if strings.TrimSpace(info.Main.Version) != "" {
+		build.Version = info.Main.Version
+	}
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			build.VCSRevision = setting.Value
+		case "vcs.modified":
+			build.VCSModified = setting.Value == "true"
+		}
+	}
+	return build
+}
+
+// RecordPlannerLimits adds the planner controls after pipeline construction,
+// where the planner package's resolved defaults are known.
+func RecordPlannerLimits(runDir string, limits artifacts.PlannerLimits) error {
+	path := filepath.Join(runDir, "00_manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	var manifest artifacts.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse manifest: %w", err)
+	}
+	if manifest.Configuration == nil {
+		manifest.Configuration = &artifacts.RunConfiguration{}
+	}
+	manifest.Configuration.Planner = &limits
+	if err := writeJSON(path, manifest); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+	return nil
 }
 
 func writeJSON(path string, value any) error {

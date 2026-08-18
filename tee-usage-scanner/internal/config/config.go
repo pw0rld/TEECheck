@@ -20,25 +20,27 @@ type Config struct {
 	// Hint is the caller's free-text concern, passed through to the
 	// planner's system prompt. It biases what gets investigated; it never
 	// narrows what gets modelled or scanned.
-	Hint            string
-	OutputDir       string
-	KnowledgeRoot   string
-	GraphJSONPath   string
-	MaxHotspots     int
-	MaxCases        int
-	MaxFindings     int
-	AgentID         string
-	LLMProvider     string
-	LLMBaseURL      string
-	LLMAPIKey       string
-	LLMModel        string
-	LLMTimeoutSec   int
-	LLMMaxTokens    int
-	LLMTemp         float64
-	StaticTools     string
-	MaxDialogRounds int
-	Target          string
-	Mode            string
+	Hint               string
+	OutputDir          string
+	KnowledgeRoot      string
+	GraphJSONPath      string
+	MaxHotspots        int
+	MaxCases           int
+	MaxFindings        int
+	AgentID            string
+	LLMProvider        string
+	LLMBaseURL         string
+	LLMAPIKey          string
+	LLMModel           string
+	LLMTransport       string
+	LLMReasoningEffort string
+	LLMTimeoutSec      int
+	LLMMaxTokens       int
+	LLMTemp            float64
+	StaticTools        string
+	MaxDialogRounds    int
+	Target             string
+	Mode               string
 	// Samples is the number of independent planner passes to run
 	// per pipeline invocation. Default 1 = the legacy behavior.
 	// With samples > 1, each pass after the first is told which
@@ -373,17 +375,19 @@ func parseArbiter(args []string) (Config, error) {
 func parseCurator(args []string) (Config, error) {
 	fs := flag.NewFlagSet("curator", flag.ContinueOnError)
 	cfg := Config{
-		Command:         "curator",
-		AgentID:         "curator-001",
-		KnowledgeRoot:   filepath.Clean("knowledge"),
-		MaxDialogRounds: DefaultMaxDialogRounds,
-		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
-		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
-		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
-		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:    envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
-		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		Command:            "curator",
+		AgentID:            "curator-001",
+		KnowledgeRoot:      filepath.Clean("knowledge"),
+		MaxDialogRounds:    DefaultMaxDialogRounds,
+		LLMProvider:        firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:         firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:          firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:           firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTransport:       firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
+		LLMReasoningEffort: firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
+		LLMTimeoutSec:      envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:       envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
@@ -423,6 +427,8 @@ func parseReport(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport: chat_completions or responses")
+	fs.StringVar(&cfg.LLMReasoningEffort, "llm-reasoning-effort", cfg.LLMReasoningEffort, "Reasoning effort for Responses models")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -471,23 +477,25 @@ func parseFeedback(args []string) (Config, error) {
 func parseRun(args []string) (Config, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	cfg := Config{
-		Command:         "run",
-		Focus:           "tee",
-		OutputDir:       filepath.Clean("runs"),
-		KnowledgeRoot:   filepath.Clean("knowledge"),
-		MaxHotspots:     12,
-		MaxCases:        12,
-		MaxDialogRounds: DefaultMaxDialogRounds,
-		Mode:            "llm",
-		StaticTools:     "auto",
-		LLMProvider:     firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
-		LLMBaseURL:      firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
-		LLMAPIKey:       firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
-		LLMModel:        firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTimeoutSec:   envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:    envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
-		LLMTemp:         envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
-		Samples:         1,
+		Command:            "run",
+		Focus:              "tee",
+		OutputDir:          filepath.Clean("runs"),
+		KnowledgeRoot:      filepath.Clean("knowledge"),
+		MaxHotspots:        12,
+		MaxCases:           12,
+		MaxDialogRounds:    DefaultMaxDialogRounds,
+		Mode:               "llm",
+		StaticTools:        "auto",
+		LLMProvider:        firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:         firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:          firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:           firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTransport:       firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
+		LLMReasoningEffort: firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
+		LLMTimeoutSec:      envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:       envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		Samples:            1,
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
@@ -509,6 +517,8 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport: chat_completions or responses")
+	fs.StringVar(&cfg.LLMReasoningEffort, "llm-reasoning-effort", cfg.LLMReasoningEffort, "Reasoning effort for Responses models")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "LLM temperature")
 	// Extract target (non-flag arg) before parsing so it can appear anywhere

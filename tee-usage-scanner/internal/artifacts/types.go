@@ -27,10 +27,56 @@ type Manifest struct {
 	// four-file fixture, and the Challenger concluded the code was
 	// unreachable — no artifact stated the disagreement, so nothing could
 	// detect it.
-	Scope        ScannedScope      `json:"scope,omitempty"`
-	CreatedAt    string            `json:"created_at"`
-	ToolVersions map[string]string `json:"tool_versions,omitempty"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
+	Scope         ScannedScope      `json:"scope,omitempty"`
+	CreatedAt     string            `json:"created_at"`
+	ToolVersions  map[string]string `json:"tool_versions,omitempty"`
+	Build         *BuildProvenance  `json:"build,omitempty"`
+	Configuration *RunConfiguration `json:"configuration,omitempty"`
+	Metadata      map[string]any    `json:"metadata,omitempty"`
+}
+
+// BuildProvenance identifies the scanner binary that produced a run. Unknown
+// values are represented explicitly rather than replaced with release-like
+// constants that cannot be verified.
+type BuildProvenance struct {
+	Version     string `json:"version"`
+	GoVersion   string `json:"go_version"`
+	VCSRevision string `json:"vcs_revision,omitempty"`
+	VCSModified bool   `json:"vcs_modified,omitempty"`
+}
+
+// RunConfiguration records the resolved, secret-free controls that materially
+// affect pipeline output.
+type RunConfiguration struct {
+	Command         string           `json:"command"`
+	Mode            string           `json:"mode,omitempty"`
+	Samples         int              `json:"samples,omitempty"`
+	MaxCases        int              `json:"max_cases,omitempty"`
+	MaxHotspots     int              `json:"max_hotspots,omitempty"`
+	MaxDialogRounds int              `json:"max_dialog_rounds,omitempty"`
+	StaticTools     string           `json:"static_tools,omitempty"`
+	LLM             LLMConfiguration `json:"llm"`
+	Planner         *PlannerLimits   `json:"planner,omitempty"`
+}
+
+type LLMConfiguration struct {
+	Provider        string  `json:"provider"`
+	BaseURL         string  `json:"base_url,omitempty"`
+	Model           string  `json:"model,omitempty"`
+	Transport       string  `json:"transport"`
+	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
+	TimeoutSeconds  int     `json:"timeout_seconds,omitempty"`
+	MaxOutputTokens int     `json:"max_output_tokens,omitempty"`
+	Temperature     float64 `json:"temperature"`
+	APIKeyPresent   bool    `json:"api_key_present"`
+}
+
+type PlannerLimits struct {
+	MaxInvestigationRounds int   `json:"max_investigation_rounds"`
+	MaxReconRounds         int   `json:"max_recon_rounds"`
+	MaxAggregateTokens     int   `json:"max_aggregate_tokens"`
+	PerActionTimeoutMs     int64 `json:"per_action_timeout_ms"`
+	WallClockTimeoutMs     int64 `json:"wall_clock_timeout_ms"`
 }
 
 // ScannedScope identifies the source tree a run actually read.
