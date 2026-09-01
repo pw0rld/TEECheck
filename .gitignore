@@ -14,9 +14,14 @@ tee-usage-scanner/web/vite.config.d.ts
 
 # Tool state
 .omc
+.omx
 .codex
 .superpowers/
 docs/superpowers/
+
+# Experiment artifacts and codex-lane credentials (was .omc/{specs,artifacts,local};
+# restructured 2026-08-31 during the post-reinstall restore).
+experiment/
 
 # Run artifacts
 runs/
