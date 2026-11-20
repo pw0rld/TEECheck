@@ -239,7 +239,7 @@ func fullyLoaded(id, twe string, files ...string) artifacts.CasePack {
 		Category:             "standard",
 		Priority:             "medium",
 		TargetFiles:          files,
-		TargetSymbols:        []string{id + "-sym"},
+		TargetSymbols:        []string{id + "-sym", "shared-site"},
 		WhySelected:          []string{id + "-why"},
 		RelatedTWEs:          []string{twe},
 		RelatedInvariants:    []string{id + "-inv"},

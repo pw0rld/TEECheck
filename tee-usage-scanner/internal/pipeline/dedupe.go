@@ -1,10 +1,10 @@
 package pipeline
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 )
 
 // MergeEvidenceBundles produces the canonical multi-sample bundle without
@@ -45,27 +45,9 @@ func MergeEvidenceBundles(bundles []*artifacts.EvidenceBundle) artifacts.Evidenc
 	return merged
 }
 
-// candidateKey is the dedupe identity for a candidate in the
-// multi-sample audit mode. Two candidates collide iff:
-//
-//   - they cite the EXACT same sorted set of paths, AND
-//   - they cite at least one symbol in common (case-sensitive)
-//
-// The second rule matters because two candidates can target the
-// same file but different functions — e.g. `DcapVerifier::new` and
-// `DcapVerifier::verify` both live in dcap.rs, and we want to keep
-// both as independent audit targets, not merge them into one.
-type candidateKey struct {
-	pathsJoined string
-}
-
-// DedupeCandidates returns a slice containing at most one candidate
-// per (paths-set × overlapping-symbols) group, across all input
-// bundles. When two candidates collide, the one from the earlier
-// bundle (= earlier pass) wins; later duplicates are dropped.
-//
-// Paths are canonicalised (sorted) before comparison so the dedupe
-// is invariant to the order the LLM listed them.
+// DedupeCandidates uses the same conservative target identity as Case Packs.
+// Expanded evidence windows are merged without discarding paths or reasons;
+// distinct symbols or categories remain separate review candidates.
 func DedupeCandidates(bundles []*artifacts.EvidenceBundle) []artifacts.Candidate {
 	var kept []artifacts.Candidate
 	for _, b := range bundles {
@@ -73,10 +55,11 @@ func DedupeCandidates(bundles []*artifacts.EvidenceBundle) []artifacts.Candidate
 			continue
 		}
 		for _, c := range b.Candidates {
-			if isDuplicate(c, kept) {
-				continue
+			if at := duplicateCandidate(c, kept); at >= 0 {
+				kept[at] = mergeCandidate(kept[at], c)
+			} else {
+				kept = append(kept, c)
 			}
-			kept = append(kept, c)
 		}
 	}
 	return kept
@@ -104,50 +87,49 @@ func AvoidList(candidates []artifacts.Candidate) []string {
 	return out
 }
 
-// isDuplicate returns true when c collides with any candidate in
-// kept. Collision rules per the package doc.
-func isDuplicate(c artifacts.Candidate, kept []artifacts.Candidate) bool {
-	cPaths := sortedPaths(c.Paths)
-	cSyms := toSet(c.Symbols)
-	for _, k := range kept {
-		if sortedPaths(k.Paths) != cPaths {
-			continue
-		}
-		// Same path set. Merge only when symbols overlap, or when
-		// either side has no symbols (= "whole file" target).
-		if len(c.Symbols) == 0 || len(k.Symbols) == 0 {
-			return true
-		}
-		if hasIntersection(cSyms, toSet(k.Symbols)) {
-			return true
+func duplicateCandidate(c artifacts.Candidate, kept []artifacts.Candidate) int {
+	asPack := func(v artifacts.Candidate) artifacts.CasePack {
+		return artifacts.CasePack{TargetFiles: v.Paths, TargetSymbols: v.Symbols, Category: v.Kind}
+	}
+	for i, k := range kept {
+		if planner.SameReviewTarget(asPack(c), asPack(k)) {
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
-func sortedPaths(paths []string) string {
-	if len(paths) == 0 {
-		return ""
+func mergeCandidate(base, extra artifacts.Candidate) artifacts.Candidate {
+	base.Paths = unionCandidateValues(base.Paths, extra.Paths)
+	base.Symbols = unionCandidateValues(base.Symbols, extra.Symbols)
+	base.WhySelected = unionCandidateValues(base.WhySelected, extra.WhySelected)
+	base.EvidenceRefs = unionCandidateValues(base.EvidenceRefs, extra.EvidenceRefs)
+	if extra.Confidence > base.Confidence {
+		base.Confidence = extra.Confidence
 	}
-	cp := make([]string, len(paths))
-	copy(cp, paths)
-	sort.Strings(cp)
-	return strings.Join(cp, "|")
+	rank := map[string]int{"low": 1, "medium": 2, "high": 3}
+	if rank[strings.ToLower(strings.TrimSpace(extra.Priority))] > rank[strings.ToLower(strings.TrimSpace(base.Priority))] {
+		base.Priority = extra.Priority
+	}
+	if base.Kind == "" {
+		base.Kind = extra.Kind
+	}
+	if base.SinkCategory == "" {
+		base.SinkCategory = extra.SinkCategory
+	}
+	return base
 }
 
-func toSet(values []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
-	for _, v := range values {
-		out[v] = struct{}{}
+func unionCandidateValues(a, b []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, values := range [][]string{a, b} {
+		for _, value := range values {
+			if !seen[value] {
+				out = append(out, value)
+				seen[value] = true
+			}
+		}
 	}
 	return out
-}
-
-func hasIntersection(a, b map[string]struct{}) bool {
-	for k := range a {
-		if _, ok := b[k]; ok {
-			return true
-		}
-	}
-	return false
 }

@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -58,8 +59,7 @@ func categoryForKind(kind string) string {
 	}
 }
 
-// targetKey is the identity a merge compares: the sorted, deduplicated set of
-// target files. Two packs merge ONLY when this is identical.
+// targetKey canonicalizes a target-file set for equality checks.
 func targetKey(p artifacts.CasePack) string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(p.TargetFiles))
@@ -73,42 +73,84 @@ func targetKey(p artifacts.CasePack) string {
 	return strings.Join(out, "\x00")
 }
 
-// Merge combines investigation-derived (rich) and candidate-derived (thin)
-// packs from ONE planner pass into the list that pass returns.
-//
-// Merge itself never collapses two rich packs: the byKey map below is filled
-// from `rich` first, and a second rich pack with the same key simply
-// overwrites the map entry and is appended as its own pack. Only thin packs
-// are folded in, into whichever rich pack currently owns the key. That is a
-// property of Merge alone, not of the pipeline: internal/pipeline/run.go runs
-// DedupePacks over the union of every pass afterwards, and DedupePacks DOES
-// collapse rich pairs. absorb unions the knowledge-bearing fields precisely
-// so that collapse is lossless — see its doc comment.
-//
-// Two rules, both deliberate:
-//
-//   - Packs merge ONLY when their target-file sets are exactly equal. A
-//     partial overlap does NOT merge. A redundant case costs one extra Expert
-//     call, which is visible and measurable; a wrong merge silently destroys
-//     a finding. Across the 29 measured L3 runs, 14 pairs were exactly equal
-//     and partial overlap never once occurred — so this rule currently costs
-//     nothing.
-//   - A pack with no target files is dropped. It comes from an investigation
-//     whose roles were all missing, i.e. a record of "I looked and located
-//     nothing". That record stays in 03_investigations/; it is the next
-//     investigative task (prompt.go's CRITICAL RULES), not a review unit.
-//
-// Rich packs sort before thin ones so numbering is stable across runs.
+// SameReviewTarget conservatively identifies repeated review work. Explicitly
+// different symbols or categories stay separate even when they share a file.
+// An expanded evidence window may merge when its files contain the other
+// window and the symbol matches, or when the same main file/category is known.
+func SameReviewTarget(a, b artifacts.CasePack) bool {
+	if targetKey(a) == "" || targetKey(b) == "" {
+		return false
+	}
+	sharedSymbol := false
+	for _, x := range a.TargetSymbols {
+		for _, y := range b.TargetSymbols {
+			if x != "" && x == y {
+				sharedSymbol = true
+			}
+		}
+	}
+	if len(a.TargetSymbols) > 0 && len(b.TargetSymbols) > 0 && !sharedSymbol {
+		return false
+	}
+	aCategory, bCategory := reviewCategory(a.Category), reviewCategory(b.Category)
+	if aCategory != "" && bCategory != "" && aCategory != bCategory {
+		return false
+	}
+	if targetKey(a) == targetKey(b) {
+		return true
+	}
+	if sharedSymbol && (targetSubset(a.TargetFiles, b.TargetFiles) || targetSubset(b.TargetFiles, a.TargetFiles)) {
+		return true
+	}
+	return aCategory != "" && aCategory == bCategory && a.TargetFiles[0] == b.TargetFiles[0]
+}
+
+// Investigation classification and vulnerability category are distinct axes
+// currently stored in the same legacy field. "standard" is not a competing
+// issue category to "state_machine", so it must not prevent a rich/thin merge.
+func reviewCategory(category string) string {
+	switch category {
+	case "standard", "variant", "composition", "catalog_gap":
+		return ""
+	default:
+		return category
+	}
+}
+
+func targetSubset(a, b []string) bool {
+	set := map[string]bool{}
+	for _, p := range b {
+		set[p] = true
+	}
+	for _, p := range a {
+		if !set[p] {
+			return false
+		}
+	}
+	return len(a) > 0
+}
+
+func matchingPack(p artifacts.CasePack, packs []artifacts.CasePack) int {
+	for i, existing := range packs {
+		if SameReviewTarget(p, existing) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Merge combines one pass's rich investigation packs with thin candidates.
+// Rich packs retain separate identities here; matching thin candidates fold
+// into the earliest compatible target. Cross-pass DedupePacks uses the same
+// conservative target comparison. Empty targets are not review units.
 func Merge(rich, thin []artifacts.CasePack) []artifacts.CasePack {
 	var out []artifacts.CasePack
-	byKey := map[string]int{}
 
 	for _, p := range rich {
 		key := targetKey(p)
 		if key == "" {
 			continue
 		}
-		byKey[key] = len(out)
 		out = append(out, p)
 	}
 	for _, p := range thin {
@@ -116,11 +158,10 @@ func Merge(rich, thin []artifacts.CasePack) []artifacts.CasePack {
 		if key == "" {
 			continue
 		}
-		if at, ok := byKey[key]; ok {
+		if at := matchingPack(p, out); at >= 0 {
 			out[at] = absorb(out[at], p)
 			continue
 		}
-		byKey[key] = len(out)
 		out = append(out, p)
 	}
 	return out
@@ -156,46 +197,10 @@ func hasInvestigationKnowledge(p artifacts.CasePack) bool {
 		len(p.ObservedFlow) > 0
 }
 
-// absorb collapses two packs that name the same target-file set into one.
-//
-// Which side supplies the scalar identity is decided by RICHNESS, not by
-// argument position: whichever pack carries investigation-derived knowledge
-// becomes the primary. When both do (DedupePacks routes rich+rich here) or
-// neither does, base stays primary, so the callers' first-occurrence-wins
-// ordering is preserved and the result stays deterministic.
-//
-// CaseID and Category are taken from the primary, and from the SAME pack, on
-// purpose:
-//
-//   - A rich pack's CaseID is its InvestigationID — the only key tying the
-//     persisted pack back to its 03_investigations/<id>.json record. A thin
-//     pack's CaseID is a positional "...:candidate:NNN" slug that references
-//     nothing. Letting the thin one win would orphan the record.
-//   - A rich pack's Category is the investigation's classification
-//     (standard/variant/composition/catalog_gap, always non-empty — see
-//     internal/investigations.classify); a thin pack's is derived from the
-//     candidate kind. Taking both fields from one pack keeps the persisted
-//     pack describing one coherent origin rather than a chimera whose
-//     Category contradicts its CaseID.
-//
-// Every knowledge-bearing slice is UNIONED — primary's entries first, then
-// the other side's, deduplicated with first-seen order preserved. Taking only
-// the primary's would silently destroy the other pack's playbook knowledge:
-// two investigations that resolved to the same file are two different TWE
-// scenarios about it, and dropping either one's common_defenses /
-// common_false_positives puts the run back where PR-06 started — knowledge
-// produced and then discarded before any agent could read it.
-//
-// Fields deliberately NOT unioned: SchemaVersion/HotspotID/Focus are run-wide
-// constants taken from the primary; ObservedFlow is an ORDERED path rather
-// than a set, so concatenating the two sides' steps would present downstream
-// agents with a numbered sequence no tool ever traced — the primary's path is
-// kept whole and the other side's stays in its own 03_investigations/<id>.json
-// record (see TestAbsorb_KeepsOneCoherentObservedFlow); TargetFiles are equal
-// as sets by the caller's own merge rule; ExpectedObligations/OpenQuestions/ToolFacts/
-// GraphFacts/Snippets/KnowledgeHints are never populated on this path — only
-// internal/cases (legacy) and the post-planner enrichment stage write them,
-// and neither feeds packs through Merge or DedupePacks.
+// absorb combines evidence for one review target. The richer pack supplies
+// CaseID/Category; ties preserve the first occurrence. Every unordered evidence
+// field is unioned without mutating either input. ObservedFlow remains one
+// coherent trace: use the primary's path, falling back to the other's if empty.
 func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	primary, other := base, extra
 	if !hasInvestigationKnowledge(base) && hasInvestigationKnowledge(extra) {
@@ -203,6 +208,7 @@ func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	}
 
 	out := primary
+	out.TargetFiles = unionStrings(primary.TargetFiles, other.TargetFiles)
 	out.WhySelected = unionStrings(primary.WhySelected, other.WhySelected)
 	out.TargetSymbols = unionStrings(primary.TargetSymbols, other.TargetSymbols)
 	out.RelatedTWEs = unionStrings(primary.RelatedTWEs, other.RelatedTWEs)
@@ -215,9 +221,37 @@ func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	out.CommonFalsePositives = unionStrings(primary.CommonFalsePositives, other.CommonFalsePositives)
 	out.CoverageGaps = unionStrings(primary.CoverageGaps, other.CoverageGaps)
 	out.CounterEvidence = unionStrings(primary.CounterEvidence, other.CounterEvidence)
+	out.ToolFacts = unionStrings(primary.ToolFacts, other.ToolFacts)
+	out.GraphFacts = unionStrings(primary.GraphFacts, other.GraphFacts)
+	out.ExpectedObligations = unionStrings(primary.ExpectedObligations, other.ExpectedObligations)
+	out.OpenQuestions = unionStrings(primary.OpenQuestions, other.OpenQuestions)
+	out.Snippets = unionValues(primary.Snippets, other.Snippets)
+	out.KnowledgeHints = unionValues(primary.KnowledgeHints, other.KnowledgeHints)
+	if len(out.ObservedFlow) == 0 {
+		out.ObservedFlow = append([]artifacts.ToolPathStep(nil), other.ObservedFlow...)
+	}
 
 	if priorityRank[normalizePriority(other.Priority)] > priorityRank[normalizePriority(primary.Priority)] {
 		out.Priority = other.Priority
+	}
+	return out
+}
+
+func unionValues[T any](a, b []T) []T {
+	var out []T
+	for _, list := range [][]T{a, b} {
+		for _, v := range list {
+			found := false
+			for _, old := range out {
+				if reflect.DeepEqual(old, v) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				out = append(out, v)
+			}
+		}
 	}
 	return out
 }
@@ -248,26 +282,11 @@ func unionStrings(a, b []string) []string {
 	return out
 }
 
-// DedupePacks collapses packs that name the same set of target files. It
-// receives the union of every --samples pass with no pass provenance
-// attached, so it CANNOT tell "two investigations within one pass" from "the
-// same finding seen in two passes" and does not try: every same-target-set
-// pair collapses, rich pairs included.
-//
-// That is safe only because absorb unions the knowledge-bearing fields
-// instead of keeping the first pack's. When absorb took every field but
-// WhySelected/Priority from its base, this unconditional collapse silently
-// destroyed one full investigation's playbook knowledge per collision — with
-// --samples 1 as well, since two done.investigations entries whose
-// filled_roles resolve to the same file collide inside a single pass.
-//
-// Packs carrying investigation-derived knowledge (hasInvestigationKnowledge)
-// are returned first, preserving relative order within each group, so that a
-// --max-cases truncation drops the least informative packs rather than an
-// arbitrary slice.
+// DedupePacks combines repeated targets across passes using SameReviewTarget,
+// retaining all evidence. Rich packs sort first so a later max-cases cap does
+// not discard grounded investigations in favor of thin candidates.
 func DedupePacks(packs []artifacts.CasePack) []artifacts.CasePack {
 	var out []artifacts.CasePack
-	byKey := map[string]int{}
 	for _, p := range packs {
 		key := targetKey(p)
 		if key == "" {
@@ -275,14 +294,13 @@ func DedupePacks(packs []artifacts.CasePack) []artifacts.CasePack {
 			// review unit.
 			continue
 		}
-		if at, ok := byKey[key]; ok {
+		if at := matchingPack(p, out); at >= 0 {
 			// The first occurrence keeps the slot (so ordering stays
 			// stable); absorb decides which of the two supplies the
 			// identity fields and unions everything else.
 			out[at] = absorb(out[at], p)
 			continue
 		}
-		byKey[key] = len(out)
 		out = append(out, p)
 	}
 

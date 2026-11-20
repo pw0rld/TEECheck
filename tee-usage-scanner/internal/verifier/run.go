@@ -142,6 +142,18 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 	return nil
 }
 
+const (
+	maxVerifierQueries      = 4
+	maxVerifierContextBytes = 128 * 1024
+)
+
+func verifierBudgetMemo(pack artifacts.CasePack, agentID, reason string) artifacts.VerificationMemo {
+	return artifacts.VerificationMemo{
+		SchemaVersion: "teecheck.verification_memo.v1", CaseID: pack.CaseID,
+		AgentID: agentID, Status: "inconclusive", Notes: []string{reason},
+	}
+}
+
 func buildMemoLLM(ctx context.Context, client llm.Client, bus *agentbus.Bus, repoRoot string, pack artifacts.CasePack, hypothesis artifacts.Hypothesis, challenge artifacts.Challenge, caseCtx caseContext, agentID string, temperature float64, scFindings []staticcheck.CheckFinding, expertValidation []citations.CitationValidation) (artifacts.VerificationMemo, error) {
 	systemPrompt := `You are the Verifier Agent in TEECheck. Analyze static check results and code evidence to arbitrate between the Expert's hypothesis and the Challenger's independent (phase-1) view and phase-2 differences.
 
@@ -259,8 +271,13 @@ Static check findings (%d total):
 		len(scFindings), formatCheckFindings(scFindings))
 
 	messages := []llm.Message{{Role: "user", Content: userMsg}}
+	contextBytes := len(systemPrompt) + len(userMsg)
+	queriesUsed := 0
 
 	for round := 0; round < bus.MaxRounds()+1; round++ {
+		if contextBytes > maxVerifierContextBytes {
+			return verifierBudgetMemo(pack, agentID, "Verifier context byte budget exhausted"), nil
+		}
 		var parsed struct {
 			Status                 string                `json:"status"`
 			ChecksRun              []string              `json:"checks_run"`
@@ -288,6 +305,10 @@ Static check findings (%d total):
 		}, &parsed)
 		if err != nil {
 			return artifacts.VerificationMemo{}, err
+		}
+		contextBytes += len(resp.Text)
+		if contextBytes > maxVerifierContextBytes {
+			return verifierBudgetMemo(pack, agentID, "Verifier context byte budget exhausted"), nil
 		}
 
 		if len(parsed.Queries) == 0 {
@@ -330,6 +351,10 @@ Static check findings (%d total):
 
 		var queryResults []string
 		for i, q := range parsed.Queries {
+			if queriesUsed >= maxVerifierQueries {
+				return verifierBudgetMemo(pack, agentID, "Verifier query budget exhausted"), nil
+			}
+			queriesUsed++ // Failed queries consume the same bounded work allowance.
 			busResp, err := bus.AskForCase(ctx, pack.CaseID, agentbus.Query{
 				QueryID:   fmt.Sprintf("verifier-%s-r%d-q%d", pack.CaseID, round, i),
 				FromAgent: agentID,
@@ -344,8 +369,15 @@ Static check findings (%d total):
 			}
 			queryResults = append(queryResults, fmt.Sprintf("Response from %s: %s\nFacts: %s", busResp.FromAgent, busResp.Answer, strings.Join(busResp.Facts, "; ")))
 		}
+		if queriesUsed >= maxVerifierQueries {
+			return verifierBudgetMemo(pack, agentID, "Verifier query budget exhausted"), nil
+		}
 
 		followUp := fmt.Sprintf("Here are the responses to your queries:\n%s\n\nNow provide your final judgment with the same JSON format.", strings.Join(queryResults, "\n\n"))
+		contextBytes += len(followUp)
+		if contextBytes > maxVerifierContextBytes {
+			return verifierBudgetMemo(pack, agentID, "Verifier context byte budget exhausted"), nil
+		}
 		messages = append(messages, llm.Message{Role: "assistant", Content: resp.Text})
 		messages = append(messages, llm.Message{Role: "user", Content: followUp})
 	}
