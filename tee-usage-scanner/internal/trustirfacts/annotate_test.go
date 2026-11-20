@@ -195,7 +195,7 @@ func TestBuildAnnotationPrompt_ListsRegistryValuesVerbatimAndNoLineNumbers(t *te
 	}
 }
 
-func TestBuildAnnotationPrompt_TruncatesLargeFunctionLists(t *testing.T) {
+func TestBuildAnnotationPrompt_PreservesEveryProvidedFunction(t *testing.T) {
 	registry := realRegistry(t)
 	var funcs []FunctionCandidate
 	for i := 0; i < maxPromptFunctionNames+50; i++ {
@@ -204,7 +204,9 @@ func TestBuildAnnotationPrompt_TruncatesLargeFunctionLists(t *testing.T) {
 	cand := Candidates{Functions: funcs}
 	prompt := buildAnnotationPrompt(cand, registry)
 
-	if !strings.Contains(prompt, "truncated") {
-		t.Error("expected the prompt to disclose truncation for an oversized candidate list")
+	for _, fn := range funcs {
+		if !strings.Contains(prompt, "- "+fn.Name+"\n") {
+			t.Fatalf("prompt omitted %q", fn.Name)
+		}
 	}
 }

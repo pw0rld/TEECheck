@@ -1,320 +1,179 @@
 # TEECheck
 
-A case-driven, multi-agent audit harness for TEE (Trusted Execution Environment)
-security research. TEECheck uses an L3 LLM planner plus a 4-agent adversarial
-review chain to find real attestation and key-lifecycle issues in trusted code.
+TEECheck is a source-grounded TEE security research CLI. It combines a program
+index, an LLM investigation planner, structured tool evidence, and four review
+roles. Its findings are candidates for human review.
 
-## Optional: CodeQL
+## Quick start
 
-The scanner runs without CodeQL, but the deterministic fact layer — the
-bottom, non-challengeable tier of the three-tier evidence model — stays
-empty: `fact_layer_query` returns `status: unsupported` and every finding
-rests on LLM judgement alone.
-
-Installing it is ~551 MB to download, 1.7 GB on disk, and about two minutes
-to verify end to end. See **[docs/SETUP_CODEQL.zh-CN.md](../docs/history/SETUP_CODEQL.zh-CN.md)**
-for the measured numbers, the install steps, an end-to-end verification, and
-the five known limitations (chief among them: only one of the nineteen TWE
-entries currently has an executable query).
-
-The bundle must never be committed — it exceeds GitHub's 100 MB per-file
-limit. `/tools/` is gitignored for that reason.
-
-## Quick Start
+Requirements: Go 1.25+, Git, and `rg`. CodeQL is optional and must be installed
+separately; the current program index uses its C/C++ extractor. Without a usable
+index, the planner uses source-file reconnaissance and records partial coverage.
 
 ```bash
-# Build
 cd tee-usage-scanner
-go build -o teecheck ./cmd/teecheck/
+go build -o teecheck ./cmd/teecheck
 
-# Scan a repository — the L3 planner runs end to end through the
-# 4-agent pipeline (expert → challenger → verifier → arbiter)
-./teecheck run https://github.com/oasisprotocol/oasis-sdk \
-  --llm-base-url http://your-api:8080/v1 \
-  --llm-api-key sk-your-key \
-  --llm-model your-model \
-  --focus tee --max-cases 4
+# Configure credentials in the environment rather than command history.
+export TEECHECK_LLM_API_KEY="your-key"
 
-# Scan with the built-in GLM preset (z.ai Anthropic-compatible endpoint)
-./teecheck run https://github.com/oasisprotocol/oasis-sdk \
-  --llm-provider glm \
-  --llm-api-key your-zai-key \
-  --llm-model glm-4.7 \
-  --focus tee --max-cases 4
+# GLM preset (Anthropic-compatible endpoint).
+./teecheck run /path/to/project --llm-provider glm --llm-model glm-4.7
 
-# Equivalent shorthand
-./teecheck plan https://github.com/mobilecoinfoundation/mobilecoin \
-  --llm-provider glm --llm-api-key your-zai-key --focus tee --max-cases 4
+# OpenAI-compatible endpoint, including native Responses transport.
+./teecheck run /path/to/project \
+  --llm-provider openai --llm-base-url https://your-endpoint/v1 \
+  --llm-model your-model --llm-transport responses \
+  --llm-reasoning-effort high
 ```
 
-See [`examples/mobilecoin-l3-v17-scan/REPORT.md`](examples/mobilecoin-l3-v17-scan/REPORT.md)
-for a full annotated GLM run on `mobilecoinfoundation/mobilecoin` (v17 is the
-first run where the planner autonomously used `reverse_trace` to pivot from
-low-level SGX wrappers into the AKE trust-decision code). Earlier runs are
-preserved under `examples/mobilecoin-l3-v1{3,4}-scan/`.
+A Git URL may replace the local path. `teecheck plan` is an alias for `run`.
+All audit runs use the LLM pipeline; the old heuristic scanner was retired.
 
-## How It Works
+## Pipeline
 
-The pipeline is **L3 planner → 4-agent adversarial review**:
-
-```
-teecheck run <url-or-path>
-    |
-    v
-+-- Preprocessor ----+   project profile, languages, frameworks
-+--------+-----------+
-         |
-         v
-+-- L3 Planner ------+   iterative LLM agent with action budget
-|  ripgrep / read    |   - sink_catalog_lookup → ripgrep → outline
-|  tree_sitter_*     |   - reverse_trace walks call graph backward
-|  reverse_trace     |   - observed-paths whitelist blocks hallucinated
-|  sink_catalog_*    |     file paths in the final round
-|  done              |   → 04_planner/evidence_bundle.json
-+--------+-----------+
-         |
-         v   → 03_cases
-+-- Expert ----------+   generates security hypotheses per case
-+-- Challenger ------+   adversarial objections to each hypothesis
-+-- Verifier --------+   re-grounds each claim against the source
-+-- Arbiter ---------+   final findings + human-readable review packets
-         |
-         v
-    Final Report (07_arbiter/packets/*.md)
+```text
+source acquisition and common revision/root
+  -> preprocess
+  -> program index (CodeQL when available)
+  -> project map (repository, module, and function cards)
+  -> optional legacy architecture/invariant stages
+  -> deterministic supported fact queries
+  -> planner reconnaissance -> source-grounded investigation
+  -> merge and enrich CasePacks
+  -> Expert -> Challenger -> Verifier -> Arbiter
+  -> findings.json and review packets
 ```
 
-The L3 planner replaces the old keyword-scoring hotspot picker. It loads a
-curated **sink catalog** (`knowledge/sinks/rust.json`, three groups:
-attestation, TEE syscalls, key lifecycle) and lets the LLM iteratively decide
-which files to read, which symbols to outline, and which call sites to trace
-backward — under a four-dimensional budget (rounds / tokens / wall-clock /
-per-action timeout). See [`docs/superpowers/specs/2026-04-11-llm-planner-design.md`](docs/superpowers/specs/2026-04-11-llm-planner-design.md)
-for the full design.
+The legacy pre-investigation architecture and invariant stages are disabled by
+default. `--enable-legacy-prior` opts back into them for comparison with older
+runs. Their absence is supported by downstream review and run validation.
 
-### One Path
+The planner first reads the project's own structure and source. It must ground
+an audit lead in observations from that pass. Without function cards it can use
+observed file/symbol targets instead. After opening a lead, it can consult TWE
+investigation methods and security obligations. Observing a file or receiving an
+empty query result does not establish whole-repository safety.
 
-There is a single pipeline: the L3 planner picks what to investigate and every
-agent is LLM-backed. The heuristic/keyword mode and the legacy scanner branch
-were retired on 2026-07-31 — every run on disk had been LLM mode for months,
-and keeping a second, untested semantics only hid defects.
+Default budgets distinguish reconnaissance, investigation, and finalization:
+60,000 reconnaissance tokens, 140,000 investigation tokens, a 200,000 aggregate
+ceiling, and a 20,000-token finalization reserve within that ceiling. The
+planner also limits rounds and elapsed time. `--samples N` repeats planner
+passes with an avoid-list, then reviews the merged candidates once.
 
-**v1 is validated on GLM
-only** — use `--llm-provider glm` with a z.ai API key (defaults to `glm-4.7`
-via the Anthropic-compatible endpoint). An `openai` preset exists for any
-OpenAI-compatible endpoint, but it is unvalidated in v1 and deferred to v2.
-Transient 5xx / timeout errors are retried with backoff. Produces detailed
-review packets, an evidence bundle, and a streaming `rounds.jsonl` for full
-planner replay.
+`tree_sitter_outline` is a compatibility action name: its implementation now
+uses text heuristics. Parsed program relationships come from CodeQL. The index
+explicitly reports unavailable/partial capabilities, including an empty symbol
+or function-card result.
 
-## Commands
+## Evidence and knowledge
 
-### `teecheck run` (main command)
+Three kinds of information stay separate:
 
-Runs the full pipeline on a repository: L3 planner plus the 4-agent
-adversarial review chain.
+- Tool facts record observed source and query results, with scope and provenance.
+- Agent assessments are revisable hypotheses and interpretations.
+- Human review records determine confirmed outcomes and reusable feedback.
 
-### `teecheck plan`
+`knowledge/twe/definitions/` contains the TWE taxonomy and definitions.
+`knowledge/twe/exemplars/` contains six detailed investigation methods covering
+State, Flow, Guard, and Leakage. `knowledge/wiki/` holds curated obligations and
+patterns; `knowledge/learned/` stores feedback. Lookup uses lightweight keyword
+matching.
 
-An alias for `teecheck run`, kept because scripts use it.
+The current automatic fact lane is deliberately narrow: its supported operation
+checks rollback-version propagation, and its shipped role table is for OP-TEE.
+An LLM role-table annotator exists but is not automatically enabled. It visits
+all enumerated function candidates in bounded, module-interleaved batches;
+it no longer discards every name after the first alphabetical page.
 
-```bash
-teecheck run <url-or-path> [flags]
-```
+The Challenger records an independent assessment before comparing it with the
+Expert. The Verifier checks source citations and uses bounded follow-up dialogs.
+The Arbiter gates confirmed wording on evidence completeness. None of these
+mechanisms substitutes for a human verdict or an executable reproduction.
 
-**Arguments:**
-- `<url-or-path>` - GitHub URL (auto-clones) or local directory path
+## Commands and controls
 
-**Flags:**
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--focus` | `tee` | Audit focus: `tee`, `runtime`, `attestation` |
-| `--max-cases` | `12` | Maximum case packs to generate |
-| `--max-hotspots` | `12` | Maximum hotspots to identify |
-| `--max-dialog-rounds` | `3` | Max inter-agent dialog rounds (LLM mode) |
-| `--run-id` | auto | Stable run identifier |
-| `--output-dir` | `runs` | Output directory for run artifacts |
-| `--knowledge-root` | `knowledge` | Knowledge wiki root directory |
-| `--static-tools` | `auto` | Static tools: `auto`, `none`, or `grep,semgrep` |
-| `--llm-provider` | `openai` | Provider preset: `glm` (validated in v1) or `openai` (unvalidated) |
-| `--llm-base-url` | env | Provider base URL; `glm` fills Anthropic-compatible defaults automatically |
-| `--llm-api-key` | env | API key |
-| `--llm-model` | env | Model name |
-| `--llm-temperature` | `0.2` | Sampling temperature |
+| Command | Purpose |
+| --- | --- |
+| `run TARGET` / `plan TARGET` | Full audit pipeline |
+| `report --run-dir DIR` | Render complete findings, packets, and coverage |
+| `validate-run --run-dir DIR` | Offline artifact/sequence/hash/schema validation |
+| `stats DIR` | Recorded run metrics |
+| `review --run-dir DIR` | Record human judgments |
+| `curator --run-dir DIR` | Curate feedback into the knowledge layer |
+| `knowledge-init` | Initialize the knowledge layout |
 
-**Environment variables** (alternative to flags):
-- `TEECHECK_LLM_BASE_URL`
-- `TEECHECK_LLM_API_KEY`
-- `TEECHECK_LLM_MODEL`
+Individual `preprocess`, `cases`, `expert`, `challenge`, `verifier`, and `arbiter`
+commands remain available for stage-level work.
 
-Provider presets:
-- `glm` (**validated in v1**): uses `https://api.z.ai/api/anthropic` by default and falls back to model `glm-4.7` when `--llm-model` is omitted.
-- `openai` (**experimental, unvalidated**): generic OpenAI-compatible mode. Bring your own `--llm-base-url` if needed. Not part of v1 scope — see design spec §15.
+Common run controls:
 
-### `teecheck review` (optional, interactive)
+| Flag | Purpose |
+| --- | --- |
+| `--hint TEXT` | Prioritize a concern without changing source scope |
+| `--max-cases N` | Bound the number of reviewed case packs |
+| `--samples N` | Independent planner passes; default 1 |
+| `--output-dir DIR`, `--run-id ID` | Choose artifact destination and identity |
+| `--knowledge-root DIR` | Select the knowledge tree |
+| `--enable-legacy-prior` | Opt into old pre-investigation model stages |
+| `--llm-provider glm\|openai` | Select provider protocol |
+| `--llm-base-url`, `--llm-model` | Select endpoint/model |
+| `--llm-transport chat_completions\|responses` | OpenAI transport |
+| `--llm-reasoning-effort` | Reasoning effort for Responses |
+| `--llm-max-tokens` | Per-call output-token limit |
 
-Interactive human review of findings.
+Credentials and provider settings also accept `TEECHECK_LLM_*` environment
+variables. `--max-hotspots` survives in the parser for old scripts but no longer
+selects audit targets.
 
-```bash
-teecheck review --run-dir runs/<run-id>
-```
+## Run artifacts
 
-Walks through each finding interactively:
-- Display review packet summary
-- Prompt for verdict: confirm / dismiss / inconclusive / skip
-- Prompt for severity override, tags, notes
-- Save review records to `08_review/`
-
-### `teecheck curator` (optional, knowledge writeback)
-
-Archives review outcomes and updates the knowledge wiki.
-
-```bash
-teecheck curator --run-dir runs/<run-id> --knowledge-root knowledge \
-  --llm-base-url ... --llm-api-key ... --llm-model ...
-```
-
-### Legacy commands
-
-The original fine-grained commands still work:
-
-```bash
-teecheck knowledge-init    # Initialize knowledge directories
-teecheck preprocess ...    # Project profiling only
-teecheck expert ...        # Hypothesis generation only
-teecheck challenge ...     # Hypothesis challenging only
-teecheck verifier ...      # Evidence verification only
-teecheck arbiter ...       # Final arbitration only
-```
-
-## Output Structure
-
-```
+```text
 runs/<run-id>/
-├── 00_manifest.json                   # Run metadata
-├── 01_profile/project_profile.json    # Languages, frameworks, paths
-├── 03_cases/case-NNN.json             # Bounded review cases
-├── 04_expert/hypothesis-NNN.json      # Security hypotheses
-├── 04_planner/
-│   ├── evidence_bundle.json           # Planner candidates + sink hits
-│   ├── rounds.jsonl                   # Streaming per-round transcript
-│   └── sink_hits.json                 # Sink catalog hits
-├── 05_challenger/challenge-NNN.json   # Challenger objections
-├── 06_verifier/verify-NNN.json        # Verification memos
-├── 07_arbiter/
-│   ├── findings.json                  # Final findings
-│   └── packets/review-NNN.md          # Human-readable review packets
-├── 08_review/                         # (optional) Human review records
-└── 09_curator/                        # (optional) Knowledge updates
+  00_manifest.json
+  01_profile/project_profile.json
+  01_context/                       # repo facts, project map, TWE context
+  02_tool_facts/                    # persisted deterministic evidence
+  03_cases/
+  04_planner/                       # rounds, leads, coverage, evidence bundle
+  04_expert/
+  05_challenger/
+  06_verifier/
+  07_arbiter/findings.json
+  07_arbiter/packets/
+  08_report/REPORT.md                # separate report command
+  08_review/                        # optional human review
+  09_curator/                       # optional feedback processing
+  events.jsonl
+  blobs/
 ```
 
-## Code Graph Generation
+`report` deterministically renders every validated finding and full review
+packet. An optional LLM narrative is labeled non-authoritative; model failure
+cannot remove findings or prevent the factual report from being written.
 
-TEECheck auto-generates a code structure graph using pluggable adapters:
+## Evaluation and development
 
-| Adapter | Status | What it does |
-|---------|--------|-------------|
-| **regex** | Implemented | Regex-based extraction of functions/structs/classes across Rust, Go, TypeScript, Python, Solidity |
-| **semgrep** | Stub (runs if installed) | Pattern-based precise extraction |
-| **codeql** | Stub | Data flow analysis, call graph extraction |
-| **joern** | Stub | CPG-based cross-procedure analysis |
+`../teecheck-benchmark/` is a separate Go module with vulnerable/fixed source
+pairs and a deterministic evaluator. It matches target location and TWE
+metadata, reports incidental findings separately, and exposes an empty
+in-scope track instead of presenting it as a valid capability metric.
 
-In LLM mode, the L3 planner decides which tools to use based on the project profile and the sink catalog.
-
-## Static Check Framework
-
-Pluggable static analysis with the same adapter pattern:
-
-| Adapter | Status | What it does |
-|---------|--------|-------------|
-| **grep** | Implemented | Keyword search across files |
-| **semgrep** | Implemented | Rule-based pattern matching |
-| **codeql** | Stub | Deep data flow queries |
-| **joern** | Stub | CPG queries |
-
-## Knowledge Layer
-
-TEECheck accumulates knowledge across runs:
-
-```
-knowledge/
-├── raw/               # Source materials (CVEs, papers, SDK docs)
-├── wiki/              # Curated security obligation pages
-│   ├── obligations/   # Trust boundary, attestation, etc.
-│   └── patterns/      # Authorization, caller binding, etc.
-└── learned/           # Review outcomes
-    ├── true-positive/
-    ├── false-positive/
-    └── review-memory/
-```
-
-This is intentionally **not** chunk-RAG. Knowledge is curated into stable wiki
-pages that agents query during analysis.
-
-## Inter-Agent Communication
-
-In LLM mode, agents communicate through a message bus:
-
-- **Verifier** can ask **Expert** or **Challenger** for clarification on their claims
-- **Arbiter** can ask **Verifier** or the static-check tool handler for more evidence
-- Dialog rounds are capped (default 3) to control cost
-- All dialogs are persisted as JSONL for auditability
-
-## Architecture
-
-```
-internal/
-├── repofetch/       # Git clone / local path detection
-├── scanner/         # Code graph generation (GraphAdapter framework)
-│   ├── regex/       # Regex-based extractor
-│   ├── semgrep/     # Semgrep adapter
-│   ├── codeql/      # CodeQL stub
-│   └── joern/       # Joern stub
-├── pipeline/        # 3-agent orchestrator (teecheck run)
-├── preprocessor/    # Project profiling
-├── mapper/          # Repo structure mapping
-├── hotspots/        # Hotspot identification
-├── cases/           # Case pack generation
-├── expert/          # Hypothesis generation
-├── challenger/      # Hypothesis challenging
-├── verifier/        # Evidence verification
-├── arbiter/         # Final arbitration
-├── staticcheck/     # Static analysis framework
-│   ├── grep/        # Grep adapter
-│   ├── semgrep/     # Semgrep adapter
-│   ├── codeql/      # CodeQL stub
-│   └── joern/       # Joern stub
-├── agentbus/        # Inter-agent message bus
-├── llm/             # OpenAI-compatible LLM client
-├── review/          # Interactive human review
-├── feedback/        # Knowledge writeback (curator)
-├── knowledge/       # Wiki and learned knowledge
-├── artifacts/       # JSON type definitions
-├── runfs/           # Run directory helpers
-└── config/          # CLI argument parsing
-```
-
-## Development
+`cmd/twescan` is a separate experimental, LLM-assisted query-generation entry
+point; it is not the full audit pipeline and its supported families are limited.
 
 ```bash
-# Run all tests
-go test ./...
+# Unit tests use fake models. Clear live-provider credentials if you do not
+# intend to run the opt-in live connectivity tests.
+go test ./... -count=1 -skip '^TestLive'
+go vet ./...
 
-# Run with race detector
-go test -race ./...
-
-# Build binary
-go build -o teecheck ./cmd/teecheck/
-
-# Run live LLM test (requires API key)
-TEECHECK_LLM_BASE_URL=http://your-api/v1 \
-TEECHECK_LLM_API_KEY=sk-your-key \
-TEECHECK_LLM_MODEL=your-model \
-go test ./internal/llm/ -v -run TestLiveLLMDataSource
+cd ../teecheck-benchmark
+go test ./... -count=1
+go vet ./...
 ```
 
-## Design Documents
-
-- `docs/MULTI_AGENT_HARNESS.md` — Overall harness design
-- `docs/ARCHITECTURE_RESERVATIONS.md` — Architectural constraints and sequencing
-- `docs/superpowers/specs/` — Feature design specs
-- `docs/superpowers/plans/` — Implementation plans
+See [the target architecture](docs/ARCHITECTURE.md) for the migration toward
+case-scoped invariants and evidence-derived security architecture. That document
+contains planned components as well as implemented ones. Historical evaluation
+records describe their own revisions and must not be reused as current scores.

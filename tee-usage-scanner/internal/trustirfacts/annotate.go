@@ -13,6 +13,8 @@ package trustirfacts
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -26,11 +28,9 @@ import (
 // the caller's working directory.
 const DefaultEnumRegistryPath = "knowledge/twe/definitions/enum_registry.yml"
 
-// maxPromptFunctionNames bounds the candidate list embedded in the
-// annotation prompt (§11's token-control concern) — a large tree can
-// enumerate thousands of function-like names, and the prompt only needs
-// enough of them for the model to recognize the handful that matter for
-// TWE-STATE-001. Truncation is disclosed in the prompt itself, not silent.
+// maxPromptFunctionNames bounds each annotation call, never repository
+// coverage. Every candidate appears in a chunk; later alphabetical names
+// must be just as eligible for annotation as the first page.
 const maxPromptFunctionNames = 300
 
 // annotationSystemPrompt is the ONLY place this package tells the model
@@ -72,6 +72,7 @@ type AnnotationReport struct {
 	Candidates  Candidates
 	Unresolved  []UnresolvedAnnotation
 	RawResponse string
+	ChunkCount  int
 }
 
 // AnnotateFactTable is the LLM-driven end of the fact layer (§23.2/§23.3):
@@ -109,25 +110,94 @@ func AnnotateFactTable(ctx context.Context, client llm.Client, registry twe.Enum
 		return FactTable{}, report, fmt.Errorf("trustirfacts: enum registry invalid: %w", err)
 	}
 
-	resp, err := client.Generate(ctx, llm.GenerateRequest{
-		SystemPrompt: annotationSystemPrompt,
-		Messages:     []llm.Message{{Role: "user", Content: buildAnnotationPrompt(cand, registry)}},
-		Temperature:  0,
-		JSONMode:     true,
+	var combined annotationResponse
+	var raw []string
+	chunks := annotationChunks(cand)
+	for i, chunk := range chunks {
+		resp, err := client.Generate(ctx, llm.GenerateRequest{
+			SystemPrompt: annotationSystemPrompt,
+			Messages:     []llm.Message{{Role: "user", Content: buildAnnotationPrompt(chunk, registry)}},
+			Temperature:  0,
+			JSONMode:     true,
+		})
+		if err != nil {
+			return FactTable{}, report, fmt.Errorf("trustirfacts: llm annotate chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		raw = append(raw, resp.Text)
+		report.RawResponse = strings.Join(raw, "\n")
+		report.ChunkCount++
+		var parsed annotationResponse
+		if err := llm.ExtractJSONObject(resp.Text, &parsed); err != nil {
+			return FactTable{}, report, fmt.Errorf("trustirfacts: parse annotation response chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		// Resolve against precisely what this call saw, not the global set:
+		// a name from a different chunk is still an ungrounded annotation.
+		table, unresolved := resolveAnnotations(parsed, chunk, registry)
+		report.Unresolved = append(report.Unresolved, unresolved...)
+		for _, p := range table.ClaimProducers {
+			combined.ClaimProducers = append(combined.ClaimProducers, struct {
+				Function string `json:"function"`
+				Role     string `json:"role"`
+			}{p.Function, p.Role})
+		}
+		for _, a := range table.RollbackAuthorities {
+			combined.RollbackAuthorities = append(combined.RollbackAuthorities, struct {
+				Function string `json:"function"`
+				Kind     string `json:"kind"`
+			}{a.Function, a.Kind})
+		}
+		combined.RollbackFields = append(combined.RollbackFields, table.RollbackFields...)
+		combined.ProducedStructs = append(combined.ProducedStructs, table.ProducedStructs...)
+	}
+	table, _ := resolveAnnotations(combined, cand, registry)
+	// Canonical order makes a table's identity independent of chunk or
+	// response ordering, including paired vulnerable/fixed revisions.
+	sort.Slice(table.ClaimProducers, func(i, j int) bool {
+		a, b := table.ClaimProducers[i], table.ClaimProducers[j]
+		return a.Function+"\x00"+a.Role < b.Function+"\x00"+b.Role
 	})
-	if err != nil {
-		return FactTable{}, report, fmt.Errorf("trustirfacts: llm annotate: %w", err)
-	}
-	report.RawResponse = resp.Text
-
-	var parsed annotationResponse
-	if err := llm.ExtractJSONObject(resp.Text, &parsed); err != nil {
-		return FactTable{}, report, fmt.Errorf("trustirfacts: parse annotation response: %w", err)
-	}
-
-	table, unresolved := resolveAnnotations(parsed, cand, registry)
-	report.Unresolved = unresolved
+	sort.Slice(table.RollbackAuthorities, func(i, j int) bool {
+		a, b := table.RollbackAuthorities[i], table.RollbackAuthorities[j]
+		return a.Function+"\x00"+a.Kind < b.Function+"\x00"+b.Kind
+	})
+	sort.Strings(table.RollbackFields)
+	sort.Strings(table.ProducedStructs)
 	return table, report, nil
+}
+
+// annotationChunks interleaves modules before paging, so a large library
+// cannot monopolize the first call. All functions remain represented.
+func annotationChunks(cand Candidates) []Candidates {
+	groups := map[string][]FunctionCandidate{}
+	for _, fn := range cand.Functions {
+		module := ""
+		if len(fn.Files) > 0 {
+			files := append([]string(nil), fn.Files...)
+			sort.Strings(files)
+			module = filepath.Dir(files[0])
+		}
+		groups[module] = append(groups[module], fn)
+	}
+	modules := make([]string, 0, len(groups))
+	for module := range groups {
+		modules = append(modules, module)
+		sort.Slice(groups[module], func(i, j int) bool { return groups[module][i].Name < groups[module][j].Name })
+	}
+	sort.Strings(modules)
+	ordered := make([]FunctionCandidate, 0, len(cand.Functions))
+	for offset := 0; len(ordered) < len(cand.Functions); offset++ {
+		for _, module := range modules {
+			if offset < len(groups[module]) {
+				ordered = append(ordered, groups[module][offset])
+			}
+		}
+	}
+	var chunks []Candidates
+	for start := 0; start < len(ordered); start += maxPromptFunctionNames {
+		end := min(start+maxPromptFunctionNames, len(ordered))
+		chunks = append(chunks, Candidates{Functions: ordered[start:end], Fields: cand.Fields, Structs: cand.Structs})
+	}
+	return chunks
 }
 
 // buildAnnotationPrompt renders the candidate lists (Enumerate's output)
@@ -142,14 +212,7 @@ func buildAnnotationPrompt(cand Candidates, registry twe.EnumRegistry) string {
 
 	b.WriteString("Candidate function/callable names found in this repository (choose ONLY from this list for \"function\" fields):\n")
 	names := candidateFunctionNames(cand)
-	truncated := len(names) > maxPromptFunctionNames
-	if truncated {
-		names = names[:maxPromptFunctionNames]
-	}
 	writeList(&b, names)
-	if truncated {
-		b.WriteString("... (list truncated; only names shown above are valid choices)\n")
-	}
 
 	b.WriteString("\nCandidate field names found via member access, e.g. `x->field` or `x.field` (choose ONLY from this list for \"rollback_fields\"):\n")
 	writeList(&b, cand.Fields)
