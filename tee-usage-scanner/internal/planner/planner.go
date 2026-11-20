@@ -24,6 +24,8 @@ import (
 // (expert-001, challenger-001, ...).
 const DefaultPlannerAgentID = "planner-001"
 
+const policyRefusalCoverageGap = "Investigation stopped after upstream policy refusal; open audit leads remain unreviewed."
+
 // DefaultActionsPerRound is how many actions one round may request.
 //
 // The gate is measured in actions while the budget is measured in rounds.
@@ -216,6 +218,8 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	var donePayload actions.DonePayload
 	var terminationReason string
 	var runErr error
+	var coverageGaps []string
+	var runErrors []artifacts.RoundError
 
 	// executedToolFactRefs collects the ToolFact path every successful
 	// fact_layer_query returned. prompt.go's `done` schema also asks the
@@ -433,10 +437,31 @@ loop:
 			return genResp, nil
 		}
 
+		stopAfterPolicyRefusal := func(err error) {
+			runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
+			// A policy decision is a terminal upstream result, not a
+			// request to alter the prompt or route it through another role.
+			terminationReason = "policy_refusal"
+			coverageGaps = append(coverageGaps, policyRefusalCoverageGap)
+			runErrors = append(runErrors, artifacts.RoundError{Round: roundNum, Action: "llm", Error: err.Error()})
+			failedRound := artifacts.RoundRecord{
+				Round: roundNum, TokensIn: tokensIn, TokensOut: tokensOut,
+				CoverageGaps: []string{policyRefusalCoverageGap},
+			}
+			if persistErr := state.AppendRoundAndPersist(failedRound, roundsLog); persistErr != nil {
+				runErr = fmt.Errorf("%w; persist refusal checkpoint: %v", runErr, persistErr)
+			}
+			_ = cfg.Events.Emit(events.PlannerRoundCompleted(cfg.RunID, cfg.AgentID, roundNum, 0, 0))
+		}
+
 		genResp, err := askOnce(roundPrompt)
 		if err != nil {
-			runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
-			terminationReason = "llm_error"
+			if llm.IsPolicyRefusal(err) {
+				stopAfterPolicyRefusal(err)
+			} else {
+				runErr = fmt.Errorf("round %d: llm generate: %w", roundNum, err)
+				terminationReason = "llm_error"
+			}
 			break
 		}
 
@@ -464,7 +489,10 @@ loop:
 			if cfg.Budget.OutputAllowance(requestInputUpperBound(systemPrompt, retryPrompt), inRecon, isFinalRound) < minimumReplyTokens {
 				retryPrompt = prepareFinal(retryPrompt, true)
 			}
-			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {
+			if retryResp, retryErr := askOnce(retryPrompt); llm.IsPolicyRefusal(retryErr) {
+				stopAfterPolicyRefusal(retryErr)
+				break loop
+			} else if retryErr == nil {
 				genResp = retryResp
 				parsed, parseErr = ParseLLMResponse(genResp.Text)
 			}
@@ -685,7 +713,7 @@ loop:
 	// the two indistinguishable, and the acceptance criterion for the
 	// reconnaissance budget is precisely that this reason never appears: a
 	// run that reaches it is evidence the budget is too small.
-	if recon.TerminationReason(true) == terminationReconIncomplete {
+	if runErr == nil && recon.TerminationReason(true) == terminationReconIncomplete {
 		terminationReason = terminationReconIncomplete
 	}
 
@@ -709,6 +737,11 @@ loop:
 			TerminationReason: terminationReason,
 		},
 		FinalSummary: donePayload.Summary,
+		CoverageGaps: coverageGaps,
+		Errors:       runErrors,
+	}
+	if terminationReason == "policy_refusal" {
+		bundle.FinalSummary = policyRefusalCoverageGap
 	}
 	candidates, droppedErrors := convertCandidates(donePayload.Candidates, cfg.RepoRoot)
 	bundle.Candidates = candidates

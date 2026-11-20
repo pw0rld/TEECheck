@@ -536,6 +536,7 @@ type EvidenceBundle struct {
 	ProposedSinks []ProposedSink `json:"proposed_sinks,omitempty"`
 	Errors        []RoundError   `json:"errors,omitempty"`
 	FinalSummary  string         `json:"final_summary,omitempty"`
+	CoverageGaps  []string       `json:"coverage_gaps,omitempty"`
 }
 
 type PlannerMeta struct {
@@ -606,6 +607,7 @@ type RoundRecord struct {
 	TokensIn     int                `json:"tokens_in"`
 	TokensOut    int                `json:"tokens_out"`
 	WallClockMs  int64              `json:"wall_clock_ms"`
+	CoverageGaps []string           `json:"coverage_gaps,omitempty"`
 }
 
 type RoundAction struct {

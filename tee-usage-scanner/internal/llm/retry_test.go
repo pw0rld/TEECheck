@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ func TestIsTransient(t *testing.T) {
 		{"context canceled", context.Canceled, false},
 		{"context deadline", context.DeadlineExceeded, true},
 		{"anthropic 500", fmt.Errorf("anthropic status 500: internal error"), true},
+		{"ordinary 502", fmt.Errorf("openai status 502: bad gateway"), true},
 		{"anthropic 503", fmt.Errorf("openai status 503: service unavailable"), true},
 		{"anthropic 401", fmt.Errorf("anthropic status 401: unauthorized"), false},
 		{"anthropic 400", fmt.Errorf("anthropic status 400: bad request"), false},
@@ -57,6 +59,108 @@ func TestIsTransient(t *testing.T) {
 				t.Errorf("IsTransient(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsPolicyRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"cybersecurity refusal", errors.New("HTTP 502: flagged for possible cybersecurity risk"), true},
+		{"case insensitive", errors.New("HTTP 502: FLAGGED FOR POSSIBLE CYBERSECURITY RISK"), true},
+		{"whitespace separated", errors.New("status 502: flagged for possible\ncybersecurity risk"), true},
+		{"wrapped safeguards refusal", fmt.Errorf("generate: %w", errors.New("cyber permissive safeguards")), true},
+		{"structured filter code", errors.New(`status 400: {"code":"content_filter"}`), true},
+		{"content policy", errors.New("status 502: content policy violation"), true},
+		{"structured policy code", errors.New(`status 400: {"code":"content_policy_violation"}`), true},
+		{"ordinary gateway", errors.New("openai status 502: bad gateway"), false},
+		{"ordinary timeout", context.DeadlineExceeded, false},
+		{"unrelated policy", errors.New("status 502: database retention policy unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := llm.IsPolicyRefusal(tc.err); got != tc.want {
+				t.Fatalf("IsPolicyRefusal(%v)=%v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type refusalClient struct {
+	response llm.GenerateResponse
+	err      error
+	requests []llm.GenerateRequest
+}
+
+func (c *refusalClient) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	return c.response, c.err
+}
+
+func TestIsTransient_PolicyRefusalShortCircuits(t *testing.T) {
+	refusal := errors.New("openai status 502: flagged for possible cybersecurity risk")
+	if llm.IsTransient(refusal) {
+		t.Fatal("a policy refusal must not be retried as a gateway failure")
+	}
+	// A transport wrapper must not override an explicit policy decision.
+	if llm.IsTransient(errors.Join(context.DeadlineExceeded, refusal)) {
+		t.Fatal("wrapped policy refusal must take precedence over timeout classification")
+	}
+	inner := &refusalClient{
+		err: refusal,
+		response: llm.GenerateResponse{
+			RawRequest: `{"model":"test-model","input":"original request"}`,
+			Raw:        `{"error":"flagged for possible cybersecurity risk"}`,
+			Usage:      llm.Usage{PromptTokens: 7, TotalTokens: 7},
+		},
+	}
+	logged := 0
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{
+		MaxAttempts: 3,
+		BaseDelay:   time.Millisecond,
+		Logger:      func(int, error, time.Duration) { logged++ },
+	})
+	req := llm.GenerateRequest{
+		SystemPrompt: "Original defensive review request",
+		Messages:     []llm.Message{{Role: "user", Content: "Original source evidence"}},
+		JSONMode:     true,
+	}
+	resp, err := client.Generate(context.Background(), req)
+	if !errors.Is(err, refusal) {
+		t.Fatalf("refusal was not preserved: %v", err)
+	}
+	if len(inner.requests) != 1 || logged != 0 {
+		t.Fatalf("requests=%d retry logs=%d; want one unchanged request and no retries", len(inner.requests), logged)
+	}
+	if !reflect.DeepEqual(inner.requests[0], req) {
+		t.Fatal("retry wrapper changed the rejected request")
+	}
+	if !reflect.DeepEqual(resp, inner.response) {
+		t.Fatalf("refusal wire evidence was discarded: got %+v, want %+v", resp, inner.response)
+	}
+}
+
+func TestRetryingClient_PreservesLastErrorResponse(t *testing.T) {
+	upstreamErr := errors.New("openai status 502: temporary gateway failure")
+	inner := &refusalClient{
+		err: upstreamErr,
+		response: llm.GenerateResponse{
+			RawRequest: `{"model":"test-model"}`,
+			Raw:        `{"error":"temporary gateway failure"}`,
+		},
+	}
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{
+		MaxAttempts: 2,
+		BaseDelay:   time.Millisecond,
+	})
+	resp, err := client.Generate(context.Background(), llm.GenerateRequest{})
+	if len(inner.requests) != 2 || !errors.Is(err, upstreamErr) {
+		t.Fatalf("ordinary transient behavior changed: calls=%d err=%v", len(inner.requests), err)
+	}
+	if !reflect.DeepEqual(resp, inner.response) {
+		t.Fatalf("last failure response was discarded: %+v", resp)
 	}
 }
 

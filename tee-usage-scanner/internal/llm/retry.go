@@ -27,8 +27,8 @@ type RetryConfig struct {
 }
 
 // NewRetryingClient wraps an underlying llm.Client with retry-on-
-// transient-error semantics. Non-transient errors (4xx, parse errors,
-// context cancellation) short-circuit immediately. Transient errors
+// transient-error semantics. Non-transient errors (4xx, policy refusals,
+// parse errors, context cancellation) short-circuit immediately. Transient errors
 // (5xx, connection resets, i/o timeouts, request deadline exceeded)
 // retry with exponential backoff capped at MaxDelay.
 //
@@ -63,17 +63,19 @@ func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (Gen
 		return GenerateResponse{}, err
 	}
 	var lastErr error
+	var lastResponse GenerateResponse
 	for attempt := 1; attempt <= r.cfg.MaxAttempts; attempt++ {
 		if ctx.Err() != nil {
-			return GenerateResponse{}, ctx.Err()
+			return lastResponse, ctx.Err()
 		}
 		resp, err := r.inner.Generate(ctx, req)
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
+		lastResponse = resp
 		if !IsTransient(err) {
-			return GenerateResponse{}, err
+			return resp, err
 		}
 		if attempt == r.cfg.MaxAttempts {
 			break
@@ -84,11 +86,11 @@ func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (Gen
 		}
 		select {
 		case <-ctx.Done():
-			return GenerateResponse{}, ctx.Err()
+			return lastResponse, ctx.Err()
 		case <-time.After(wait):
 		}
 	}
-	return GenerateResponse{}, fmt.Errorf("llm retry exhausted after %d attempts: %w", r.cfg.MaxAttempts, lastErr)
+	return lastResponse, fmt.Errorf("llm retry exhausted after %d attempts: %w", r.cfg.MaxAttempts, lastErr)
 }
 
 // backoff returns the wait duration for the given attempt number
@@ -105,6 +107,30 @@ func backoff(base, max time.Duration, attempt int) time.Duration {
 	return d
 }
 
+// IsPolicyRefusal identifies explicit upstream content/safety policy refusal
+// markers, including providers that incorrectly wrap a refusal in HTTP 5xx.
+// It classifies the response for reporting and retry control; it never changes
+// the request or attempts to work around the upstream decision.
+func IsPolicyRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.Join(strings.Fields(strings.ToLower(err.Error())), " ")
+	for _, marker := range []string{
+		"flagged for possible cybersecurity risk",
+		"cyber permissive safeguards",
+		"content_filter",
+		"content policy violation",
+		"content_policy_violation",
+		"responsibleaipolicyviolation",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsTransient reports whether an error from an LLM Generate call is
 // likely to succeed on retry. The set of retryable errors is:
 //
@@ -116,12 +142,16 @@ func backoff(base, max time.Duration, attempt int) time.Duration {
 //     context.Canceled, which signals a caller-initiated stop)
 //
 // Not retryable:
+//   - Explicit content/safety policy refusals, even with HTTP 5xx status
 //   - HTTP 4xx status codes (auth, validation, quota)
 //   - JSON parse failures (nondeterministic prompt issue, not network)
 //   - context.Canceled (user requested stop)
 //   - Any other error
 func IsTransient(err error) bool {
 	if err == nil {
+		return false
+	}
+	if IsPolicyRefusal(err) {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {

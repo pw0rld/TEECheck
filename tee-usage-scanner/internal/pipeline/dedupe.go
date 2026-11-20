@@ -16,6 +16,7 @@ func MergeEvidenceBundles(bundles []*artifacts.EvidenceBundle) artifacts.Evidenc
 	merged := *bundles[0]
 	merged.Candidates = DedupeCandidates(bundles)
 	merged.Errors = nil
+	merged.CoverageGaps = nil
 	merged.PlannerMeta = artifacts.PlannerMeta{
 		TerminationReason: bundles[0].PlannerMeta.TerminationReason,
 		PassCount:         len(bundles),
@@ -41,6 +42,18 @@ func MergeEvidenceBundles(bundles []*artifacts.EvidenceBundle) artifacts.Evidenc
 			Truncated:         meta.Truncated,
 		})
 		merged.Errors = append(merged.Errors, bundle.Errors...)
+		for _, gap := range bundle.CoverageGaps {
+			seen := false
+			for _, existing := range merged.CoverageGaps {
+				if existing == gap {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				merged.CoverageGaps = append(merged.CoverageGaps, gap)
+			}
+		}
 	}
 	return merged
 }

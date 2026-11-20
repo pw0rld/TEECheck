@@ -91,6 +91,12 @@ Expert. The Verifier checks source citations and uses bounded follow-up dialogs.
 The Arbiter gates confirmed wording on evidence completeness. None of these
 mechanisms substitutes for a human verdict or an executable reproduction.
 
+Explicit upstream policy refusals are non-retryable, including refusals returned
+with HTTP 5xx status codes. The planner records `policy_refusal`, retains opened
+audit leads, and writes the unreviewed scope to its round log and evidence bundle.
+The run stops without automatically altering the rejected request or sending it
+to another review role. Provider response details remain available for diagnosis.
+
 ## Commands and controls
 
 | Command | Purpose |

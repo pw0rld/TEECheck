@@ -655,6 +655,9 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 			}
 		}
 		if result.Err != nil {
+			if llm.IsPolicyRefusal(result.Err) {
+				return fmt.Errorf("planner pass %d stopped by upstream policy refusal; preserved evidence at %s: %w", pass, runDir, result.Err)
+			}
 			if pass == 1 {
 				if len(allPacks) == 0 {
 					return fmt.Errorf("planner pass 1: %w (the deterministic fact lane also found no supported facts; check rounds.jsonl at %s)", result.Err, runfs.RoundsLogPath(runDir))
