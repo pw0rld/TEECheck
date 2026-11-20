@@ -44,7 +44,7 @@ func (cfg Config) WithLLMProviderDefaults() Config {
 		// against mobilecoin: scanner stage OK, challenger first case
 		// timed out). Bump the timeout to a GLM-friendly value when the
 		// caller has not explicitly raised it above the global default.
-		if cfg.LLMTimeoutSec <= 60 {
+		if cfg.LLMTimeoutSec <= 60 && !cfg.LLMTimeoutExplicit {
 			cfg.LLMTimeoutSec = defaultGLMTimeoutSec
 		}
 	}

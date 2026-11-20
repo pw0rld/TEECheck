@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/invariant-assessment.v1.json",
+  "title": "invariant-assessment.v1",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "teecheck.invariant_assessment.v1"
+    },
+    "invariant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "definition_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "repo_url": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "assessment": {
+      "enum": [
+        "satisfied",
+        "violated",
+        "unresolved"
+      ]
+    },
+    "reason_code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verification_basis": {
+      "type": "string",
+      "minLength": 1
+    },
+    "query_operation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_corroborated": {
+      "type": "boolean"
+    },
+    "preconditions_satisfied": {
+      "type": "boolean"
+    },
+    "attack_chain_complete": {
+      "type": "boolean"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "source",
+              "observation",
+              "tool_fact"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "source"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "path",
+                "start_line",
+                "end_line",
+                "content_sha256"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "observation",
+                    "tool_fact"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ref"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "witness": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "symbol"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "contradictions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missing_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "invariant_id",
+    "definition_hash",
+    "scope",
+    "assessment",
+    "reason_code",
+    "reason",
+    "verification_basis",
+    "source_corroborated",
+    "preconditions_satisfied",
+    "attack_chain_complete",
+    "evidence_refs",
+    "witness"
+  ],
+  "additionalProperties": false
+}

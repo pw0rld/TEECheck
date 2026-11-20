@@ -186,8 +186,6 @@ func TestFactLayerQuery_UnknownOperationIsRejectedWithTheVocabulary(t *testing.T
 // on disk the entire time.
 func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) {
 	repo, commit := gitInit(t)
-	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
-	t.Cleanup(trustirfacts.ResetFactTables)
 
 	eng := &fakeFactEngine{available: true, results: []codeql.Result{{
 		RuleID:    "trustir/state/rollback-version-propagation",
@@ -203,6 +201,7 @@ func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) 
 	// directory the same way the real one does, so the action exercises the
 	// production path from request to observation.
 	handler := &actions.FactLayerQueryHandler{
+		FactTable:    trustirfacts.NewFactTableInput(repo, commit, trustirfacts.FactTable{RollbackFields: []string{"version"}}, "llm_annotated"),
 		DB:           codedb.New(eng, nil),
 		Engine:       eng,
 		QueryPackDir: realQueryPackDir(t),
@@ -242,11 +241,10 @@ func TestFactLayerQuery_ObservationCarriesFindingsAndRelatedSites(t *testing.T) 
 // found nothing" and "we found something" have to stay distinguishable.
 func TestFactLayerQuery_NoMatchesCarriesNoFindings(t *testing.T) {
 	repo, commit := gitInit(t)
-	trustirfacts.SetFactTable(repo, trustirfacts.FactTable{RollbackFields: []string{"version"}})
-	t.Cleanup(trustirfacts.ResetFactTables)
 
 	eng := &fakeFactEngine{available: true}
 	handler := &actions.FactLayerQueryHandler{
+		FactTable:    trustirfacts.NewFactTableInput(repo, commit, trustirfacts.FactTable{RollbackFields: []string{"version"}}, "llm_annotated"),
 		DB:           codedb.New(eng, nil),
 		Engine:       eng,
 		QueryPackDir: realQueryPackDir(t),

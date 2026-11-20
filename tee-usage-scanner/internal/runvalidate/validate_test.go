@@ -139,7 +139,7 @@ func TestValidate_RejectsCompletedStageWithoutRequiredArtifact(t *testing.T) {
 func validBundle(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	manifest := artifacts.Manifest{SchemaVersion: "teecheck.manifest.v1", RunID: "run-1"}
+	manifest := artifacts.Manifest{SchemaVersion: "teecheck.manifest.v1", RunID: "run-1", ExpectedStages: runfs.ExpectedStages(false), SourceScopeMode: "local_fallback", Configuration: &artifacts.RunConfiguration{Command: "run", Mode: "llm", Samples: 1}}
 	if err := runfs.WriteJSON(runfs.ManifestPath(dir), manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -157,11 +157,27 @@ func validBundle(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "blobs", hashOf("prompt")+".txt"), []byte("prompt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeEvents(t, filepath.Join(dir, "events.jsonl"),
-		events.Event{Seq: 1, Type: events.TypeRunStarted, RunID: "run-1"},
-		events.Event{Seq: 2, Type: events.TypeLLMCallCompleted, RunID: "run-1", PromptBlob: "sha256:" + hashOf("prompt")},
-		events.Event{Seq: 3, Type: events.TypeRunCompleted, RunID: "run-1", Reason: "completed"},
-	)
+	for _, path := range []string{runfs.RepoFactsPath(dir), runfs.ProjectMapPath(dir), runfs.EvidenceBundlePath(dir)} {
+		if err := runfs.WriteJSON(path, map[string]any{"run_id": "run-1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{runfs.CasePacksDir(dir), runfs.ExpertDir(dir), runfs.ChallengerDir(dir), runfs.VerifierDir(dir)} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runfs.WriteJSON(runfs.CoverageLedgerPath(dir), artifacts.CoverageLedger{SchemaVersion: "teecheck.coverage_ledger.v1", RunID: "run-1", BySample: []artifacts.SampleCoverage{{SampleIndex: 0, ReconStatus: "satisfied"}}}); err != nil {
+		t.Fatal(err)
+	}
+	all := []events.Event{{Seq: 1, Type: events.TypeRunStarted, RunID: "run-1"}, {Seq: 2, Type: events.TypeLLMCallCompleted, RunID: "run-1", PromptBlob: "sha256:" + hashOf("prompt")}}
+	for _, stage := range manifest.ExpectedStages {
+		all = append(all, events.Event{Seq: int64(len(all) + 1), Type: events.TypeStageStarted, RunID: "run-1", Stage: stage})
+		all = append(all, events.Event{Seq: int64(len(all) + 1), Type: events.TypeStageCompleted, RunID: "run-1", Stage: stage, Reason: "completed"})
+	}
+	all = append(all, events.Event{Seq: int64(len(all) + 1), Type: events.TypeRunCompleted, RunID: "run-1", Reason: "completed"})
+	writeEvents(t, filepath.Join(dir, "events.jsonl"), all...)
+
 	return dir
 }
 

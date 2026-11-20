@@ -18,6 +18,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/pipeline"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/preprocessor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/report"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/reverify"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/review"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runvalidate"
@@ -81,6 +82,12 @@ func main() {
 			client = llm.NewClient(cfg)
 		}
 		err = report.Run(cfg, client)
+	case "verify-contract":
+		var output string
+		output, err = reverify.Run(cfg)
+		if err == nil {
+			fmt.Printf("Contract recheck written to %s\n", output)
+		}
 	case "validate-run":
 		validation := runvalidate.Validate(cfg.RunDir)
 		var data []byte

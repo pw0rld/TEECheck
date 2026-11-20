@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 )
 
 // DonePayload is the structured payload of the done action — the
@@ -11,8 +13,9 @@ import (
 // (M3b) unmarshals ActionResult.Output back into this struct after
 // detecting result.Name == "done".
 type DonePayload struct {
-	Summary    string           `json:"summary"`
-	Candidates []map[string]any `json:"candidates"`
+	Summary        string                      `json:"summary"`
+	Candidates     []map[string]any            `json:"candidates"`
+	CaseInvariants []artifacts.CaseInvariantV2 `json:"case_invariants,omitempty"`
 
 	// Investigations is the §7.5/§9.5 counterpart of Candidates: each
 	// entry is a loosely-typed TWEInvestigation the LLM believes it built

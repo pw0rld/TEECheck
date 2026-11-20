@@ -86,3 +86,27 @@ func TestMaterializeQueryPack_MissingSourceDir(t *testing.T) {
 		t.Fatal("expected an error when the checked-in query pack directory does not exist")
 	}
 }
+
+func TestMaterializeQueryPackKeepsDifferentTablesIsolated(t *testing.T) {
+	src, dir := checkedInQueryPackDir(t), t.TempDir()
+	req := Request{Repository: "test", Commit: "abc", Operation: OperationRollbackVersionPropagation, QueryPackDir: src}
+	a, _, err := materializeQueryPack(dir, src, req, FactTable{RollbackFields: []string{"version"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(a, "common", "GeneratedTrustFacts.qll"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := materializeQueryPack(dir, src, req, FactTable{RollbackFields: []string{"epoch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("different tables share a mutable query pack")
+	}
+	after, err := os.ReadFile(filepath.Join(a, "common", "GeneratedTrustFacts.qll"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("earlier query pack was overwritten")
+	}
+}

@@ -20,6 +20,7 @@ type PlannerState struct {
 	RunID      string                   `json:"run_id"`
 	Rounds     []artifacts.RoundRecord  `json:"rounds"`
 	Candidates []artifacts.Candidate    `json:"candidates"`
+	AuditLeads []artifacts.AuditLead    `json:"audit_leads,omitempty"`
 	SinksSeen  []artifacts.SinkHitGroup `json:"sinks_seen,omitempty"`
 
 	// Investigations holds every TWEInvestigation the Planner has built so

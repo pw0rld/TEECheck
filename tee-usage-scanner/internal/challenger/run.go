@@ -66,7 +66,13 @@ func RunWithEvents(cfg config.Config, client llm.Client, rec events.Recorder) er
 
 		// ── Phase 1: independent judgment, no Hypothesis in scope. ──
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
-		independentView, phase1Adjustments, err := buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		var independentView artifacts.ChallengerIndependentView
+		var phase1Adjustments []artifacts.NormalizationAdjustment
+		if len(pack.CaseInvariants) > 0 {
+			independentView, err = buildContractIndependent(context.Background(), client, manifest, cfg, pack)
+		} else {
+			independentView, phase1Adjustments, err = buildIndependentViewLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		}
 		if err != nil {
 			return fmt.Errorf("challenger phase-1 llm for %s: %w", pack.CaseID, err)
 		}
@@ -84,7 +90,13 @@ func RunWithEvents(cfg config.Config, client llm.Client, rec events.Recorder) er
 			return fmt.Errorf("read hypothesis %s: %w", hypothesisPath, err)
 		}
 
-		challenge, phase2Adjustments, err := buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
+		var challenge artifacts.Challenge
+		var phase2Adjustments []artifacts.NormalizationAdjustment
+		if len(pack.CaseInvariants) > 0 {
+			challenge = compareContractReviews(pack, hypothesis, independentView, cfg.AgentID)
+		} else {
+			challenge, phase2Adjustments, err = buildChallengeLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, hypothesis, independentView, cfg.AgentID, cfg.LLMTemp)
+		}
 		if err != nil {
 			return fmt.Errorf("challenger phase-2 llm for %s: %w", pack.CaseID, err)
 		}

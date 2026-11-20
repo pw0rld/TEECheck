@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 )
 
 // CasePackInput is the identity and playbook-derived context BuildCasePack
@@ -38,11 +39,12 @@ type CasePackInput struct {
 // called), not the full repository.
 func BuildCasePack(inv artifacts.TWEInvestigation, in CasePackInput) artifacts.CasePack {
 	pack := artifacts.CasePack{
-		SchemaVersion: "teecheck.case_pack.v1",
-		CaseID:        in.CaseID,
-		Focus:         in.Focus,
-		Category:      inv.Classification,
-		Priority:      in.Priority,
+		CaseInvariants: contracts.MergeAll(nil, inv.CaseInvariants),
+		SchemaVersion:  "teecheck.case_pack.v1",
+		CaseID:         in.CaseID,
+		Focus:          in.Focus,
+		Category:       inv.Classification,
+		Priority:       in.Priority,
 
 		RelatedTWEs:          append([]string{}, inv.TWEIDs...),
 		RelatedInvariants:    append([]string{}, inv.InvariantIDs...),

@@ -69,7 +69,7 @@ var actionArgSchemas = map[string]string{
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
 	"open_audit_lead":     `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
 	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
-	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
+	"done":                `{"summary": string, "case_invariants": [CaseInvariantV2 (see CASE CONTRACTS; optional)], "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
 
 // BuildSystemPrompt returns the system prompt for one planner phase.
@@ -96,6 +96,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 
 	if phase == PhaseInvestigation {
 		b.WriteString("You are TEECheck's L3 security audit planner (Investigator, §7.5). You have opened an audit lead of your own: a question about this project's code, grounded in facts you observed. Your job now is to expand it — read the bodies, follow the relations, and find out whether the contract you suspect is broken actually is — and to record what you found as bounded, source-anchored investigations. You do not render a final vulnerability verdict.\n\n")
+		b.WriteString(caseContractInstructions)
 	} else {
 		b.WriteString("You are TEECheck's L3 security audit planner. Your job in this phase is to understand THIS project from its own code: what it is built out of, how its parts call each other, and which of its relations the project map cannot explain.\n\n")
 		b.WriteString("You are not looking for known vulnerability patterns and you have not been given any. The questions worth asking here are this project's own:\n")
@@ -252,6 +253,13 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 		b.WriteString("\n")
 	}
 
+	if len(state.AuditLeads) > 0 {
+		b.WriteString("=== AUDIT LEADS AVAILABLE FOR CONTRACTS ===\n")
+		for _, lead := range state.AuditLeads {
+			fmt.Fprintf(&b, "{\"lead_id\":%q} targets=%v question=%s\n", lead.LeadID, lead.TargetSymbolIDs, lead.SecurityQuestion)
+		}
+		b.WriteString("\n")
+	}
 	if len(state.Investigations) > 0 {
 		b.WriteString("=== ACTIVE TWE INVESTIGATIONS ===\n")
 		for _, inv := range state.Investigations {

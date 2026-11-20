@@ -3,22 +3,78 @@
   "$id": "https://teecheck.dev/schemas/twe-investigation.v1.json",
   "title": "TEECheck TWEInvestigation v1",
   "type": "object",
-  "required": ["schema_version", "investigation_id", "twe_ids", "classification"],
+  "required": [
+    "schema_version",
+    "investigation_id",
+    "twe_ids",
+    "classification"
+  ],
   "properties": {
-    "schema_version": {"const": "teecheck.twe_investigation.v1"},
-    "investigation_id": {"type": "string"},
-    "twe_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-    "invariant_ids": {"$ref": "#/$defs/strings"},
-    "architecture_refs": {"$ref": "#/$defs/strings"},
-    "classification": {"enum": ["standard", "variant", "composition", "catalog_gap"]},
-    "observed_flow": {"type": "array", "items": {"type": "object"}},
-    "filled_roles": {"type": "object"},
-    "missing_roles": {"$ref": "#/$defs/strings"},
-    "required_evidence": {"$ref": "#/$defs/strings"},
-    "counterevidence": {"$ref": "#/$defs/strings"},
-    "coverage_gaps": {"$ref": "#/$defs/strings"},
-    "tool_fact_refs": {"$ref": "#/$defs/strings"}
+    "schema_version": {
+      "const": "teecheck.twe_investigation.v1"
+    },
+    "investigation_id": {
+      "type": "string"
+    },
+    "twe_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "invariant_ids": {
+      "$ref": "#/$defs/strings"
+    },
+    "architecture_refs": {
+      "$ref": "#/$defs/strings"
+    },
+    "classification": {
+      "enum": [
+        "standard",
+        "variant",
+        "composition",
+        "catalog_gap"
+      ]
+    },
+    "observed_flow": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "filled_roles": {
+      "type": "object"
+    },
+    "missing_roles": {
+      "$ref": "#/$defs/strings"
+    },
+    "required_evidence": {
+      "$ref": "#/$defs/strings"
+    },
+    "counterevidence": {
+      "$ref": "#/$defs/strings"
+    },
+    "coverage_gaps": {
+      "$ref": "#/$defs/strings"
+    },
+    "tool_fact_refs": {
+      "$ref": "#/$defs/strings"
+    },
+    "case_invariants": {
+      "type": "array",
+      "items": {
+        "$ref": "https://teecheck.dev/schemas/case-invariant.v2.json"
+      }
+    }
   },
   "additionalProperties": false,
-  "$defs": {"strings": {"type": "array", "items": {"type": "string"}}}
+  "$defs": {
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
 }

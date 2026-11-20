@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
@@ -78,6 +79,13 @@ func targetKey(p artifacts.CasePack) string {
 // An expanded evidence window may merge when its files contain the other
 // window and the symbol matches, or when the same main file/category is known.
 func SameReviewTarget(a, b artifacts.CasePack) bool {
+	if len(a.CaseInvariants) > 0 || len(b.CaseInvariants) > 0 {
+		// An untyped candidate has no property identity to compare safely.
+		if len(a.CaseInvariants) == 0 || len(b.CaseInvariants) == 0 {
+			return false
+		}
+		return contractProperties(a.CaseInvariants) == contractProperties(b.CaseInvariants)
+	}
 	if targetKey(a) == "" || targetKey(b) == "" {
 		return false
 	}
@@ -184,6 +192,9 @@ func Merge(rich, thin []artifacts.CasePack) []artifacts.CasePack {
 // TargetSymbols is NOT part of the predicate: thin packs carry it too
 // (BuildFromCandidate copies cand.Symbols), so it says nothing about origin.
 func hasInvestigationKnowledge(p artifacts.CasePack) bool {
+	if len(p.CaseInvariants) > 0 {
+		return true
+	}
 	return len(p.RelatedTWEs) > 0 ||
 		len(p.RelatedInvariants) > 0 ||
 		len(p.ArchitectureRefs) > 0 ||
@@ -208,9 +219,11 @@ func absorb(base, extra artifacts.CasePack) artifacts.CasePack {
 	}
 
 	out := primary
+	out.ContractRequired = primary.ContractRequired || other.ContractRequired
 	out.TargetFiles = unionStrings(primary.TargetFiles, other.TargetFiles)
 	out.WhySelected = unionStrings(primary.WhySelected, other.WhySelected)
 	out.TargetSymbols = unionStrings(primary.TargetSymbols, other.TargetSymbols)
+	out.CaseInvariants = contracts.MergeAll(primary.CaseInvariants, other.CaseInvariants)
 	out.RelatedTWEs = unionStrings(primary.RelatedTWEs, other.RelatedTWEs)
 	out.RelatedInvariants = unionStrings(primary.RelatedInvariants, other.RelatedInvariants)
 	out.ArchitectureRefs = unionStrings(primary.ArchitectureRefs, other.ArchitectureRefs)
@@ -354,4 +367,18 @@ func sanitizeSlug(value string) string {
 		value = strings.ReplaceAll(value, "--", "-")
 	}
 	return strings.Trim(value, "-")
+}
+
+func contractProperties(values []artifacts.CaseInvariantV2) string {
+	var keys []string
+	seen := map[string]bool{}
+	for _, c := range values {
+		key := c.Scope.Commit + ":" + contracts.PropertyKey(c)
+		if !seen[key] {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "\x00")
 }

@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://teecheck.dev/schemas/case-invariant.v2.json",
+  "title": "case-invariant.v2",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "teecheck.case_invariant.v2"
+    },
+    "invariant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "definition_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "origin": {
+      "enum": [
+        "planner",
+        "deterministic",
+        "both",
+        "reverify"
+      ]
+    },
+    "lead_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "repo_url": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "subjects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "symbol"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "required_property": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "statement"
+      ],
+      "additionalProperties": false
+    },
+    "security_effect": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "source",
+              "observation",
+              "tool_fact"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "source"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "path",
+                "start_line",
+                "end_line",
+                "content_sha256"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "observation",
+                    "tool_fact"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ref"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "verification_queries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "backend",
+          "operation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "related_twes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "grounding": {
+      "enum": [
+        "logical",
+        "source_bound",
+        "unresolved"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "invariant_id",
+    "definition_hash",
+    "origin",
+    "scope",
+    "subjects",
+    "preconditions",
+    "required_property",
+    "security_effect",
+    "evidence_refs",
+    "verification_queries",
+    "related_twes",
+    "grounding"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "grounding": {
+            "const": "source_bound"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "required": [
+              "commit"
+            ]
+          },
+          "subjects": {
+            "items": {
+              "required": [
+                "start_line",
+                "end_line",
+                "content_sha256"
+              ]
+            }
+          },
+          "evidence_refs": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

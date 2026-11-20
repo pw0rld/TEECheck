@@ -30,9 +30,16 @@ type Issue struct {
 
 // Report is the deterministic result of validating one run directory.
 type Report struct {
-	RunDir string  `json:"run_dir"`
-	Valid  bool    `json:"valid"`
-	Issues []Issue `json:"issues"`
+	RunDir           string  `json:"run_dir"`
+	Valid            bool    `json:"valid"`
+	Issues           []Issue `json:"issues"`
+	RunID            string  `json:"run_id,omitempty"`
+	Repository       string  `json:"repository,omitempty"`
+	Commit           string  `json:"commit,omitempty"`
+	SourceScopeMode  string  `json:"source_scope_mode,omitempty"`
+	CreatedAt        string  `json:"created_at,omitempty"`
+	CoverageComplete bool    `json:"coverage_complete"`
+	CoverageIssues   []Issue `json:"coverage_issues,omitempty"`
 }
 
 // Validate checks the run without invoking tools, models, or the network.
@@ -58,7 +65,20 @@ func Validate(runDir string) Report {
 		add("events_read", eventsPath, "%v", err)
 	}
 	validateEvents(runDir, manifest.RunID, all, add)
+	validateExecutionPlan(runDir, manifest, all, add)
 	validateFindings(runDir, manifest.RunID, add)
+	validateCaseOutputs(runDir, add)
+	validateContracts(runDir, manifest, add)
+	report.RunID, report.Repository, report.Commit = manifest.RunID, manifest.RepoURL, manifest.Commit
+	report.SourceScopeMode = manifest.SourceScopeMode
+	report.CreatedAt = manifest.CreatedAt
+	report.CoverageIssues = coverageIssues(runDir, manifest)
+	for _, issue := range report.CoverageIssues {
+		if issue.Code == "coverage_run_id" || issue.Code == "coverage_schema" {
+			report.Issues = append(report.Issues, issue)
+		}
+	}
+	report.CoverageComplete = len(report.CoverageIssues) == 0
 
 	report.Valid = len(report.Issues) == 0
 	return report

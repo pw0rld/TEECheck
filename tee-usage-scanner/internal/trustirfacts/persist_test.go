@@ -78,8 +78,8 @@ func TestPersist_IsIdempotent(t *testing.T) {
 	changed := fact
 	changed.Status = StatusError
 	changed.Error = "this must never reach disk"
-	if _, err := Persist(runDir, changed); err != nil {
-		t.Fatalf("second Persist: %v", err)
+	if _, err := Persist(runDir, changed); err == nil {
+		t.Fatal("changed content under the same immutable identity must fail")
 	}
 	secondBytes, err := os.ReadFile(path)
 	if err != nil {

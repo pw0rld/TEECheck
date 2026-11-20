@@ -177,6 +177,20 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 		if err := runfs.ReadJSON(filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1)), &memo); err != nil {
 			return fmt.Errorf("read verification memo: %w", err)
 		}
+		if len(pack.CaseInvariants) > 0 || pack.ContractRequired {
+			items, packets := arbitrateContracts(cfg.RunDir, manifest, pack, hypothesis, challenge, memo)
+			for j, item := range items {
+				if cfg.MaxFindings == 0 || len(findings.Findings) < cfg.MaxFindings {
+					findings.Findings = append(findings.Findings, item)
+				}
+				packetPath := filepath.Join(runfs.ArbiterPacketsDir(cfg.RunDir), fmt.Sprintf("review-%03d-contract-%03d.md", idx+1, j+1))
+				if err := runfs.WriteText(packetPath, packets[j]); err != nil {
+					return err
+				}
+			}
+			count += len(items)
+			continue
+		}
 
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
 		independentView := loadIndependentView(challenge.IndependentViewPath)

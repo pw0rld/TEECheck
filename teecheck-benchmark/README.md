@@ -131,6 +131,50 @@ still contain unrelated findings, and the Markdown/JSON reports show both.
 A report with zero classified in-scope cases emits an explicit warning. Use
 `-require-in-scope` in evaluate/score mode to reject that selection entirely.
 
+### Attempt isolation and integrity gate
+
+Each `evaluate` invocation creates a new attempt for each source variant:
+
+```text
+results/<case>/<variant>/
+├── latest.json
+└── attempts/attempt-<unique>/
+    ├── attempt.json
+    └── <scanner-run>/
+        ├── 00_manifest.json
+        ├── events.jsonl
+        └── 07_arbiter/findings.json
+```
+
+`latest.json` is replaced before the scanner starts. A crashed or failed new
+attempt therefore cannot fall back to a successful older result. `attempt.json`
+records start/end timestamps, exit status, the exact output directory and the
+scanner's offline `validate-run` result. Score mode reads only the selected
+attempt and revalidates its bundle; old loose `findings.json` files, nonzero
+scanner exits, stale timestamps, wrong repository/revision, missing stages,
+corrupt blobs, and invalid contract/assessment links are `ERROR`, never TN/FN.
+Existing raw historical results remain on disk but are not formal scores.
+
+The benchmark imports the scanner's public `runbundle` wrapper to reuse the
+actual validator. Both modules therefore use Go 1.25; no second copy of the
+integrity rules is maintained. Run manifests record `expected_stages` and
+`source_scope_mode` (`pinned_checkout` or `local_fallback`). The preprocessor's
+knowledge output remains optional for custom knowledge roots; its stage events
+are mandatory. New typed contracts, assessments, and findings must agree on
+case, invariant ID, definition hash, scope and source evidence.
+
+When a valid run emits no findings but reconnaissance is incomplete or its
+index explicitly reports partial coverage, the variant is
+`INCOMPLETE_COVERAGE`. It is counted separately from errors and TP/FP/FN/TN;
+metrics with no scored variants are unavailable. `origin_counts` and
+`target_origin_counts` distinguish `planner`, `deterministic`, `both`, and
+legacy `unknown`, so a deterministic control is not presented as autonomous
+planner discovery.
+
+`--samples` remains one run's coverage expansion. Re-running `evaluate` creates
+new independent attempts, but `score` selects the latest attempt for each
+variant; it does not pretend a multi-sample run is a repeat-stability study.
+
 ### `reports/`
 
 Small, reviewable benchmark result summaries. Reports identify the scanner
@@ -158,7 +202,7 @@ go run ./evaluator/runner \
   -mode evaluate \
   -results /tmp/teecheck-benchmark-results \
   -timeout 45m \
-  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --repo-url {repository} --commit {revision} --mode llm --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
+  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --repo-url {repository} --commit {revision} --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
 ```
 
 Rescore existing results:

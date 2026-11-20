@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -28,13 +26,17 @@ type teecheckFindings struct {
 }
 
 type teecheckFinding struct {
+	Origin      string            `json:"origin,omitempty"`
+	SliceID     string            `json:"slice_id,omitempty"`
+	Severity    string            `json:"severity,omitempty"`
+	Confidence  string            `json:"confidence,omitempty"`
 	RelatedTWEs []string          `json:"related_twes,omitempty"`
 	FindingID   string            `json:"finding_id"`
 	Status      string            `json:"status"`
-	Files       []string          `json:"files"`
-	Locations   []findingLocation `json:"locations"`
+	Files       []string          `json:"files,omitempty"`
+	Locations   []findingLocation `json:"locations,omitempty"`
 	Summary     string            `json:"summary"`
-	Evidence    []string          `json:"evidence"`
+	Evidence    []string          `json:"evidence,omitempty"`
 }
 
 type findingLocation struct {
@@ -49,16 +51,23 @@ type findingLocation struct {
 const lineTolerance = 12
 
 type variantScore struct {
-	TargetObserved  bool     `json:"target_observed"`
-	IncidentalCount int      `json:"incidental_count"`
-	Variant         string   `json:"variant"`
-	Expected        string   `json:"expected"`
-	Observed        string   `json:"observed"`
-	Classification  string   `json:"classification"`
-	MatchedFinding  string   `json:"matched_finding,omitempty"`
-	MatchReasons    []string `json:"match_reasons,omitempty"`
-	FindingsPath    string   `json:"findings_path"`
-	FindingCount    int      `json:"finding_count"`
+	OriginCounts       map[string]int `json:"origin_counts,omitempty"`
+	TargetOriginCounts map[string]int `json:"target_origin_counts,omitempty"`
+	AttemptID          string         `json:"attempt_id,omitempty"`
+	IntegrityValid     bool           `json:"integrity_valid"`
+	CoverageComplete   bool           `json:"coverage_complete"`
+	SourceScopeMode    string         `json:"source_scope_mode,omitempty"`
+	ResultError        string         `json:"result_error,omitempty"`
+	TargetObserved     bool           `json:"target_observed"`
+	IncidentalCount    int            `json:"incidental_count"`
+	Variant            string         `json:"variant"`
+	Expected           string         `json:"expected"`
+	Observed           string         `json:"observed"`
+	Classification     string         `json:"classification"`
+	MatchedFinding     string         `json:"matched_finding,omitempty"`
+	MatchReasons       []string       `json:"match_reasons,omitempty"`
+	FindingsPath       string         `json:"findings_path"`
+	FindingCount       int            `json:"finding_count"`
 }
 
 type caseScore struct {
@@ -77,16 +86,19 @@ type caseScore struct {
 // ability from being averaged together with cases it was never designed
 // to catch.
 type trackMetrics struct {
-	Label        string      `json:"label"`
-	Cases        int         `json:"cases"`
-	Totals       scoreTotals `json:"totals"`
-	Errors       int         `json:"errors"`
-	Precision    float64     `json:"precision"`
-	Recall       float64     `json:"recall"`
-	F1           float64     `json:"f1"`
-	Specificity  float64     `json:"specificity"`
-	PairedPasses int         `json:"paired_passes"`
-	PairedRate   float64     `json:"paired_pass_rate"`
+	Label              string      `json:"label"`
+	Cases              int         `json:"cases"`
+	Totals             scoreTotals `json:"totals"`
+	Errors             int         `json:"errors"`
+	IncompleteCoverage int         `json:"incomplete_coverage"`
+	ScoredVariants     int         `json:"scored_variants"`
+	MetricsAvailable   bool        `json:"metrics_available"`
+	Precision          float64     `json:"precision"`
+	Recall             float64     `json:"recall"`
+	F1                 float64     `json:"f1"`
+	Specificity        float64     `json:"specificity"`
+	PairedPasses       int         `json:"paired_passes"`
+	PairedRate         float64     `json:"paired_pass_rate"`
 }
 
 func (t *trackMetrics) add(cs caseScore) {
@@ -100,12 +112,17 @@ func (t *trackMetrics) add(cs caseScore) {
 	if cs.Vulnerable.Classification == "ERROR" || cs.Fixed.Classification == "ERROR" {
 		t.Errors++
 	}
+	if cs.Vulnerable.Classification == "INCOMPLETE_COVERAGE" || cs.Fixed.Classification == "INCOMPLETE_COVERAGE" {
+		t.IncompleteCoverage++
+	}
 	if cs.PairedPass {
 		t.PairedPasses++
 	}
 }
 
 func (t *trackMetrics) finalize() {
+	t.ScoredVariants = t.Totals.TP + t.Totals.FP + t.Totals.FN + t.Totals.TN
+	t.MetricsAvailable = t.ScoredVariants > 0
 	t.Precision = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FP)
 	t.Recall = ratio(t.Totals.TP, t.Totals.TP+t.Totals.FN)
 	t.Specificity = ratio(t.Totals.TN, t.Totals.TN+t.Totals.FP)
@@ -165,38 +182,8 @@ func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout ti
 			continue
 		}
 		for _, variant := range []string{"vulnerable", "fixed"} {
-			input, err := filepath.Abs(filepath.Join(c.Dir, variant))
-			if err != nil {
+			if err := runScannerAttempt(c, variant, filepath.Join(resultsDir, c.Case.ID, variant), commandTemplate, timeout); err != nil {
 				return err
-			}
-			runDir, err := filepath.Abs(filepath.Join(resultsDir, c.Case.ID, variant))
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(runDir, 0o755); err != nil {
-				return err
-			}
-			command := expandCommand(commandTemplate, commandValues(c, variant, input, runDir))
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			cmd := exec.CommandContext(ctx, "sh", "-c", command)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			fmt.Printf("RUN %s/%s\n", c.Case.ID, variant)
-			err = cmd.Run()
-			cancel()
-			// A failed or timed-out scan must not abort the whole batch. It
-			// is recorded as an ERROR variant during scoring (missing
-			// findings.json) and reported separately, so one crashing scan
-			// does not discard the results of every case that ran.
-			switch {
-			case errors.Is(ctx.Err(), context.DeadlineExceeded):
-				fmt.Printf("WARN %s/%s scanner timeout after %s\n", c.Case.ID, variant, timeout)
-			case err != nil:
-				fmt.Printf("WARN %s/%s scanner failed: %v\n", c.Case.ID, variant, err)
-			default:
-				if _, err := findFindings(runDir); err != nil {
-					fmt.Printf("WARN %s/%s: %v\n", c.Case.ID, variant, err)
-				}
 			}
 		}
 	}
@@ -262,8 +249,12 @@ func scoreAndWrite(cases []loadedCase, resultsDir string) error {
 }
 
 func trackRow(b *strings.Builder, t trackMetrics) {
-	fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %.4f | %.4f | %.4f | %.4f | %d/%d |\n",
-		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors,
+	if !t.MetricsAvailable {
+		fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %d | n/a | n/a | n/a | n/a | %d/%d |\n", t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors, t.IncompleteCoverage, t.PairedPasses, t.Cases)
+		return
+	}
+	fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %d | %d | %.4f | %.4f | %.4f | %.4f | %d/%d |\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors, t.IncompleteCoverage,
 		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
 }
 
@@ -279,14 +270,14 @@ func renderMarkdown(report scoreReport) string {
 	b.WriteString("Read scanner capability off **in_twe_scope**. The out_of_twe_scope\n")
 	b.WriteString("track is a known design gap (generic memory/arithmetic/resource bugs the\n")
 	b.WriteString("TWE pipeline does not target), not a scanner failure.\n\n")
-	b.WriteString("| Track | Cases | TP | FP | FN | TN | Err | Precision | Recall | F1 | Specificity | Paired |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Track | Cases | TP | FP | FN | TN | Err | Incomplete coverage | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	trackRow(&b, report.Overall)
 	trackRow(&b, report.InScope)
 	trackRow(&b, report.OutOfScope)
 	b.WriteString("\n### In-scope by TWE family\n\n")
-	b.WriteString("| Family | Cases | TP | FP | FN | TN | Err | Precision | Recall | F1 | Specificity | Paired |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Family | Cases | TP | FP | FN | TN | Err | Incomplete coverage | Precision | Recall | F1 | Specificity | Paired |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, fam := range []string{"Flow", "Guard", "Binding", "State", "Config", "Design", "Leakage"} {
 		if t, ok := report.ByFamily[fam]; ok {
 			trackRow(&b, t)
@@ -295,7 +286,7 @@ func renderMarkdown(report scoreReport) string {
 
 	b.WriteString("\n## Per-case results\n\n")
 	b.WriteString("| Case | Family | Scope | Kind | Vulnerable | Fixed | Incidental (vuln/fixed) | Pair |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|\n")
 	for _, c := range report.Cases {
 		pair := "fail"
 		if c.PairedPass {
@@ -324,6 +315,17 @@ func renderMarkdown(report scoreReport) string {
 			fmt.Fprintf(&b, ", matched=%s", c.Fixed.MatchedFinding)
 		}
 		b.WriteString("\n")
+		for _, v := range []variantScore{c.Vulnerable, c.Fixed} {
+			if len(v.OriginCounts) > 0 {
+				fmt.Fprintf(&b, "- %s asserted origins: planner=%d, deterministic=%d, both=%d, unknown=%d; target origins: planner=%d, deterministic=%d, both=%d, unknown=%d\n", v.Variant, v.OriginCounts["planner"], v.OriginCounts["deterministic"], v.OriginCounts["both"], v.OriginCounts["unknown"], v.TargetOriginCounts["planner"], v.TargetOriginCounts["deterministic"], v.TargetOriginCounts["both"], v.TargetOriginCounts["unknown"])
+			}
+		}
+		if c.Vulnerable.ResultError != "" {
+			fmt.Fprintf(&b, "- Vulnerable validation/coverage: %s\n", c.Vulnerable.ResultError)
+		}
+		if c.Fixed.ResultError != "" {
+			fmt.Fprintf(&b, "- Fixed validation/coverage: %s\n", c.Fixed.ResultError)
+		}
 		if len(c.Vulnerable.MatchReasons) > 0 {
 			fmt.Fprintf(&b, "- Vulnerable match reasons: %s\n", strings.Join(c.Vulnerable.MatchReasons, ", "))
 		}
@@ -408,21 +410,40 @@ func scoreVariant(c loadedCase, variant, resultDir string) (variantScore, error)
 	if variant == "vulnerable" {
 		expected = "vulnerable"
 	}
-	path, err := findFindings(resultDir)
+	record, runDir, validation, err := selectedAttempt(c, variant, resultDir)
 	if err != nil {
-		// The scan produced no findings.json (crashed, timed out, or never
-		// ran). Record it as ERROR so it is reported separately instead of
-		// silently becoming a clean/vulnerable verdict or aborting scoring.
-		return variantScore{Variant: variant, Expected: expected, Observed: "error", Classification: "ERROR"}, nil
+		return variantScore{Variant: variant, Expected: expected, Observed: "error", Classification: "ERROR", AttemptID: record.AttemptID, ResultError: err.Error()}, nil
 	}
+	path := filepath.Join(runDir, "07_arbiter", "findings.json")
 	var findings teecheckFindings
 	if err := readJSON(path, &findings); err != nil {
 		return variantScore{Variant: variant, Expected: expected, Observed: "error", Classification: "ERROR", FindingsPath: path}, nil
 	}
-	result := variantScore{Variant: variant, Expected: expected, Observed: "clean", FindingsPath: path, FindingCount: len(findings.Findings)}
+	result := variantScore{Variant: variant, Expected: expected, Observed: "clean", FindingsPath: path, FindingCount: len(findings.Findings), AttemptID: record.AttemptID, IntegrityValid: true, CoverageComplete: validation.CoverageComplete, SourceScopeMode: validation.SourceScopeMode}
+	result.OriginCounts = map[string]int{"planner": 0, "deterministic": 0, "both": 0, "unknown": 0}
+	result.TargetOriginCounts = map[string]int{"planner": 0, "deterministic": 0, "both": 0, "unknown": 0}
+	if len(findings.Findings) == 0 && !validation.CoverageComplete {
+		result.Observed = "incomplete_coverage"
+		result.Classification = "INCOMPLETE_COVERAGE"
+		for _, issue := range validation.CoverageIssues {
+			if result.ResultError != "" {
+				result.ResultError += "; "
+			}
+			result.ResultError += issue.Message
+		}
+		return result, nil
+	}
 	for _, finding := range findings.Findings {
+		origin := finding.Origin
+		if origin != "planner" && origin != "deterministic" && origin != "both" {
+			origin = "unknown"
+		}
+		if detectionStatuses[strings.ToLower(strings.TrimSpace(finding.Status))] {
+			result.OriginCounts[origin]++
+		}
 		matched, reasons := matchFinding(c.Oracle, finding)
 		if matched {
+			result.TargetOriginCounts[origin]++
 			result.TargetObserved = true
 			result.Observed = "vulnerable"
 			if result.MatchedFinding == "" {
@@ -633,8 +654,8 @@ func ratio(numerator, denominator int) float64 {
 }
 
 func printTrack(t trackMetrics) {
-	fmt.Printf("%-16s cases=%d TP=%d FP=%d FN=%d TN=%d err=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n",
-		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors,
+	fmt.Printf("%-16s cases=%d TP=%d FP=%d FN=%d TN=%d err=%d incomplete=%d precision=%.4f recall=%.4f F1=%.4f specificity=%.4f paired=%d/%d\n",
+		t.Label, t.Cases, t.Totals.TP, t.Totals.FP, t.Totals.FN, t.Totals.TN, t.Errors, t.IncompleteCoverage,
 		t.Precision, t.Recall, t.F1, t.Specificity, t.PairedPasses, t.Cases)
 }
 

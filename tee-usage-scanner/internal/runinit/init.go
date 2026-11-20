@@ -13,6 +13,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
@@ -42,14 +43,16 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 
 	build := currentBuildProvenance()
 	manifest := artifacts.Manifest{
-		SchemaVersion: "teecheck.manifest.v1",
-		RunID:         runID,
-		RepoURL:       cfg.RepoURL,
-		LocalPath:     cfg.LocalPath,
-		Commit:        cfg.Commit,
-		Focus:         cfg.Focus,
-		Hint:          cfg.Hint,
-		CreatedAt:     now.Format(time.RFC3339),
+		ExpectedStages:  runfs.ExpectedStages(cfg.EnableLegacyPrior),
+		SourceScopeMode: "local_fallback",
+		SchemaVersion:   "teecheck.manifest.v1",
+		RunID:           runID,
+		RepoURL:         cfg.RepoURL,
+		LocalPath:       cfg.LocalPath,
+		Commit:          cfg.Commit,
+		Focus:           cfg.Focus,
+		Hint:            cfg.Hint,
+		CreatedAt:       now.Format(time.RFC3339),
 		ToolVersions: map[string]string{
 			"teecheck": build.Version,
 			"go":       build.GoVersion,
@@ -66,7 +69,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 			EnableLegacyPrior: cfg.EnableLegacyPrior,
 			LLM: artifacts.LLMConfiguration{
 				Provider:        cfg.LLMProvider,
-				BaseURL:         cfg.LLMBaseURL,
+				BaseURL:         config.RedactedEndpoint(cfg.LLMBaseURL),
 				Model:           cfg.LLMModel,
 				Transport:       cfg.LLMTransport,
 				ReasoningEffort: cfg.LLMReasoningEffort,

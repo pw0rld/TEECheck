@@ -85,18 +85,18 @@ func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Reques
 
 	base := newFact(req)
 
-	table, ok := factTableFor(req.Repository)
+	table, source, ok, tableErr := req.resolveFactTable()
+	if tableErr != nil {
+		return artifacts.ToolFact{}, tableErr
+	}
 	if !ok {
-		return unsupportedFact(base, fmt.Sprintf("no deterministic fact table for repository %q (LLM annotation pipeline not yet built, §23.2)", req.Repository)), nil
+		return unsupportedFact(base, fmt.Sprintf("no explicit or shipped fact table for repository %q", req.Repository)), nil
 	}
 	// Structural provenance (fact_source + fact_table_sha256): which table
 	// revision produced this fact, and from which source. The
 	// blind-discovery protocol scores only llm_annotated facts; shipped
 	// fixtures are regression aids.
-	base.FactSource = "shipped_fixture"
-	if isLLMFactTable(req.Repository) {
-		base.FactSource = "llm_annotated"
-	}
+	base.FactSource = source
 	if sum, err := tableDigest(table); err == nil {
 		base.FactTableSHA256 = sum
 	}
@@ -114,6 +114,23 @@ func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Reques
 	if db == nil {
 		return unresolvedFact(base, "no database provider"), nil
 	}
+	if versioned, ok := eng.(interface {
+		Version(context.Context) (string, error)
+	}); ok {
+		version, versionErr := versioned.Version(ctx)
+		if versionErr != nil {
+			return unresolvedFact(base, fmt.Sprintf("tool version unavailable: %v", versionErr)), nil
+		}
+		req.toolVersion = version
+		base.ToolVersion = version
+	}
+	queryHash, hashErr := digestQueryPack(req.QueryPackDir)
+	if hashErr != nil {
+		return errorFact(base, fmt.Sprintf("hash query pack: %v", hashErr)), nil
+	}
+	req.queryPackHash = queryHash
+	base.ArgumentsSHA256 = req.argumentsSHA256()
+	base.FactID = req.factID()
 	scope := codedb.Scope{RunDir: req.RunDir, Repository: req.Repository, Commit: req.Commit}
 	// Asked before Ensure, because afterwards every state is ready. The
 	// answer becomes a coverage gap: a fact derived from a database this run
@@ -146,8 +163,8 @@ func Run(ctx context.Context, eng Engine, db codedb.DatabaseProvider, req Reques
 	fact.Locations = toolLocations(results)
 	fact.Findings = toolFindings(results)
 	fact.ArtifactRef = filepath.ToSlash(relDB)
-	fact.CoverageGaps = coverageGaps(reused, isLLMFactTable(req.Repository))
-	return fact, nil
+	fact.CoverageGaps = coverageGaps(reused, source == "llm_annotated")
+	return finalizeFact(fact), nil
 }
 
 // RunAndPersist runs Run and, on success producing a fact (any status), also
@@ -186,19 +203,30 @@ func newFact(req Request) artifacts.ToolFact {
 func unsupportedFact(base artifacts.ToolFact, msg string) artifacts.ToolFact {
 	base.Status = StatusUnsupported
 	base.Error = msg
-	return base
+	return finalizeFact(base)
 }
 
 func unresolvedFact(base artifacts.ToolFact, msg string) artifacts.ToolFact {
 	base.Status = StatusUnresolved
 	base.Error = msg
-	return base
+	return finalizeFact(base)
 }
 
 func errorFact(base artifacts.ToolFact, msg string) artifacts.ToolFact {
 	base.Status = StatusError
 	base.Error = msg
-	return base
+	return finalizeFact(base)
+}
+
+// Result identity includes the request/table/query identity and the exact
+// outcome, so a retried failed query cannot alias an earlier immutable fact.
+func finalizeFact(fact artifacts.ToolFact) artifacts.ToolFact {
+	value := fact
+	value.FactID = ""
+	data, _ := json.Marshal(value)
+	digest := sha256.Sum256(data)
+	fact.FactID = fmt.Sprintf("trustir-cpp-%s-%s", fact.Operation, hex.EncodeToString(digest[:])[:24])
+	return fact
 }
 
 // analyzeOptions builds the codeql.AnalyzeOptions for one query run.

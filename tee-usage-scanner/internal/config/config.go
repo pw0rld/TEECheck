@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
-	Command   string
-	RunID     string
-	RunDir    string
-	RepoURL   string
-	LocalPath string
-	Commit    string
-	Focus     string
+	ContractPath string
+	Command      string
+	RunID        string
+	RunDir       string
+	RepoURL      string
+	LocalPath    string
+	Commit       string
+	Focus        string
 	// Hint is the caller's free-text concern, passed through to the
 	// planner's system prompt. It biases what gets investigated; it never
 	// narrows what gets modelled or scanned.
@@ -35,8 +36,12 @@ type Config struct {
 	LLMTransport       string
 	LLMReasoningEffort string
 	LLMTimeoutSec      int
+	LLMTimeoutExplicit bool
 	LLMMaxTokens       int
 	LLMTemp            float64
+	RoleConfigFile     string
+	RoleOverrides      map[string]LLMRoleOverride
+	LLMAPIKeyEnv       string
 	StaticTools        string
 	MaxDialogRounds    int
 	Target             string
@@ -83,6 +88,8 @@ func Parse(args []string) (Config, error) {
 		return parseArbiter(args[1:])
 	case "report":
 		return parseReport(args[1:])
+	case "verify-contract":
+		return parseVerifyContract(args[1:])
 	case "validate-run":
 		return parseValidateRun(args[1:])
 	case "curator":
@@ -501,6 +508,7 @@ func parseRun(args []string) (Config, error) {
 		Samples:            1,
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
+	fs.StringVar(&cfg.RoleConfigFile, "role-config", os.Getenv("TEECHECK_ROLE_CONFIG"), "JSON file with startup-only per-role LLM overrides; credentials use api_key_env references")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.BoolVar(&cfg.EnableLegacyPrior, "enable-legacy-prior", false, "Run legacy pre-investigation architecture and invariant model stages")
@@ -544,6 +552,14 @@ func parseRun(args []string) (Config, error) {
 	if err := fs.Parse(flagArgs); err != nil {
 		return Config{}, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "llm-timeout-seconds" {
+			cfg.LLMTimeoutExplicit = true
+		}
+	})
+	if os.Getenv("TEECHECK_LLM_TIMEOUT_SECONDS") != "" {
+		cfg.LLMTimeoutExplicit = true
+	}
 	cfg = cfg.WithLLMProviderDefaults()
 	// Also check remaining args after flag parse
 	if target == "" {
@@ -564,7 +580,7 @@ func parseRun(args []string) (Config, error) {
 	if cfg.Samples > 1 && cfg.MaxCases <= 12 {
 		cfg.MaxCases = cfg.Samples * cfg.MaxCases
 	}
-	if err := validateProviderConfig(cfg, "run"); err != nil {
+	if err := ValidatePipelineRoles(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

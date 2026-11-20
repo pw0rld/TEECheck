@@ -1,12 +1,18 @@
 # TEECheck Scanner 架构
 
 > 状态：**Planner-Driven 目标架构 / 迁移中**
-> 更新日期：2026-08-02
+> 更新日期：2026-11-21
 > 适用范围：`tee-usage-scanner/`
 > 设计依据：01 阶段不得在代码事实之前判定危险所在
 >
-> 当前代码仍主要按 `preprocess → architecture → invariants → planner` 运行；本文定义重构后的
-> 唯一目标架构，并在 §11 记录当前实现差异。旧顺序只用于解释迁移，不再指导新增实现。
+> 当前默认流程已使用中性项目地图、Pass A/B 和 AuditLead；前置 architecture/invariants v1
+> 仅通过 `--enable-legacy-prior` 启用。CaseInvariantV2、逐契约 InvariantAssessment、机械仲裁和
+> 独立 `verify-contract` 已落地。Planner 通过 `done.case_invariants` 或 investigation 中的
+> `case_invariants` 形式化契约，尚未增加独立的 `formalize_invariant` action。
+>
+> 本文仍包含后续目标：M5 后置 SecurityArchitecture、更多确定性属性查询、自动语义标注接入和
+> 跨运行数据库缓存尚未完成。当前注册的契约查询只证明直接 Assignment AST 节点存在性，
+> 不等同于完整值传播或所有路径正确性。实际数据字段和约束以版本化 schema 与代码为准。
 
 ---
 

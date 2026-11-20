@@ -583,6 +583,7 @@ loop:
 				lead, result = openLead(cfg, recon, observations, act.Args, roundNum)
 				if result.OK {
 					leads = append(leads, lead)
+					state.AuditLeads = append(state.AuditLeads, lead)
 				}
 			case act.Name == "done" && !recon.AllowDone(isFinalRound):
 				result = actions.ActionResult{
@@ -794,6 +795,12 @@ loop:
 	// pass orphaned in place. The caller accumulates CasePacks across
 	// passes, dedupes and caps them, and calls Write exactly once.
 	merged := Merge(packs, thin)
+	contractPacks, contractErrors := plannerContractPacks(donePayload.CaseInvariants, cfg)
+	merged = Merge(merged, contractPacks)
+	bundle.Errors = append(bundle.Errors, contractErrors...)
+	for i := range merged {
+		merged[i].ContractRequired = true
+	}
 
 	// Post-processing can add citation diagnostics; persist those as well.
 	if err := runfs.WriteJSON(bundlePath, bundle); err != nil && runErr == nil {
@@ -859,6 +866,11 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			keptRefs = append(keptRefs, ref)
 		}
 		wire.ToolFactRefs = keptRefs
+		if len(wire.CaseInvariants) > 0 {
+			bound, contractErrors := bindPlannerContracts(wire.CaseInvariants, cfg)
+			wire.CaseInvariants = bound
+			errs = append(errs, contractErrors...)
+		}
 		inv := investigations.Build(wire)
 		// Union before Validate so an executed ref is subject to the same
 		// on-disk resolution check as a model-reported one.
@@ -888,6 +900,7 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			CommonDefenses:       playbook.CommonDefenses,
 			CommonFalsePositives: playbook.CommonFalsePositives,
 		})
+		pack.ContractRequired = true
 		// Packs are NOT written here. Run merges them with the
 		// candidate-derived packs and returns the combined list; the
 		// pipeline writes it through planner.Write once per run, so

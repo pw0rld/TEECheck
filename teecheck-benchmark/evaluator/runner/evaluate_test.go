@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -317,15 +316,5 @@ func loadRepositoryCases(t *testing.T) []loadedCase {
 
 func writeFindings(t *testing.T, root, caseID, variant string, findings []teecheckFinding) {
 	t.Helper()
-	dir := filepath.Join(root, caseID, variant, "07_arbiter")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	b, err := json.Marshal(teecheckFindings{SchemaVersion: "teecheck.findings.v2", RunID: caseID + "-" + variant, Findings: findings})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "findings.json"), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeValidatedFindings(t, root, caseID, variant, findings)
 }

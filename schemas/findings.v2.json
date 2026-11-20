@@ -3,42 +3,82 @@
   "$id": "https://teecheck.dev/schemas/findings.v2.json",
   "title": "TEECheck Findings v2",
   "type": "object",
-  "required": ["schema_version", "run_id", "findings"],
+  "required": [
+    "schema_version",
+    "run_id",
+    "findings"
+  ],
   "properties": {
-    "schema_version": {"const": "teecheck.findings.v2"},
-    "run_id": {"type": "string", "minLength": 1},
+    "schema_version": {
+      "const": "teecheck.findings.v2"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "findings": {
       "type": "array",
-      "items": {"$ref": "#/$defs/finding"}
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
     }
   },
   "additionalProperties": false,
   "$defs": {
     "strings": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
     "location": {
       "type": "object",
-      "required": ["path", "start_line"],
+      "required": [
+        "path",
+        "start_line"
+      ],
       "properties": {
-        "path": {"type": "string", "minLength": 1},
-        "start_line": {"type": "integer", "minimum": 1},
-        "symbol": {"type": "string"}
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "symbol": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "sections": {
       "type": "object",
       "properties": {
-        "anchored_tool_facts": {"$ref": "#/$defs/strings"},
-        "architecture_evidence_status": {"$ref": "#/$defs/strings"},
-        "invariant_verification_status": {"$ref": "#/$defs/strings"},
-        "expert_hypothesis": {"type": "string"},
-        "independent_challenger_result": {"type": "string"},
-        "verifier_resolution": {"type": "string"},
-        "remaining_coverage_gaps": {"$ref": "#/$defs/strings"},
-        "human_review_questions": {"$ref": "#/$defs/strings"}
+        "anchored_tool_facts": {
+          "$ref": "#/$defs/strings"
+        },
+        "architecture_evidence_status": {
+          "$ref": "#/$defs/strings"
+        },
+        "invariant_verification_status": {
+          "$ref": "#/$defs/strings"
+        },
+        "expert_hypothesis": {
+          "type": "string"
+        },
+        "independent_challenger_result": {
+          "type": "string"
+        },
+        "verifier_resolution": {
+          "type": "string"
+        },
+        "remaining_coverage_gaps": {
+          "$ref": "#/$defs/strings"
+        },
+        "human_review_questions": {
+          "$ref": "#/$defs/strings"
+        }
       },
       "additionalProperties": false
     },
@@ -53,8 +93,14 @@
         "summary"
       ],
       "properties": {
-        "finding_id": {"type": "string", "minLength": 1},
-        "slice_id": {"type": "string", "minLength": 1},
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "slice_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "status": {
           "enum": [
             "no_issue_observed",
@@ -63,17 +109,62 @@
             "confirmed_candidate"
           ]
         },
-        "severity": {"enum": ["high", "medium", "low"]},
-        "confidence": {"enum": ["high", "medium", "low"]},
-        "files": {"$ref": "#/$defs/strings"},
-        "related_twes": {"$ref": "#/$defs/strings"},
+        "severity": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "files": {
+          "$ref": "#/$defs/strings"
+        },
+        "related_twes": {
+          "$ref": "#/$defs/strings"
+        },
         "locations": {
           "type": "array",
-          "items": {"$ref": "#/$defs/location"}
+          "items": {
+            "$ref": "#/$defs/location"
+          }
         },
-        "summary": {"type": "string", "minLength": 1},
-        "evidence": {"$ref": "#/$defs/strings"},
-        "sections": {"$ref": "#/$defs/sections"}
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "$ref": "#/$defs/strings"
+        },
+        "sections": {
+          "$ref": "#/$defs/sections"
+        },
+        "invariant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invariant_definition_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "verification_basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "enum": [
+            "planner",
+            "deterministic",
+            "both",
+            "reverify"
+          ]
+        }
       },
       "additionalProperties": false
     }

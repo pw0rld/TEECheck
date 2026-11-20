@@ -56,7 +56,12 @@ func RunWithEvents(cfg config.Config, client llm.Client, rec events.Recorder, bl
 		// ToolFacts — nothing here rewrites them (§3.5).
 		caseCtx := loadCaseContext(cfg.RunDir, pack)
 
-		hypothesis, err := buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		var hypothesis artifacts.Hypothesis
+		if len(pack.CaseInvariants) > 0 {
+			hypothesis, err = buildContractHypothesis(context.Background(), client, manifest, cfg, pack)
+		} else {
+			hypothesis, err = buildHypothesisLLM(context.Background(), client, toolAdapter, manifest.LocalPath, pack, caseCtx, cfg.AgentID, cfg.LLMTemp)
+		}
 		if err != nil {
 			return fmt.Errorf("expert llm for %s: %w", pack.CaseID, err)
 		}

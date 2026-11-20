@@ -263,6 +263,7 @@ func (f ToolFact) MarshalJSON() ([]byte, error) {
 // TWEInvestigation is the Planner's structured, still-reviewable application
 // of one or more playbooks to the current project.
 type TWEInvestigation struct {
+	CaseInvariants   []CaseInvariantV2       `json:"case_invariants,omitempty"`
 	SchemaVersion    string                  `json:"schema_version"`
 	InvestigationID  string                  `json:"investigation_id"`
 	TWEIDs           []string                `json:"twe_ids"`

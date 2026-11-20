@@ -72,18 +72,18 @@ func TestRun_CarriesFactTableProvenance(t *testing.T) {
 	fixtureDigest := fact.FactTableSHA256
 
 	// Same repository, LLM-annotated table: source flips, digest changes.
-	t.Cleanup(ResetFactTables)
-	SetFactTable(repo, FactTable{
+	table := FactTable{
 		ClaimProducers:      []ClaimProducerFact{{Function: "llm_fn", Role: "security_version"}},
 		RollbackFields:      []string{"version"},
 		RollbackAuthorities: []RollbackAuthorityFact{{Function: "auth_fn", Kind: "state_restore_acceptance"}},
-	})
+	}
+	req.FactTable = NewFactTableInput(repo, commit, table, "llm_annotated")
 	fact2, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run returned a Go error: %v", err)
 	}
 	if fact2.FactSource != "llm_annotated" {
-		t.Errorf("FactSource = %q, want llm_annotated after SetFactTable", fact2.FactSource)
+		t.Errorf("FactSource = %q, want llm_annotated for explicit input", fact2.FactSource)
 	}
 	if fact2.FactTableSHA256 == fixtureDigest {
 		t.Error("different table must yield a different digest")

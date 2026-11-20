@@ -50,6 +50,12 @@ func RunWithBus(cfg config.Config, client llm.Client, bus *agentbus.Bus) error {
 // so downstream consumers can correlate verifier claims with the
 // expert hypothesis they were judging.
 func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus, rec events.Recorder) error {
+	return RunWithBusAndQueries(cfg, client, bus, rec, nil)
+}
+
+// RunWithBusAndQueries accepts a controlled registered-query executor. It is
+// separate from the legacy natural-language scanner bus.
+func RunWithBusAndQueries(cfg config.Config, client llm.Client, bus *agentbus.Bus, rec events.Recorder, runner ContractQueryRunner) error {
 	casePaths, err := filepath.Glob(filepath.Join(runfs.CasePacksDir(cfg.RunDir), "case-*.json"))
 	if err != nil {
 		return fmt.Errorf("glob case packs: %w", err)
@@ -75,6 +81,17 @@ func RunWithBusAndEvents(cfg config.Config, client llm.Client, bus *agentbus.Bus
 		var challenge artifacts.Challenge
 		if err := runfs.ReadJSON(filepath.Join(runfs.ChallengerDir(cfg.RunDir), fmt.Sprintf("challenge-%03d.json", idx+1)), &challenge); err != nil {
 			return fmt.Errorf("read challenge: %w", err)
+		}
+		if len(pack.CaseInvariants) > 0 {
+			memo, err := buildContractMemo(context.Background(), cfg, client, manifest, pack, hypothesis, challenge, runner)
+			if err != nil {
+				return fmt.Errorf("verify contracts for %s: %w", pack.CaseID, err)
+			}
+			if err := runfs.WriteJSON(filepath.Join(runfs.VerifierDir(cfg.RunDir), fmt.Sprintf("verify-%03d.json", idx+1)), memo); err != nil {
+				return err
+			}
+			count++
+			continue
 		}
 
 		// PR-07 (§7.8, §25): see the parallel comment in Run() above.

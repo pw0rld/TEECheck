@@ -6,29 +6,24 @@ import (
 	"testing"
 )
 
-// TestRun_UsesLLMRegisteredTableAndDisclosesProvenance is the end-to-end
-// proof that the LLM annotation path and the deterministic knownFactTables
-// path coexist through the SAME unchanged Run entry point (see
-// factsource.go's doc comment): SetFactTable is the only thing that
-// changes between this test and run_test.go's
-// TestRun_Success_VulnerableFindsLocations, and Run's signature, inputs,
-// and control flow are otherwise identical.
+// Explicit annotation input and shipped fixtures share Run without a mutable
+// registry or hidden dependency on another request's selected revision.
 func TestRun_UsesLLMRegisteredTableAndDisclosesProvenance(t *testing.T) {
-	t.Cleanup(ResetFactTables)
 
 	repo, commit := localRepo(t)
-	SetFactTable(repo, FactTable{
+	table := FactTable{
 		ClaimProducers:      []ClaimProducerFact{{Function: "shdr_load_pub_key", Role: "security_version"}},
 		RollbackFields:      []string{"version"},
 		ProducedStructs:     []string{"shdr_pub_key"},
 		RollbackAuthorities: []RollbackAuthorityFact{{Function: "check_update_version", Kind: "state_restore_acceptance"}},
-	})
+	}
 
 	eng := &fakeEngine{available: true}
 	req := Request{
 		RunDir: t.TempDir(), Repository: repo, Commit: commit,
 		Operation: OperationRollbackVersionPropagation, QueryPackDir: checkedInQueryPackDir(t),
 	}
+	req.FactTable = NewFactTableInput(repo, commit, table, "llm_annotated")
 	fact, err := Run(context.Background(), eng, newTestDB(eng), req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -52,10 +47,9 @@ func TestRun_UsesLLMRegisteredTableAndDisclosesProvenance(t *testing.T) {
 }
 
 // TestRun_FallsBackToDeterministicFixtureWhenNoLLMTableRegistered proves the
-// other half of "both must coexist": absent any SetFactTable call, Run
+// other half of "both must coexist": absent explicit annotation input, Run
 // behaves exactly as the pre-existing deterministic skeleton did.
 func TestRun_FallsBackToDeterministicFixtureWhenNoLLMTableRegistered(t *testing.T) {
-	t.Cleanup(ResetFactTables)
 
 	repo, commit := localRepo(t)
 	withTestFactTable(t, repo, FactTable{

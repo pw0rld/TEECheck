@@ -7,13 +7,15 @@ import (
 )
 
 type Manifest struct {
-	CoverageStatus string `json:"coverage_status,omitempty"`
-	SchemaVersion  string `json:"schema_version"`
-	RunID          string `json:"run_id"`
-	RepoURL        string `json:"repo_url"`
-	LocalPath      string `json:"local_path"`
-	Commit         string `json:"commit"`
-	Focus          string `json:"focus"`
+	ExpectedStages  []string `json:"expected_stages,omitempty"`
+	SourceScopeMode string   `json:"source_scope_mode,omitempty"`
+	CoverageStatus  string   `json:"coverage_status,omitempty"`
+	SchemaVersion   string   `json:"schema_version"`
+	RunID           string   `json:"run_id"`
+	RepoURL         string   `json:"repo_url"`
+	LocalPath       string   `json:"local_path"`
+	Commit          string   `json:"commit"`
+	Focus           string   `json:"focus"`
 	// Hint is the free-text concern the caller supplied ("I suspect the TA
 	// loading path"). It is recorded here, not only passed to the planner,
 	// because a run's result cannot be read without knowing what the run was
@@ -183,6 +185,10 @@ type Findings struct {
 }
 
 type FindingItem struct {
+	Origin                  string `json:"origin,omitempty"`
+	InvariantID             string `json:"invariant_id,omitempty"`
+	InvariantDefinitionHash string `json:"invariant_definition_hash,omitempty"`
+	VerificationBasis       string `json:"verification_basis,omitempty"`
 	// RelatedTWEs carries explicit weakness classes independently of an opaque finding identifier.
 	RelatedTWEs []string          `json:"related_twes,omitempty"`
 	FindingID   string            `json:"finding_id"`
@@ -229,21 +235,23 @@ type KnowledgeHint struct {
 }
 
 type CasePack struct {
-	SchemaVersion       string          `json:"schema_version"`
-	CaseID              string          `json:"case_id"`
-	HotspotID           string          `json:"hotspot_id"`
-	Focus               string          `json:"focus"`
-	Category            string          `json:"category"`
-	Priority            string          `json:"priority"`
-	TargetFiles         []string        `json:"target_files,omitempty"`
-	TargetSymbols       []string        `json:"target_symbols,omitempty"`
-	WhySelected         []string        `json:"why_selected,omitempty"`
-	ToolFacts           []string        `json:"tool_facts,omitempty"`
-	GraphFacts          []string        `json:"graph_facts,omitempty"`
-	Snippets            []PromptSnippet `json:"snippets,omitempty"`
-	ExpectedObligations []string        `json:"expected_obligations,omitempty"`
-	OpenQuestions       []string        `json:"open_questions,omitempty"`
-	KnowledgeHints      []KnowledgeHint `json:"knowledge_hints,omitempty"`
+	ContractRequired    bool              `json:"contract_required,omitempty"`
+	CaseInvariants      []CaseInvariantV2 `json:"case_invariants,omitempty"`
+	SchemaVersion       string            `json:"schema_version"`
+	CaseID              string            `json:"case_id"`
+	HotspotID           string            `json:"hotspot_id"`
+	Focus               string            `json:"focus"`
+	Category            string            `json:"category"`
+	Priority            string            `json:"priority"`
+	TargetFiles         []string          `json:"target_files,omitempty"`
+	TargetSymbols       []string          `json:"target_symbols,omitempty"`
+	WhySelected         []string          `json:"why_selected,omitempty"`
+	ToolFacts           []string          `json:"tool_facts,omitempty"`
+	GraphFacts          []string          `json:"graph_facts,omitempty"`
+	Snippets            []PromptSnippet   `json:"snippets,omitempty"`
+	ExpectedObligations []string          `json:"expected_obligations,omitempty"`
+	OpenQuestions       []string          `json:"open_questions,omitempty"`
+	KnowledgeHints      []KnowledgeHint   `json:"knowledge_hints,omitempty"`
 
 	// The fields below are additive (PR-06, §24 "Case Pack 修改") — a Case
 	// Pack produced from a TWEInvestigation carries the relevant slice of
@@ -300,13 +308,14 @@ type CasePack struct {
 }
 
 type Hypothesis struct {
-	SchemaVersion      string   `json:"schema_version"`
-	CaseID             string   `json:"case_id"`
-	AgentID            string   `json:"agent_id"`
-	Title              string   `json:"title"`
-	Summary            string   `json:"summary"`
-	SuspectedIssue     string   `json:"suspected_issue"`
-	MissingObligations []string `json:"missing_obligations,omitempty"`
+	ContractReviews    []ContractReview `json:"contract_reviews,omitempty"`
+	SchemaVersion      string           `json:"schema_version"`
+	CaseID             string           `json:"case_id"`
+	AgentID            string           `json:"agent_id"`
+	Title              string           `json:"title"`
+	Summary            string           `json:"summary"`
+	SuspectedIssue     string           `json:"suspected_issue"`
+	MissingObligations []string         `json:"missing_obligations,omitempty"`
 	// SupportingFacts holds the validated free-text claims —
 	// the Text of every CitedFact whose citations all resolved
 	// against the live repo. Legacy hypotheses (pre-v1.1.1) used
@@ -361,15 +370,16 @@ type Hypothesis struct {
 }
 
 type Challenge struct {
-	SchemaVersion      string   `json:"schema_version"`
-	CaseID             string   `json:"case_id"`
-	AgentID            string   `json:"agent_id"`
-	ExploitNarrative   string   `json:"exploit_narrative"`
-	CounterArguments   []string `json:"counter_arguments,omitempty"`
-	RemainingQuestions []string `json:"remaining_questions,omitempty"`
-	SuggestedChecks    []string `json:"suggested_checks,omitempty"`
-	Exploitability     string   `json:"exploitability"`
-	ReviewerStance     string   `json:"reviewer_stance"`
+	ContractReviews    []ContractReview `json:"contract_reviews,omitempty"`
+	SchemaVersion      string           `json:"schema_version"`
+	CaseID             string           `json:"case_id"`
+	AgentID            string           `json:"agent_id"`
+	ExploitNarrative   string           `json:"exploit_narrative"`
+	CounterArguments   []string         `json:"counter_arguments,omitempty"`
+	RemainingQuestions []string         `json:"remaining_questions,omitempty"`
+	SuggestedChecks    []string         `json:"suggested_checks,omitempty"`
+	Exploitability     string           `json:"exploitability"`
+	ReviewerStance     string           `json:"reviewer_stance"`
 
 	// The fields below are additive (PR-07, §25): the two-phase
 	// Challenger persists its phase-1 independent judgment (see
@@ -394,11 +404,12 @@ type Challenge struct {
 }
 
 type VerificationMemo struct {
-	SchemaVersion string   `json:"schema_version"`
-	CaseID        string   `json:"case_id"`
-	AgentID       string   `json:"agent_id"`
-	Status        string   `json:"status"`
-	ChecksRun     []string `json:"checks_run,omitempty"`
+	InvariantAssessments []InvariantAssessment `json:"invariant_assessments,omitempty"`
+	SchemaVersion        string                `json:"schema_version"`
+	CaseID               string                `json:"case_id"`
+	AgentID              string                `json:"agent_id"`
+	Status               string                `json:"status"`
+	ChecksRun            []string              `json:"checks_run,omitempty"`
 	// ConfirmedFacts holds the validated free-text claims produced
 	// by the verifier — the Text of every ConfirmedCitedFacts entry
 	// whose citations all resolved against the live repo. Legacy

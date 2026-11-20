@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/invariants"
 )
 
@@ -38,6 +39,7 @@ const CatalogGapTWEID = invariants.CatalogGapTWEID
 // caller's OPINION rather than the final value — see Build's doc comment on
 // why only the standard/variant distinction is taken on the caller's word.
 type WireInvestigation struct {
+	CaseInvariants   []artifacts.CaseInvariantV2       `json:"case_invariants,omitempty"`
 	TWEIDs           []string                          `json:"twe_ids"`
 	InvariantIDs     []string                          `json:"invariant_ids,omitempty"`
 	ArchitectureRefs []string                          `json:"architecture_refs,omitempty"`
@@ -83,6 +85,7 @@ type WireInvestigation struct {
 // repository Build does not have access to). Build only normalizes shape.
 func Build(w WireInvestigation) artifacts.TWEInvestigation {
 	inv := artifacts.TWEInvestigation{
+		CaseInvariants:   contracts.MergeAll(nil, w.CaseInvariants),
 		SchemaVersion:    artifacts.SchemaVersionTWEInvestigationV1,
 		InvariantIDs:     dedupeSorted(w.InvariantIDs),
 		ArchitectureRefs: dedupeSorted(w.ArchitectureRefs),
@@ -204,16 +207,23 @@ func AttackChainComplete(inv artifacts.TWEInvestigation) bool {
 // trustirfacts.Request.factID gives ToolFacts.
 func deriveID(inv artifacts.TWEInvestigation) string {
 	type keyed struct {
-		TWEIDs           []string
-		ArchitectureRefs []string
-		FilledRoles      map[string]artifacts.ToolLocation
-		MissingRoles     []string
+		ContractDefinitions []string `json:"ContractDefinitions,omitempty"`
+		TWEIDs              []string
+		ArchitectureRefs    []string
+		FilledRoles         map[string]artifacts.ToolLocation
+		MissingRoles        []string
 	}
+	keys := make([]string, 0, len(inv.CaseInvariants))
+	for _, c := range inv.CaseInvariants {
+		keys = append(keys, contracts.DefinitionHash(c))
+	}
+	sort.Strings(keys)
 	data, err := json.Marshal(keyed{
-		TWEIDs:           inv.TWEIDs,
-		ArchitectureRefs: inv.ArchitectureRefs,
-		FilledRoles:      inv.FilledRoles,
-		MissingRoles:     inv.MissingRoles,
+		ContractDefinitions: keys,
+		TWEIDs:              inv.TWEIDs,
+		ArchitectureRefs:    inv.ArchitectureRefs,
+		FilledRoles:         inv.FilledRoles,
+		MissingRoles:        inv.MissingRoles,
 	})
 	if err != nil {
 		// keyed is plain data (strings/maps of a struct with only string/int

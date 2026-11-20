@@ -135,6 +135,8 @@ func openLead(
 	lead.SampleIndex = cfg.SampleIndex
 	lead.OpenedAtRound = round
 	lead.LeadID = fmt.Sprintf("lead-s%d-%03d", cfg.SampleIndex, recon.LeadsOpened())
+	identity, _ := json.Marshal(map[string]string{"lead_id": lead.LeadID})
+	res.Output += "\n" + string(identity)
 
 	if cfg.RunDir != "" {
 		if err := appendAuditLead(runfs.AuditLeadsPath(cfg.RunDir), lead); err != nil {

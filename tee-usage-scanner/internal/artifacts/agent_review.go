@@ -27,9 +27,10 @@ package artifacts
 // recorded in KnownLimitations so it isn't silently forgotten once
 // the phase-1-prompt-exclusion test passes.
 type ChallengerIndependentView struct {
-	SchemaVersion string `json:"schema_version"`
-	CaseID        string `json:"case_id"`
-	AgentID       string `json:"agent_id"`
+	ContractReviews []ContractReview `json:"contract_reviews,omitempty"`
+	SchemaVersion   string           `json:"schema_version"`
+	CaseID          string           `json:"case_id"`
+	AgentID         string           `json:"agent_id"`
 
 	// IssuePresent is the phase-1 independent verdict: does the
 	// evidence visible to phase 1 (TWE knowledge + architecture slice

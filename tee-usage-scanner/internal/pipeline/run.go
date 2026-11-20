@@ -61,7 +61,19 @@ func resolveRepoIdentity(cfg config.Config, fetch repofetch.FetchResult) (repoUR
 }
 
 func Run(cfg config.Config) (string, error) {
-	return RunWithClient(cfg, llm.NewClient(cfg))
+	settings, err := cfg.ResolveRoleConfigs()
+	if err != nil {
+		return "", err
+	}
+	if err := config.ValidateResolvedRoles(settings); err != nil {
+		return "", err
+	}
+	clients := RoleClients{
+		Planner: llm.NewClient(settings["planner"]), Expert: llm.NewClient(settings["expert"]),
+		Challenger: llm.NewClient(settings["challenger"]), Verifier: llm.NewClient(settings["verifier"]),
+		Arbiter: llm.NewClient(settings["arbiter"]),
+	}
+	return runWithRoleClients(cfg, clients, settings)
 }
 
 // runStage brackets one pipeline stage with a stage_started /
@@ -96,7 +108,7 @@ func runStage(rec events.Recorder, runID, stage string, fn func() error) error {
 	return err
 }
 
-func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err error) {
+func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map[string]config.Config) (runDir string, err error) {
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -116,10 +128,12 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		return "", fmt.Errorf("ensure knowledge layout: %w", err)
 	}
 	initCfg := cfg
-	initCfg.Command = "init-run"
 	runDir, err = runinit.Run(initCfg, time.Now())
 	if err != nil {
 		return "", fmt.Errorf("init run: %w", err)
+	}
+	if err := runinit.RecordRoleConfigurations(runDir, roleSettings); err != nil {
+		return runDir, fmt.Errorf("record role configuration: %w", err)
 	}
 	plannerBudget := planner.NewDefaultBudget()
 	if err := runinit.RecordPlannerLimits(runDir, artifacts.PlannerLimits{
@@ -182,13 +196,19 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// The planner is deliberately NOT wrapped below — see runL3Planner's
 	// call site.
 	forAgent := func(agentID string) llm.Client {
-		return llm.NewRecordingClient(client, llm.RecordingOptions{
+		role := agentRole(agentID)
+		return llm.NewRecordingClient(clients.forRole(role), llm.RecordingOptions{
 			RunID:   runID,
 			AgentID: agentID,
-			Model:   cfg.LLMModel,
+			Model:   roleSettings[role].LLMModel,
 			Blobs:   blobs,
 			Events:  rec,
 		})
+	}
+	forRoleConfig := func(agentID string) config.Config {
+		roleCfg := withRoleSettings(stageCfg, roleSettings[agentRole(agentID)])
+		roleCfg.AgentID = agentID
+		return roleCfg
 	}
 
 	// stage brackets a pipeline stage with stage_started /
@@ -266,7 +286,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// nothing would print it. runinit writes the manifest before this point
 	// (the checkout needs the run directory to live in), so it is corrected
 	// here rather than pre-computed.
-	if err := recordScannedRoot(runDir, srcRoot); err != nil {
+	if err := recordScannedRoot(runDir, srcRoot, pinned); err != nil {
 		return runDir, fmt.Errorf("record scanned root: %w", err)
 	}
 
@@ -297,12 +317,12 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// proceed from the program map to grounded investigation instead.
 	if cfg.EnableLegacyPrior {
 		if err := stage("architecture", func() error {
-			return architecture.Run(stageCfg, forAgent("architecture-001"))
+			return architecture.Run(forRoleConfig("architecture-001"), forAgent("architecture-001"))
 		}); err != nil {
 			return runDir, fmt.Errorf("architecture: %w", err)
 		}
 		if err := stage("invariants", func() error {
-			return invariants.Run(stageCfg, forAgent("invariants-001"))
+			return invariants.Run(forRoleConfig("invariants-001"), forAgent("invariants-001"))
 		}); err != nil {
 			return runDir, fmt.Errorf("invariants: %w", err)
 		}
@@ -316,7 +336,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(stageCfg, client, codeDB, srcRoot, runDir, rec, blobs, exec)
+		return runL3Planner(forRoleConfig(planner.DefaultPlannerAgentID), clients.forRole("planner"), codeDB, srcRoot, runDir, rec, blobs, exec)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -333,7 +353,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// (stats, replay, review UI) can pattern-match on.
 	stageCfg.AgentID = "expert-001"
 	if err := stage("expert", func() error {
-		return expert.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec, blobs)
+		return expert.RunWithEvents(forRoleConfig(stageCfg.AgentID), forAgent(stageCfg.AgentID), rec, blobs)
 	}); err != nil {
 		return runDir, fmt.Errorf("expert: %w", err)
 	}
@@ -341,7 +361,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	// === Agent 2: Reviewer ===
 	fmt.Println("\n=== Reviewer Agent ===")
 
-	bus := buildPipelineBus(cfg, forAgent)
+	bus := buildPipelineBus(cfg, forAgent, roleSettings)
 	// Refused inter-agent queries become events. Without this the arbiter's
 	// own stated reason for capping a finding at needs_review — "follow-up
 	// queries failed (agents unavailable)" — appears nowhere in the run
@@ -421,13 +441,16 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 
 	stageCfg.AgentID = "challenger-001"
 	if err := stage("challenger", func() error {
-		return challenger.RunWithEvents(stageCfg, forAgent(stageCfg.AgentID), rec)
+		return challenger.RunWithEvents(forRoleConfig(stageCfg.AgentID), forAgent(stageCfg.AgentID), rec)
 	}); err != nil {
 		return runDir, fmt.Errorf("challenger: %w", err)
 	}
 	stageCfg.AgentID = "verifier-001"
+	verifierEngine := codeql.New()
+	verifierEngine.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: stageCfg.AgentID})
+	contractQueries := verifier.NewContractQueryRunner(verifierEngine, codeDB, runDir)
 	if err := stage("verifier", func() error {
-		return verifier.RunWithBusAndEvents(stageCfg, forAgent(stageCfg.AgentID), bus, rec)
+		return verifier.RunWithBusAndQueries(forRoleConfig(stageCfg.AgentID), forAgent(stageCfg.AgentID), bus, rec, contractQueries)
 	}); err != nil {
 		return runDir, fmt.Errorf("verifier: %w", err)
 	}
@@ -436,7 +459,7 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 	fmt.Println("\n=== Auditor Agent ===")
 	stageCfg.AgentID = "arbiter-001"
 	if err := stage("arbiter", func() error {
-		return arbiter.RunWithBus(stageCfg, forAgent(stageCfg.AgentID), bus)
+		return arbiter.RunWithBus(forRoleConfig(stageCfg.AgentID), forAgent(stageCfg.AgentID), bus)
 	}); err != nil {
 		return runDir, fmt.Errorf("arbiter: %w", err)
 	}
@@ -457,22 +480,30 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 // the client each handler should use: a bus handler answering as
 // expert-001 must record its calls under expert-001, not under whichever
 // stage happened to send the query.
-func buildPipelineBus(cfg config.Config, forAgent func(agentID string) llm.Client) *agentbus.Bus {
+func buildPipelineBus(cfg config.Config, forAgent func(agentID string) llm.Client, roleSettings ...map[string]config.Config) *agentbus.Bus {
 	maxRounds := cfg.MaxDialogRounds
 	if maxRounds <= 0 {
 		maxRounds = 3
 	}
 	bus := agentbus.New(maxRounds)
+	temperature := func(role string) float64 {
+		if len(roleSettings) > 0 {
+			if settings, ok := roleSettings[0][role]; ok {
+				return settings.LLMTemp
+			}
+		}
+		return cfg.LLMTemp
+	}
 
 	bus.Register("expert-001", agentbus.NewLLMHandler(forAgent("expert-001"),
 		"You are the Expert Agent in TEECheck. Another agent asks you about your security analysis. Return a JSON object with fields: answer (string), facts (array of strings).",
-		cfg.LLMTemp))
+		temperature("expert")))
 	bus.Register("challenger-001", agentbus.NewLLMHandler(forAgent("challenger-001"),
 		"You are the Challenger Agent in TEECheck. Another agent asks you about your challenge. Return a JSON object with fields: answer (string), facts (array of strings).",
-		cfg.LLMTemp))
+		temperature("challenger")))
 	bus.Register("reviewer-001", agentbus.NewLLMHandler(forAgent("reviewer-001"),
 		"You are the Reviewer Agent in TEECheck. Another agent asks you about your verification. Return a JSON object with fields: answer (string), facts (array of strings).",
-		cfg.LLMTemp))
+		temperature("verifier")))
 
 	return bus
 }

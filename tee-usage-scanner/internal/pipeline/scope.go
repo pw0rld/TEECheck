@@ -85,16 +85,21 @@ func absOrSame(path string) string {
 // stage that resolved a root of its own can call runfs.VerifyScope and fail
 // with a scope error instead of reporting a conclusion about code it never
 // saw.
-func recordScannedRoot(runDir, root string) error {
+func recordScannedRoot(runDir, root string, pinned ...bool) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return err
 	}
 	scope := runfs.BuildScope(manifest.RepoURL, manifest.Commit, root)
-	if manifest.LocalPath == root && manifest.Scope == scope {
+	mode := "local_fallback"
+	if len(pinned) > 0 && pinned[0] {
+		mode = "pinned_checkout"
+	}
+	if manifest.LocalPath == root && manifest.Scope == scope && manifest.SourceScopeMode == mode {
 		return nil
 	}
 	manifest.LocalPath = root
 	manifest.Scope = scope
+	manifest.SourceScopeMode = mode
 	return runfs.WriteJSON(runfs.ManifestPath(runDir), manifest)
 }

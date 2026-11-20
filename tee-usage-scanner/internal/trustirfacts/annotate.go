@@ -7,8 +7,8 @@ package trustirfacts
 // file, LLM) -> resolveAnnotations (resolver.go, deterministic) -> FactTable
 // (facttable.go's existing type, rendered exactly as the deterministic
 // fixture is). AnnotateFactTable is the single entry point that runs all
-// three steps; SetFactTable (factsource.go) is how its result reaches Run
-// without changing Run's frozen signature.
+// three steps; the caller binds its output to repository+commit through
+// NewFactTableInput and supplies it explicitly in Request.
 
 import (
 	"context"
@@ -83,16 +83,8 @@ type AnnotationReport struct {
 // FactTable. Only resolved annotations reach the table; everything else is
 // reported in AnnotationReport.Unresolved, never silently kept (§23.3).
 //
-// This is deliberately NOT wired into Run/RunAndPersist's signature — see
-// factsource.go's doc comment on SetFactTable for how its result reaches
-// Run without changing Run's frozen signature. A caller runs this once per
-// repository (typically against the same tree ensureDatabase clones for the
-// CodeQL database build, before that scratch directory is removed) and, on
-// success with a non-empty table, calls SetFactTable so subsequent Run
-// calls for that repository use it; on any error, or a table with no
-// resolved facts, the caller simply does not call SetFactTable and Run
-// keeps using the deterministic knownFactTables fixture. Both paths coexist
-// by construction — there is no flag this package has to remember to flip.
+// The caller may bind the result with NewFactTableInput and pass it to Run.
+// This function does not register global state or alter another run's table.
 func AnnotateFactTable(ctx context.Context, client llm.Client, registry twe.EnumRegistry, sourceRoot string) (FactTable, AnnotationReport, error) {
 	cand, err := Enumerate(sourceRoot)
 	if err != nil {

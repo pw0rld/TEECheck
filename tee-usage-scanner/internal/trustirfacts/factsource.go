@@ -1,54 +1,40 @@
 package trustirfacts
 
-import "sync"
+import "fmt"
 
-// llmFactTables is the LLM-annotation pipeline's output registry, checked
-// by factTableFor (facttable.go) BEFORE the deterministic knownFactTables
-// fixture. This is how the annotation pipeline (annotate.go, resolver.go)
-// hands its result to the unchanged Run entry point without adding a field
-// to Request or a parameter to Run — the parallel PR-06 agent's
-// Run/RunAndPersist/Request signatures stay exactly as specified (see this
-// package's doc.go).
-//
-// Both sources coexist by construction, per the task's explicit "keep the
-// deterministic path" requirement:
-//
-//	table, report, err := trustirfacts.AnnotateFactTable(ctx, client, registry, sourceRoot)
-//	if err == nil && !table.Empty() {
-//	    trustirfacts.SetFactTable(repository, table) // LLM path now wins for repository
-//	}
-//	fact, err := trustirfacts.Run(ctx, eng, req)
-//
-// A caller that never calls AnnotateFactTable — no LLM configured,
-// offline/CI, or the pipeline produced no resolved facts and the caller
-// chose not to register an empty table — leaves llmFactTables with no entry
-// for that repository, and factTableFor falls through to knownFactTables
-// exactly as the deterministic skeleton did before this file existed.
-var (
-	llmFactTablesMu sync.RWMutex
-	llmFactTables   = map[string]FactTable{}
-)
-
-// SetFactTable registers table as the fact table Run should use for
-// repository, taking priority over any knownFactTables entry for the same
-// repository. Safe for concurrent use.
-func SetFactTable(repository string, table FactTable) {
-	llmFactTablesMu.Lock()
-	defer llmFactTablesMu.Unlock()
-	llmFactTables[normalizeRepo(repository)] = table
+// FactTableInput binds explicit, immutable annotation input to one revision.
+// No process-global annotation registry is used.
+type FactTableInput struct {
+	Repository string
+	Commit     string
+	Source     string
+	Table      FactTable
 }
 
-// ResetFactTables clears every LLM-registered fact table. Tests use this to
-// keep the package-level registry from leaking state across test cases.
-func ResetFactTables() {
-	llmFactTablesMu.Lock()
-	defer llmFactTablesMu.Unlock()
-	llmFactTables = map[string]FactTable{}
+func NewFactTableInput(repository, commit string, table FactTable, source string) *FactTableInput {
+	return &FactTableInput{Repository: repository, Commit: commit, Source: source, Table: cloneFactTable(table)}
 }
 
-func lookupLLMFactTable(key string) (FactTable, bool) {
-	llmFactTablesMu.RLock()
-	defer llmFactTablesMu.RUnlock()
-	t, ok := llmFactTables[key]
-	return t, ok
+func cloneFactTable(table FactTable) FactTable {
+	return FactTable{
+		ClaimProducers:      append([]ClaimProducerFact(nil), table.ClaimProducers...),
+		RollbackFields:      append([]string(nil), table.RollbackFields...),
+		ProducedStructs:     append([]string(nil), table.ProducedStructs...),
+		RollbackAuthorities: append([]RollbackAuthorityFact(nil), table.RollbackAuthorities...),
+	}
+}
+
+func (req Request) resolveFactTable() (FactTable, string, bool, error) {
+	if req.FactTable != nil {
+		in := req.FactTable
+		if normalizeRepo(in.Repository) != normalizeRepo(req.Repository) || in.Commit != req.Commit {
+			return FactTable{}, "", false, fmt.Errorf("fact table is bound to a different repository or commit")
+		}
+		if in.Source != "llm_annotated" && in.Source != "shipped_fixture" {
+			return FactTable{}, "", false, fmt.Errorf("fact table source must be llm_annotated or shipped_fixture")
+		}
+		return cloneFactTable(in.Table), in.Source, true, nil
+	}
+	table, ok := factTableFor(req.Repository)
+	return table, "shipped_fixture", ok, nil
 }

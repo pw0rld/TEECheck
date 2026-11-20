@@ -36,6 +36,8 @@ var embedded embed.FS
 type Name string
 
 const (
+	CaseInvariantV2        Name = "case-invariant.v2"
+	InvariantAssessmentV1  Name = "invariant-assessment.v1"
 	ArchitectureV1         Name = "architecture.v1"
 	RepoFactsV1            Name = "repo-facts.v1"
 	ProjectMapV1           Name = "project-map.v1"
@@ -52,6 +54,7 @@ const (
 // against. Keep in sync with the schema files under schemas/ — a mismatch is
 // caught by TestEmbeddedSchemasMatchCanonical.
 var All = []Name{
+	CaseInvariantV2, InvariantAssessmentV1,
 	ArchitectureV1,
 	RepoFactsV1,
 	ProjectMapV1,

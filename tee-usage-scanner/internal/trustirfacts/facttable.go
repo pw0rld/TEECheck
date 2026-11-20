@@ -23,18 +23,10 @@ type RollbackAuthorityFact struct {
 	Kind     string
 }
 
-// FactTable is a deterministic, hand-populated set of
-// codeql/trustir/cpp/common/GeneratedTrustFacts.qll clauses for one case.
-//
-// This is NOT the output of an LLM annotation → resolver pipeline — that
-// pipeline is explicitly deferred (§23.2). It is the same kind of fixture
-// docs/design/C-fact-table-spike.md hand-wrote to prove the consumption end
-// works on C: entity IDENTITY only (which function, which field, which
-// call), no vulnerability logic. The vuln/fixed differential is decided by
-// whether the named function structurally writes the named field — that
-// judgment lives in the .ql thin shell, not here, and the table is expected
-// to be byte-identical whether it is rendered against the vulnerable or the
-// fixed revision (the spike proved exactly this for CVE-2026-44362).
+// FactTable holds the named entities used to parameterize a structural query.
+// It can come from an explicit scoped annotation input or a shipped regression
+// fixture. Entity selection and the query's structural conclusions remain
+// separately recorded through the table digest and ToolFact provenance.
 type FactTable struct {
 	ClaimProducers      []ClaimProducerFact
 	RollbackFields      []string
@@ -168,29 +160,10 @@ var knownFactTables = map[string]FactTable{
 // internal path.
 func FactTableFor(repository string) (FactTable, bool) { return factTableFor(repository) }
 
-// factTableFor looks up the fact table for a repository: an LLM-annotated
-// table registered via SetFactTable (factsource.go) takes priority, falling
-// through to the deterministic knownFactTables fixture when none is
-// registered. ok is false when neither source has a table for the
-// repository — Run maps that to StatusUnsupported. See factsource.go's doc
-// comment for why the LLM and deterministic paths are wired this way
-// instead of as a parameter on Run.
+// factTableFor copies a shipped fixture; dynamic tables enter via Request.
 func factTableFor(repository string) (FactTable, bool) {
-	key := normalizeRepo(repository)
-	if t, ok := lookupLLMFactTable(key); ok {
-		return t, true
-	}
-	t, ok := knownFactTables[key]
-	return t, ok
-}
-
-// isLLMFactTable reports whether repository's table (if any) came from the
-// LLM annotation pipeline rather than the deterministic fixture. Run uses
-// this only to disclose provenance in ToolFact.CoverageGaps — it plays no
-// part in factTableFor's own lookup order above.
-func isLLMFactTable(repository string) bool {
-	_, ok := lookupLLMFactTable(normalizeRepo(repository))
-	return ok
+	table, ok := knownFactTables[normalizeRepo(repository)]
+	return cloneFactTable(table), ok
 }
 
 // normalizeRepo delegates to codedb, which derives database directory names

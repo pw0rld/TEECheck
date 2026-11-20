@@ -60,6 +60,8 @@ Default budgets distinguish reconnaissance, investigation, and finalization:
 ceiling, and a 20,000-token finalization reserve within that ceiling. The
 planner also limits rounds and elapsed time. `--samples N` repeats planner
 passes with an avoid-list, then reviews the merged candidates once.
+It measures additional exploration coverage. Use separate complete runs with
+`--samples 1` to measure repeatability.
 
 `tree_sitter_outline` is a compatibility action name: its implementation now
 uses text heuristics. Parsed program relationships come from CodeQL. The index
@@ -97,6 +99,56 @@ audit leads, and writes the unreviewed scope to its round log and evidence bundl
 The run stops without automatically altering the rejected request or sending it
 to another review role. Provider response details remain available for diagnosis.
 
+## Case contracts and verification
+
+Pass B can emit `done.case_invariants`, or attach `case_invariants` to an
+investigation. Every Planner contract must refer to an AuditLead from the same
+sample. The scanner binds its subjects to current source definitions and saves
+line ranges, content hashes, the logical property and a separate verification
+plan. Contracts are also available to findings produced by the deterministic
+lane. Unsupported properties remain explicit; a missing query does not prove
+safety or a violation.
+
+Expert and Challenger independently review each contract. Verifier produces one
+`InvariantAssessment` per contract, separating `satisfied`, `violated`, and
+`unresolved` from the original obligation. Typed contract arbitration applies
+mechanical gates to those assessments without another free-form LLM verdict:
+
+- `confirmed_candidate` requires a validated violation and a complete,
+  independently corroborated chain of evidence.
+- `likely_issue` requires either a validated local violation with independent
+  support, or an explicitly unimplemented verification query with independently
+  corroborated source witnesses and no outstanding counter-evidence.
+- Tool errors, unproved preconditions, conflicting evidence, and unformalized
+  new candidates remain `needs_review`.
+
+The first registered contract query is
+`cpp.contract.direct_struct_field_assignment`. It checks only whether one exact
+function definition contains a direct `Assignment` AST node to a named field of
+a named struct. Initializers, helper calls, indirect writes and overloaded
+assignment operators do not satisfy that syntactic property; compound assignment
+nodes do. The contract kind is `direct_struct_field_assignment`, with exactly
+one subject, destination `Struct.field`, one target field, and query parameters
+`type` and `field`. Stronger value-propagation, authority, dominance or all-path
+properties cannot be verified by substituting this query.
+
+Recheck a frozen logical contract against a separate local checkout:
+
+```bash
+go run ./cmd/teecheck verify-contract \
+  --contract /path/to/original-contract.json \
+  --repo-root /path/to/fixed-checkout --commit FIXED_REVISION \
+  --output-dir /path/to/contract-rechecks
+```
+
+This strips the old source anchors, witnesses and lead before binding the new
+revision. Results go to a fresh `verify-*` directory and never feed the knowledge
+store or autonomous discovery. Git checkouts must match the requested revision
+and have no tracked modifications. Non-Git fixtures are labeled `local_partial`.
+Without CodeQL or a configured Verifier model, the result may remain `unresolved`;
+the command does not convert unavailable verification into success. A quiet
+independent scan of a fixed version is distinct from a `satisfied` contract recheck.
+
 ## Commands and controls
 
 | Command | Purpose |
@@ -104,6 +156,7 @@ to another review role. Provider response details remain available for diagnosis
 | `run TARGET` / `plan TARGET` | Full audit pipeline |
 | `report --run-dir DIR` | Render complete findings, packets, and coverage |
 | `validate-run --run-dir DIR` | Offline artifact/sequence/hash/schema validation |
+| `verify-contract --contract FILE --repo-root DIR --commit REV` | Isolated logical-contract recheck |
 | `stats DIR` | Recorded run metrics |
 | `review --run-dir DIR` | Record human judgments |
 | `curator --run-dir DIR` | Curate feedback into the knowledge layer |
@@ -118,7 +171,7 @@ Common run controls:
 | --- | --- |
 | `--hint TEXT` | Prioritize a concern without changing source scope |
 | `--max-cases N` | Bound the number of reviewed case packs |
-| `--samples N` | Independent planner passes; default 1 |
+| `--samples N` | Planner passes with an avoid-list; default 1 |
 | `--output-dir DIR`, `--run-id ID` | Choose artifact destination and identity |
 | `--knowledge-root DIR` | Select the knowledge tree |
 | `--enable-legacy-prior` | Opt into old pre-investigation model stages |
@@ -127,6 +180,7 @@ Common run controls:
 | `--llm-transport chat_completions\|responses` | OpenAI transport |
 | `--llm-reasoning-effort` | Reasoning effort for Responses |
 | `--llm-max-tokens` | Per-call output-token limit |
+| `--role-config FILE` | Startup model profiles per role; see [configuration](docs/ROLE_MODELS.md) |
 
 Credentials and provider settings also accept `TEECHECK_LLM_*` environment
 variables. `--max-hotspots` survives in the parser for old scripts but no longer
@@ -137,14 +191,13 @@ selects audit targets.
 ```text
 runs/<run-id>/
   00_manifest.json
-  01_profile/project_profile.json
   01_context/                       # repo facts, project map, TWE context
   02_tool_facts/                    # persisted deterministic evidence
   03_cases/
-  04_planner/                       # rounds, leads, coverage, evidence bundle
+  04_planner/                       # rounds, leads, coverage, contracts, evidence bundle
   04_expert/
   05_challenger/
-  06_verifier/
+  06_verifier/                      # per-contract assessments and registered query records
   07_arbiter/findings.json
   07_arbiter/packets/
   08_report/REPORT.md                # separate report command
@@ -164,6 +217,10 @@ cannot remove findings or prevent the factual report from being written.
 pairs and a deterministic evaluator. It matches target location and TWE
 metadata, reports incidental findings separately, and exposes an empty
 in-scope track instead of presenting it as a valid capability metric.
+Each evaluation attempt has a fresh directory, an exit record and a repeated
+`validate-run` gate. Invalid runs are `ERROR`; empty results with incomplete
+reconnaissance/index coverage are `INCOMPLETE_COVERAGE`, not true negatives.
+Reports distinguish Planner, deterministic and combined finding origins.
 
 `cmd/twescan` is a separate experimental, LLM-assisted query-generation entry
 point; it is not the full audit pipeline and its supported families are limited.

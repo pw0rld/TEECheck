@@ -111,7 +111,9 @@ func deterministicFactCases(ctx context.Context, eng trustirfacts.Engine, db cod
 			}
 		}
 		snippets := evidenceSnippetsFn(repoRoot, funcIndex, fact, tablePtr)
-		packs = append(packs, factCasePack(fact, factPath, op, focus, snippets))
+		pack := factCasePack(fact, factPath, op, focus, snippets)
+		pack = bindDeterministicContracts(pack, fact, factPath, tablePtr, runDir, repoRoot, repoURL, commit)
+		packs = append(packs, pack)
 	}
 	return packs, nil
 }

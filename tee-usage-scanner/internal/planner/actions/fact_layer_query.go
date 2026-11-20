@@ -98,7 +98,8 @@ func capFindings(findings []artifacts.ToolFinding) ([]artifacts.ToolFinding, boo
 // trustirfacts.Engine, and registers a pointer to one instance holding
 // its own QueryPackDir.
 type FactLayerQueryHandler struct {
-	Engine trustirfacts.Engine
+	Engine    trustirfacts.Engine
+	FactTable *trustirfacts.FactTableInput
 	// DB owns the run's CodeQL database. It is the same value the program
 	// index stage holds, so a planner round that needs a fact finds the
 	// database already built rather than building a second one.
@@ -146,6 +147,7 @@ func (h *FactLayerQueryHandler) Run(ctx context.Context, req ActionRequest) Acti
 	// the checkout, and the pipeline acquires it before the first stage, so
 	// by the time a planner round asks for a fact the tree is already there.
 	fact, path, err := trustirfacts.RunAndPersist(ctx, h.Engine, h.DB, trustirfacts.Request{
+		FactTable:    h.FactTable,
 		RunDir:       req.RunDir,
 		Repository:   req.Repository,
 		Commit:       req.Commit,

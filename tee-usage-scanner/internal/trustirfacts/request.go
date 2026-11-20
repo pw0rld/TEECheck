@@ -97,11 +97,14 @@ const DefaultQueryPackDir = "codeql/trustir/cpp"
 // pack, and the persisted ToolFact all land as explicit run artifacts (§23.3
 // — the database is "not a cache side effect").
 type Request struct {
-	RunDir       string
-	Repository   string
-	Commit       string
-	Operation    Operation
-	QueryPackDir string
+	FactTable     *FactTableInput
+	queryPackHash string
+	toolVersion   string
+	RunDir        string
+	Repository    string
+	Commit        string
+	Operation     Operation
+	QueryPackDir  string
 
 	// ExtraPATH is prepended to PATH for the database build, for parity with
 	// codeql.CreateDBOptions.ExtraPATH. The C/C++ extractor under
@@ -131,26 +134,34 @@ func (r Request) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("trustirfacts: request missing required field(s): %s", strings.Join(missing, ", "))
 	}
-	return nil
+	_, _, _, err := r.resolveFactTable()
+	return err
 }
 
-// argumentsSHA256 hashes the parts of the request that determine the
-// query's outcome (repository, commit, operation — the fact table itself is
-// a pure function of Repository in this slice, see facttable.go). It backs
-// both ToolFact.ArgumentsSHA256 (§9.6/§6.4) and FactID, and is the cache key
-// §23.3's acceptance criterion ("same repo+commit+operation+args → cache
-// hit") is tested against.
+// argumentsSHA256 identifies the query inputs, including the scoped fact-table
+// provenance and content of the query pack when available. Run adds the result
+// digest to FactID separately, allowing failed and successful executions to
+// remain independently reviewable.
 func (r Request) argumentsSHA256() string {
 	// A stable, minimal JSON encoding rather than fmt.Sprintf: field
 	// ordering is fixed by struct order, and this format is easy to extend
 	// (e.g. a future `scope` field) without silently changing existing
 	// hashes for requests that do not use the new field.
 	type hashed struct {
-		Repository string `json:"repository"`
-		Commit     string `json:"commit"`
-		Operation  string `json:"operation"`
+		Repository      string `json:"repository"`
+		Commit          string `json:"commit"`
+		Operation       string `json:"operation"`
+		FactTableSHA256 string `json:"fact_table_sha256,omitempty"`
+		FactSource      string `json:"fact_source,omitempty"`
+		QueryPackSHA256 string `json:"query_pack_sha256,omitempty"`
+		ToolVersion     string `json:"tool_version,omitempty"`
 	}
-	data, err := json.Marshal(hashed{Repository: r.Repository, Commit: r.Commit, Operation: string(r.Operation)})
+	table, source, ok, _ := r.resolveFactTable()
+	var digest string
+	if ok {
+		digest, _ = tableDigest(table)
+	}
+	data, err := json.Marshal(hashed{Repository: normalizeRepo(r.Repository), Commit: r.Commit, Operation: string(r.Operation), FactTableSHA256: digest, FactSource: source, QueryPackSHA256: r.queryPackHash, ToolVersion: r.toolVersion})
 	if err != nil {
 		// json.Marshal on this struct of plain strings cannot fail.
 		panic(fmt.Sprintf("trustirfacts: marshal hash input: %v", err))
