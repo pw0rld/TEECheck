@@ -37,23 +37,26 @@ type caseSpec struct {
 }
 
 type oracleSpec struct {
-	Schema int    `json:"schema"`
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	FixtureStatus       string `json:"fixture_status,omitempty"`
+	FixtureReviewReason string `json:"fixture_review_reason,omitempty"`
+	Schema              int    `json:"schema"`
+	ID                  string `json:"id"`
+	Status              string `json:"status"`
 	// FixedRevision and Files live on the oracle rather than the case: they
 	// are ground truth derived from the fix commit (the revision it landed in
 	// and the exact pre/post file hashes), not case metadata. See the
 	// "tighten case/oracle fields" migration, which moved them here.
-	FixedRevision    string     `json:"fixed_revision"`
-	Files            []fileSpec `json:"files"`
-	Expected         string     `json:"expected"`
-	Weakness         string     `json:"weakness"`
-	PrimaryFile      string     `json:"primary_file"`
+	FixedRevision string     `json:"fixed_revision"`
+	Files         []fileSpec `json:"files"`
+	Expected      string     `json:"expected"`
+	Weakness      string     `json:"weakness"`
+	PrimaryFile   string     `json:"primary_file"`
 	// PrimaryLine, when > 0, pins the exploitable line so the matcher can
 	// enforce line-level agreement (the Juliet refinement). Optional: oracles
 	// that omit it are scored on file + family alone.
-	PrimaryLine     int    `json:"primary_line,omitempty"`
-	PrimaryFunction string `json:"primary_function"`
+	PrimaryLine      int      `json:"primary_line,omitempty"`
+	PrimaryFunction  string   `json:"primary_function"`
+	PrimarySymbols   []string `json:"primary_symbols,omitempty"`
 	MatchTerms       []string `json:"match_terms"`
 	RequiredEvidence []string `json:"required_evidence"`
 	FixedEvidence    []string `json:"fixed_evidence"`
@@ -110,6 +113,7 @@ func main() {
 	list := flag.Bool("list", false, "list valid case identifiers")
 	resultsDir := flag.String("results", "results", "scanner results and score reports directory")
 	scannerCommand := flag.String("scanner-command", "", "command template with {input}, {run_dir}, {case}, and {variant} placeholders")
+	requireInScope := flag.Bool("require-in-scope", false, "reject scoring/evaluation when no reviewed in-scope case is selected")
 	timeout := flag.Duration("timeout", 30*time.Minute, "timeout for each scanner invocation")
 	flag.Parse()
 
@@ -144,16 +148,25 @@ func main() {
 			continue
 		}
 		validCases = append(validCases, loaded)
-		if *list {
+		if *list && loaded.executable() {
 			fmt.Println(name)
 		} else if *mode == "validate" {
-			fmt.Printf("PASS %s\n", name)
+			if loaded.executable() {
+				fmt.Printf("PASS %s\n", name)
+			} else {
+				fmt.Printf("REVIEW %s: %s\n", name, loaded.Oracle.FixtureReviewReason)
+			}
 		}
 	}
 	if failed {
 		os.Exit(1)
 	}
 
+	if *mode != "validate" && *requireInScope {
+		if err := ensureInScope(validCases); err != nil {
+			fatal(err)
+		}
+	}
 	switch *mode {
 	case "validate":
 		return
@@ -209,8 +222,18 @@ func validateCase(dir string) error {
 	if len(o.Files) == 0 {
 		return errors.New("no fixture files")
 	}
+	if o.FixtureStatus != "" && o.FixtureStatus != "ready" && o.FixtureStatus != "requires_review" {
+		return fmt.Errorf("unknown fixture_status %q", o.FixtureStatus)
+	}
 	if o.Weakness == "" || o.PrimaryFile == "" {
 		return errors.New("oracle ground truth is incomplete")
+	}
+	// A reviewed scope decision is required even for out-of-scope cases.
+	if strings.TrimSpace(o.ScopeReason) == "" {
+		return errors.New("scope_reason is required")
+	}
+	if o.PrimaryLine <= 0 && len(o.PrimarySymbols) == 0 {
+		return errors.New("primary_line or primary_symbols is required")
 	}
 	// twe_family is optional: the source-backed corpus carries only fields
 	// backed by the CVE record or the fix commit, and a TWE classification is
@@ -291,6 +314,24 @@ func validateCase(dir string) error {
 	}
 	if !seen[o.PrimaryFile] {
 		return fmt.Errorf("oracle primary file %q is absent from fixture", o.PrimaryFile)
+	}
+	primary, err := os.ReadFile(filepath.Join(dir, "vulnerable", o.PrimaryFile))
+	if err != nil {
+		return err
+	}
+	if o.PrimaryLine < 0 || o.PrimaryLine > len(strings.Split(strings.TrimSuffix(string(primary), "\n"), "\n")) {
+		return errors.New("primary_line is outside the vulnerable source")
+	}
+	for _, symbol := range o.PrimarySymbols {
+		if strings.TrimSpace(symbol) == "" || !strings.Contains(string(primary), symbol) {
+			return fmt.Errorf("primary symbol %q is absent from vulnerable source", symbol)
+		}
+	}
+	if o.FixtureStatus != "requires_review" {
+		return validateFixturePatch(dir, o)
+	}
+	if strings.TrimSpace(o.FixtureReviewReason) == "" {
+		return errors.New("requires_review fixture needs fixture_review_reason")
 	}
 	return nil
 }

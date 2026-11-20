@@ -365,16 +365,17 @@ citation-validated. Validated items are the basis for any
 			}
 			sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
 			item := artifacts.FindingItem{
-				FindingID:  pack.CaseID,
-				SliceID:    pack.CaseID,
-				Status:     parsed.Status,
-				Severity:   parsed.Severity,
-				Confidence: parsed.Confidence,
-				Files:      pack.TargetFiles,
-				Locations:  findingLocations(caseCtx),
-				Summary:    parsed.Summary,
-				Evidence:   evidence,
-				Sections:   &sections,
+				FindingID:   pack.CaseID,
+				RelatedTWEs: append([]string(nil), pack.RelatedTWEs...),
+				SliceID:     pack.CaseID,
+				Status:      parsed.Status,
+				Severity:    parsed.Severity,
+				Confidence:  parsed.Confidence,
+				Files:       pack.TargetFiles,
+				Locations:   reviewedFindingLocations(caseCtx, memo),
+				Summary:     parsed.Summary,
+				Evidence:    evidence,
+				Sections:    &sections,
 			}
 			// §25 mechanical gate applies to the LLM path too: a
 			// model that ignores the prompt's CRITICAL RULE and
@@ -422,17 +423,18 @@ citation-validated. Validated items are the basis for any
 
 	sections := buildSections(pack, hypothesis, challenge, memo, caseCtx, independent)
 	item := artifacts.FindingItem{
-		FindingID:  pack.CaseID,
-		SliceID:    pack.CaseID,
-		Status:     "needs_review",
-		Severity:   severityForCategory(pack.Category),
-		Confidence: "low",
-		Files:      pack.TargetFiles,
+		FindingID:   pack.CaseID,
+		RelatedTWEs: append([]string(nil), pack.RelatedTWEs...),
+		SliceID:     pack.CaseID,
+		Status:      "needs_review",
+		Severity:    severityForCategory(pack.Category),
+		Confidence:  "low",
+		Files:       pack.TargetFiles,
 		// Deterministic evidence does not depend on the dialog reaching a
 		// judgment: the fact layer already resolved these lines, and a
 		// round-limit finding is exactly the case a reader most needs to be
 		// able to jump straight into.
-		Locations: findingLocations(caseCtx),
+		Locations: reviewedFindingLocations(caseCtx, memo),
 		Summary:   "Reached maximum dialog rounds without final arbiter judgment",
 		Sections:  &sections,
 	}

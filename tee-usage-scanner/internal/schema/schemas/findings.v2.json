@@ -23,7 +23,8 @@
       "required": ["path", "start_line"],
       "properties": {
         "path": {"type": "string", "minLength": 1},
-        "start_line": {"type": "integer", "minimum": 1}
+        "start_line": {"type": "integer", "minimum": 1},
+        "symbol": {"type": "string"}
       },
       "additionalProperties": false
     },
@@ -65,6 +66,7 @@
         "severity": {"enum": ["high", "medium", "low"]},
         "confidence": {"enum": ["high", "medium", "low"]},
         "files": {"$ref": "#/$defs/strings"},
+        "related_twes": {"$ref": "#/$defs/strings"},
         "locations": {
           "type": "array",
           "items": {"$ref": "#/$defs/location"}

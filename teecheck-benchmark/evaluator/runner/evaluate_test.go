@@ -39,6 +39,7 @@ func TestBuildScorePairedResults(t *testing.T) {
 			FindingID: findingIDFor(t, c.Oracle),
 			Status:    "confirmed_candidate",
 			Files:     []string{c.Oracle.PrimaryFile},
+			Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 			Summary:   "weakness on the oracle file, tagged with the oracle family",
 		}})
 		writeFindings(t, results, c.Case.ID, "fixed", nil)
@@ -64,6 +65,7 @@ func TestBuildScoreReportsFalseNegativeAndFalsePositive(t *testing.T) {
 		FindingID: findingIDFor(t, c.Oracle),
 		Status:    "confirmed_candidate",
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "same weakness class reported on the fixed variant",
 	}})
 	report, err := buildScore(cases, results)
@@ -106,6 +108,7 @@ func TestMatchFindingRequiresFamily(t *testing.T) {
 		Status:    "confirmed_candidate",
 		FindingID: "finding-1",
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "issue in the same file but no family tag",
 	}); matched {
 		t.Fatal("file-only (untagged) finding must not satisfy an in-scope oracle")
@@ -119,6 +122,7 @@ func TestMatchFindingRequiresFamily(t *testing.T) {
 		Status:    "confirmed_candidate",
 		FindingID: "TWE-" + abbrevForFamily(t, wrong) + "-001:x",
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "right file, wrong weakness class",
 	}); matched {
 		t.Fatalf("family %q on a %q oracle must not match", wrong, c.Oracle.TWEFamily)
@@ -141,6 +145,7 @@ func TestMatchFindingAcceptsFileAndFamily(t *testing.T) {
 		Status:    "confirmed_candidate",
 		FindingID: findingIDFor(t, c.Oracle),
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "weakness of the oracle class on the oracle file",
 	})
 	if !matched {
@@ -167,12 +172,14 @@ func TestMatchFindingLineRefinement(t *testing.T) {
 		Status:    "confirmed_candidate",
 		FindingID: findingIDFor(t, c.Oracle),
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "weakness of the oracle class on the oracle file",
 	}
 
 	// No primary_line: location is ignored, file+family matches.
 	oNoLine := c.Oracle
 	oNoLine.PrimaryLine = 0
+	oNoLine.PrimarySymbols = nil
 	if matched, _ := matchFinding(oNoLine, base); !matched {
 		t.Fatal("without primary_line, file+family must still match")
 	}
@@ -241,6 +248,7 @@ func TestMatchFindingRequiresAssertedStatus(t *testing.T) {
 			Status:    tc.status,
 			FindingID: id,
 			Files:     []string{c.Oracle.PrimaryFile},
+			Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 			Summary:   "weakness of the oracle class on the oracle file",
 		})
 		if matched != tc.want {
@@ -266,6 +274,7 @@ func TestMatchFindingIgnoresExplicitNoIssue(t *testing.T) {
 		Status:    "no_issue_observed",
 		FindingID: findingIDFor(t, c.Oracle),
 		Files:     []string{c.Oracle.PrimaryFile},
+		Locations: []findingLocation{{Path: c.Oracle.PrimaryFile, StartLine: c.Oracle.PrimaryLine}},
 		Summary:   "weakness of the oracle class on the oracle file",
 	})
 	if matched {
@@ -298,7 +307,7 @@ func loadRepositoryCases(t *testing.T) []loadedCase {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Case.Status == "pending_source" {
+		if !c.executable() {
 			continue
 		}
 		cases = append(cases, c)

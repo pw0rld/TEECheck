@@ -38,9 +38,9 @@ func TestFindingLocations_ComeFromTheToolFact(t *testing.T) {
 	got := findingLocations(caseContext{toolFacts: []artifacts.ToolFact{rollbackFact()}})
 
 	want := []artifacts.FindingLocation{
-		{Path: "core/crypto/signed_hdr.c", StartLine: 262},
-		{Path: "core/kernel/ree_fs_ta.c", StartLine: 314},
-		{Path: "core/kernel/ree_fs_ta.c", StartLine: 639},
+		{Path: "core/crypto/signed_hdr.c", StartLine: 262, Symbol: "shdr_load_pub_key"},
+		{Path: "core/kernel/ree_fs_ta.c", StartLine: 314, Symbol: "check_update_version"},
+		{Path: "core/kernel/ree_fs_ta.c", StartLine: 639, Symbol: "check_update_version"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("locations = %+v, want %+v", got, want)

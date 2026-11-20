@@ -22,21 +22,22 @@ datasets/CVE-YYYY-NNNN/
 └── README.md
 ```
 
-Only `fixture_ready` cases in this directory participate in executable scanner
-evaluation. There are currently 44 executable cases, producing 88 scan
-samples: 44 vulnerable and 44 fixed. Every case has a checked-in vulnerable and
-fixed source tree.
+There are 44 stored source pairs. **43 are executable (86 scan samples)**;
+`CVE-2019-1010297` is marked `fixture_status: requires_review` and excluded
+because a fix hunk does not match either stored variant. The other 43 have
+`fixture_status: ready`. Validation checks hashes and patch direction, so a
+reversed vulnerable/fixed pair cannot silently score. See the
+[2026-11-21 review](reports/2026-11-21-oracle-review.md).
 
 Every case is source-backed: it pins a public CVE (`detection_surface:
 source`) with a real upstream repository, revisions, and record. Hand-authored
 synthetic fixtures are not admitted — the benchmark measures detection of real,
 public vulnerabilities.
 
-Every executable case is a defect **inside the TEE** — the trusted OS, secure
-world, enclave, or trusted application. A 2026-07 review removed seven cases
-whose code lives in the untrusted host or normal world (Linux KVM/SEV
-hypervisor, the Linux OP-TEE kernel driver, swiotlb DMA, a device-tree config,
-and guest-kernel EFI): TEE-adjacent, but not a weakness in a TEE.
+The corpus includes TEE-internal defects in trusted OSes, secure firmware, and
+enclaves, plus explicitly classified controls in generic libraries or adjacent
+Linux code. Those controls remain outside the capability track; their presence
+must not be mistaken for support of all software or hardware attack classes.
 
 Each reviewed `oracle.yaml` also carries a TWE scope classification so the
 benchmark measures "can we find the CVEs we are designed to find" instead of
@@ -64,7 +65,7 @@ leakage_suspect           # every case pins a public CVE plausibly in the GLM
                           #   training corpus, so this is true for all of them
 ```
 
-`primary_function` and `match_terms` are retained as human-review evidence only.
+`primary_function` and `match_terms` are retained as review evidence only.
 They are **not** used for scoring — the matcher scores on file + TWE family (see
 the runner section) — and several `primary_function` values name the point the
 weakness is *reached* rather than the line the fix changed.
@@ -77,16 +78,18 @@ memory-safety, arithmetic, resource, or concurrency bug that a sanitizer or
 fuzzer catches without any TEE-specific semantics. Out-of-scope cases are a
 known coverage gap of the TWE design, not a scanner failure.
 
-Current split of the 44 executable cases: 32 in scope, 12 out. In-scope
-families: Flow 14, Leakage 9, State 5, Guard 4, Binding 0, Config 0, Design 0.
-Oracle-location provenance: 30 single-file-fix, 12 multi-file-confirmed, 2
-multi-file-corrected. Every case is leakage-suspect (all pin a public CVE).
-Binding, Config, and Design have no cases yet and are the priority for new
-cases, since Binding (subject binding) and Config (simulated / debug
-attestation) are exactly the usage weaknesses most common in real audits. New
-cases must be source-backed — a public CVE with a real vulnerable/fixed commit
-pair, ideally from a Rust attestation repository such as dcap-qvl or an FPC
-audit finding.
+The source-and-patch review classified all 44 stored pairs: **25 in scope,
+19 outside the current TWE threat model**. All 25 in-scope pairs are executable;
+18 out-of-scope pairs are executable and one requires source review. In-scope
+families are Flow 13, Guard 7, State 3, Binding 1, and Leakage 1. Config and
+Design remain uncovered. `scope_reason` and `oracle_review.scope_review` explain
+each inference with the local source site and patch; these annotations are not
+a claim of independently reproduced exploitation.
+
+Pure arithmetic memory defects, physical fault injection, low-level timing
+side channels, and general-purpose non-TEE libraries stay in the secondary
+track. Every public-CVE pair is labeled `leakage_suspect: true`. These known
+cases cannot alone demonstrate discovery of unseen bugs.
 
 ### `evaluator/runner/`
 
@@ -110,20 +113,23 @@ reported as the same vulnerability.
 A finding matches an oracle by the mechanism established by OWASP Benchmark and
 NIST Juliet/SARD: **location plus weakness class**. It must land on the oracle's
 `primary_file` **and** assert the oracle's `twe_family` — the family the scanner
-tags each finding with in its id (`TWE-<FAMILY>-NNN:...`), the analogue of a CWE
-id. Class agreement, not free-text keyword overlap, is what counts; earlier
+carries in its explicit `related_twes` metadata. Legacy findings without that
+field may fall back to the `TWE-<FAMILY>-NNN:...` identifier. Class agreement, not free-text keyword overlap, is what counts; earlier
 `match_terms` string matching both inflated true positives (an unrelated finding
 that merely mentioned the file) and missed correct prose that used different
 words. `match_terms` and `primary_function` are retained in the oracle as
 human-review evidence only; they no longer gate scoring. Out-of-scope cases
 (empty `twe_family`) have no expected class and are matched on file alone, on
-their separate secondary track. Line-level agreement (the Juliet refinement) is
-enforced **only when an oracle pins `primary_line`**: the scanner now emits a
-structured `locations` array, and the finding must carry a location on the
-primary file within a small tolerance. Oracles without `primary_line` are scored
-on file + family alone, so lines can be added case-by-case to tighten scoring
-without changing any case that has none. No oracle pins a line yet; populating
-`primary_line` from each fix hunk is the next per-case step.
+their separate secondary track. Site matching uses `primary_line` with a tolerance of ±12 lines when the
+finding supplies a line on the primary file. `primary_symbols` is a fallback
+when no exact source line is available; a matching symbol never overrides a
+conflicting line elsewhere in the same function. All stored cases now carry
+a reviewed line and a symbol list (empty for the build-file case).
+
+Scores separate `target_observed` from `incidental_count`: a fixed-side TN can
+still contain unrelated findings, and the Markdown/JSON reports show both.
+A report with zero classified in-scope cases emits an explicit warning. Use
+`-require-in-scope` in evaluate/score mode to reject that selection entirely.
 
 ### `reports/`
 
@@ -168,8 +174,8 @@ directory.
 
 ## Current Scope
 
-- Executable vulnerability cases: 44 (32 in TWE scope, 12 out; all public CVEs)
-- Source samples: 88
+- Stored public-CVE source pairs: 44; executable: 43 (25 in scope, 18 out)
+- Executable source samples: 86; one additional pair requires source review
 - Executable platforms: OP-TEE, Open Enclave, Trusted Firmware-M, and Occlum
   — all TEE-internal (trusted OS / secure world / enclave)
 

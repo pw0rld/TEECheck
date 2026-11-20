@@ -28,17 +28,19 @@ type teecheckFindings struct {
 }
 
 type teecheckFinding struct {
-	FindingID string            `json:"finding_id"`
-	Status    string            `json:"status"`
-	Files     []string          `json:"files"`
-	Locations []findingLocation `json:"locations"`
-	Summary   string            `json:"summary"`
-	Evidence  []string          `json:"evidence"`
+	RelatedTWEs []string          `json:"related_twes,omitempty"`
+	FindingID   string            `json:"finding_id"`
+	Status      string            `json:"status"`
+	Files       []string          `json:"files"`
+	Locations   []findingLocation `json:"locations"`
+	Summary     string            `json:"summary"`
+	Evidence    []string          `json:"evidence"`
 }
 
 type findingLocation struct {
 	Path      string `json:"path"`
 	StartLine int    `json:"start_line"`
+	Symbol    string `json:"symbol,omitempty"`
 }
 
 // lineTolerance is how far a finding's line may sit from the oracle's
@@ -47,14 +49,16 @@ type findingLocation struct {
 const lineTolerance = 12
 
 type variantScore struct {
-	Variant        string   `json:"variant"`
-	Expected       string   `json:"expected"`
-	Observed       string   `json:"observed"`
-	Classification string   `json:"classification"`
-	MatchedFinding string   `json:"matched_finding,omitempty"`
-	MatchReasons   []string `json:"match_reasons,omitempty"`
-	FindingsPath   string   `json:"findings_path"`
-	FindingCount   int      `json:"finding_count"`
+	TargetObserved  bool     `json:"target_observed"`
+	IncidentalCount int      `json:"incidental_count"`
+	Variant         string   `json:"variant"`
+	Expected        string   `json:"expected"`
+	Observed        string   `json:"observed"`
+	Classification  string   `json:"classification"`
+	MatchedFinding  string   `json:"matched_finding,omitempty"`
+	MatchReasons    []string `json:"match_reasons,omitempty"`
+	FindingsPath    string   `json:"findings_path"`
+	FindingCount    int      `json:"finding_count"`
 }
 
 type caseScore struct {
@@ -112,6 +116,7 @@ func (t *trackMetrics) finalize() {
 type scoreReport struct {
 	Schema      string      `json:"schema"`
 	GeneratedAt string      `json:"generated_at"`
+	Warnings    []string    `json:"warnings,omitempty"`
 	Cases       []caseScore `json:"cases"`
 
 	// Overall is every scored case. In-scope isolates the CVEs whose
@@ -156,7 +161,7 @@ func loadCase(dir string) (loadedCase, error) {
 
 func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout time.Duration) error {
 	for _, c := range cases {
-		if c.Case.Status == "pending_source" {
+		if !c.executable() {
 			continue
 		}
 		for _, variant := range []string{"vulnerable", "fixed"} {
@@ -266,6 +271,9 @@ func renderMarkdown(report scoreReport) string {
 	var b strings.Builder
 	b.WriteString("# TEECheck Benchmark Score\n\n")
 	fmt.Fprintf(&b, "Generated: %s\n\n", report.GeneratedAt)
+	for _, warning := range report.Warnings {
+		fmt.Fprintf(&b, "> WARNING: %s\n\n", warning)
+	}
 
 	b.WriteString("## Metrics by track\n\n")
 	b.WriteString("Read scanner capability off **in_twe_scope**. The out_of_twe_scope\n")
@@ -286,8 +294,8 @@ func renderMarkdown(report scoreReport) string {
 	}
 
 	b.WriteString("\n## Per-case results\n\n")
-	b.WriteString("| Case | Family | Scope | Kind | Vulnerable | Fixed | Pair |\n")
-	b.WriteString("|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Case | Family | Scope | Kind | Vulnerable | Fixed | Incidental (vuln/fixed) | Pair |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range report.Cases {
 		pair := "fail"
 		if c.PairedPass {
@@ -301,17 +309,17 @@ func renderMarkdown(report scoreReport) string {
 		if fam == "" {
 			fam = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", c.CaseID, fam, scope, c.CaseKind, c.Vulnerable.Classification, c.Fixed.Classification, pair)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d/%d | %s |\n", c.CaseID, fam, scope, c.CaseKind, c.Vulnerable.Classification, c.Fixed.Classification, c.Vulnerable.IncidentalCount, c.Fixed.IncidentalCount, pair)
 	}
 	b.WriteString("\n## Matching Details\n\n")
 	for _, c := range report.Cases {
 		fmt.Fprintf(&b, "### %s\n\n", c.CaseID)
-		fmt.Fprintf(&b, "- Vulnerable: %s, findings=%d", c.Vulnerable.Classification, c.Vulnerable.FindingCount)
+		fmt.Fprintf(&b, "- Vulnerable: %s, target_observed=%t, findings=%d, incidental=%d", c.Vulnerable.Classification, c.Vulnerable.TargetObserved, c.Vulnerable.FindingCount, c.Vulnerable.IncidentalCount)
 		if c.Vulnerable.MatchedFinding != "" {
 			fmt.Fprintf(&b, ", matched=%s", c.Vulnerable.MatchedFinding)
 		}
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "- Fixed: %s, findings=%d", c.Fixed.Classification, c.Fixed.FindingCount)
+		fmt.Fprintf(&b, "- Fixed: %s, target_observed=%t, findings=%d, incidental=%d", c.Fixed.Classification, c.Fixed.TargetObserved, c.Fixed.FindingCount, c.Fixed.IncidentalCount)
 		if c.Fixed.MatchedFinding != "" {
 			fmt.Fprintf(&b, ", matched=%s", c.Fixed.MatchedFinding)
 		}
@@ -335,7 +343,8 @@ func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
 	byFamily := map[string]*trackMetrics{}
 
 	for _, c := range cases {
-		if c.Case.Status == "pending_source" {
+		if !c.executable() {
+			report.Warnings = append(report.Warnings, c.Case.ID+": excluded from scoring: "+c.Oracle.FixtureReviewReason)
 			continue
 		}
 		vuln, err := scoreVariant(c, "vulnerable", filepath.Join(resultsDir, c.Case.ID, "vulnerable"))
@@ -371,6 +380,9 @@ func buildScore(cases []loadedCase, resultsDir string) (scoreReport, error) {
 		report.Cases = append(report.Cases, cs)
 	}
 
+	if report.InScope.Cases == 0 {
+		report.Warnings = append(report.Warnings, "no classified in-scope cases; no headline capability score is available")
+	}
 	report.Overall.finalize()
 	report.InScope.finalize()
 	report.OutOfScope.finalize()
@@ -411,19 +423,26 @@ func scoreVariant(c loadedCase, variant, resultDir string) (variantScore, error)
 	for _, finding := range findings.Findings {
 		matched, reasons := matchFinding(c.Oracle, finding)
 		if matched {
+			result.TargetObserved = true
 			result.Observed = "vulnerable"
-			result.MatchedFinding = finding.FindingID
-			result.MatchReasons = reasons
-			break
+			if result.MatchedFinding == "" {
+				result.MatchedFinding = finding.FindingID
+				result.MatchReasons = reasons
+			}
+		} else if detectionStatuses[strings.ToLower(strings.TrimSpace(finding.Status))] {
+			result.IncidentalCount++
 		}
 	}
+	if !result.TargetObserved && result.IncidentalCount > 0 {
+		result.Observed = "incidental_only"
+	}
 	if variant == "vulnerable" {
-		if result.Observed == "vulnerable" {
+		if result.TargetObserved {
 			result.Classification = "TP"
 		} else {
 			result.Classification = "FN"
 		}
-	} else if result.Observed == "vulnerable" {
+	} else if result.TargetObserved {
 		result.Classification = "FP"
 	} else {
 		result.Classification = "TN"
@@ -481,15 +500,15 @@ func findingFamily(id string) string {
 // weakness, using the mechanism established by OWASP Benchmark and NIST
 // Juliet/SARD: a finding counts only when it lands on the oracle's file AND
 // asserts the oracle's weakness class. The class is the TWE family the scanner
-// tagged the finding with (the finding id prefix TWE-<FAMILY>-NNN) — the
+// records in related_twes (falling back to legacy ID prefixes) — the
 // analogue of a CWE id — not free-text keyword overlap. Keyword overlap
 // conflated unrelated findings that merely mentioned the file, and missed
 // correct prose that used different words; both are documented failure modes
 // of string-matched oracles.
 //
-// Line-level agreement (the Juliet refinement) is not enforced yet: the finding
-// schema exposes no structured location, so file+family — the OWASP granularity
-// of one file to one class — is what can be asserted reliably today.
+// A pinned line is authoritative when the finding supplies a line on that file.
+// A symbol is a fallback for a missing line, not permission to match another
+// vulnerability elsewhere in the same long function.
 func matchFinding(oracle oracleSpec, finding teecheckFinding) (bool, []string) {
 	status := strings.ToLower(strings.TrimSpace(finding.Status))
 	if !detectionStatuses[status] {
@@ -512,22 +531,40 @@ func matchFinding(oracle oracleSpec, finding teecheckFinding) (bool, []string) {
 	// pipeline is not designed to reach them, so file agreement alone is used
 	// on that secondary track.
 	if oracle.TWEFamily != "" {
-		fam := findingFamily(finding.FindingID)
-		if fam != oracle.TWEFamily {
+		matchedFamily := false
+		for _, id := range finding.RelatedTWEs {
+			if findingFamily(id) == oracle.TWEFamily {
+				matchedFamily = true
+				break
+			}
+		}
+		// Explicit metadata is authoritative; older artifacts may use the ID fallback.
+		if len(finding.RelatedTWEs) == 0 {
+			matchedFamily = findingFamily(finding.FindingID) == oracle.TWEFamily
+		}
+		if !matchedFamily {
 			return false, nil
 		}
-		reasons = append(reasons, "family:"+fam)
+		reasons = append(reasons, "family:"+oracle.TWEFamily)
 	}
-	// Line-level agreement (the Juliet refinement) is enforced only when the
-	// oracle pins a primary_line: the finding must carry a structured location
-	// on the primary file within lineTolerance. Oracles without a line fall
-	// back to file+family, so this tightens scoring case-by-case as lines are
-	// added without changing any case that has none.
-	if oracle.PrimaryLine > 0 {
-		if !locationNearby(finding.Locations, oracle.PrimaryFile, oracle.PrimaryLine) {
+	// A supplied source line must agree with the pinned site; symbols are
+	// a fallback only where an exact line is unavailable.
+	if oracle.PrimaryLine > 0 || len(oracle.PrimarySymbols) > 0 {
+		lineMatch := oracle.PrimaryLine > 0 && locationNearby(finding.Locations, oracle.PrimaryFile, oracle.PrimaryLine)
+		symbolMatch := locationSymbolMatches(finding.Locations, oracle.PrimaryFile, oracle.PrimarySymbols)
+		if oracle.PrimaryLine > 0 && hasFileLine(finding.Locations, oracle.PrimaryFile) {
+			if !lineMatch {
+				return false, nil
+			}
+		} else if !lineMatch && !symbolMatch {
 			return false, nil
 		}
-		reasons = append(reasons, fmt.Sprintf("line:%d±%d", oracle.PrimaryLine, lineTolerance))
+		if lineMatch {
+			reasons = append(reasons, fmt.Sprintf("line:%d±%d", oracle.PrimaryLine, lineTolerance))
+		}
+		if symbolMatch {
+			reasons = append(reasons, "primary_symbol")
+		}
 	}
 	return true, reasons
 }
@@ -602,12 +639,15 @@ func printTrack(t trackMetrics) {
 }
 
 func printScore(report scoreReport, path string) {
+	for _, warning := range report.Warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", warning)
+	}
 	for _, c := range report.Cases {
 		scope := "out"
 		if c.InTWEScope {
 			scope = "in"
 		}
-		fmt.Printf("CASE %s scope=%s family=%s vulnerable=%s fixed=%s paired=%t\n", c.CaseID, scope, c.TWEFamily, c.Vulnerable.Classification, c.Fixed.Classification, c.PairedPass)
+		fmt.Printf("CASE %s scope=%s family=%s vulnerable=%s fixed=%s incidental=%d/%d paired=%t\n", c.CaseID, scope, c.TWEFamily, c.Vulnerable.Classification, c.Fixed.Classification, c.Vulnerable.IncidentalCount, c.Fixed.IncidentalCount, c.PairedPass)
 	}
 	printTrack(report.Overall)
 	printTrack(report.InScope)
@@ -618,4 +658,43 @@ func printScore(report scoreReport, path string) {
 		}
 	}
 	fmt.Printf("REPORT %s\n", path)
+}
+
+// ensureInScope prevents an empty capability track being published as a zero score.
+func ensureInScope(cases []loadedCase) error {
+	for _, c := range cases {
+		if c.executable() && c.Oracle.InTWEScope {
+			return nil
+		}
+	}
+	return errors.New("no classified in-scope cases; cannot publish a headline capability score")
+}
+
+func locationSymbolMatches(locations []findingLocation, file string, symbols []string) bool {
+	for _, l := range locations {
+		clean := filepath.ToSlash(filepath.Clean(l.Path))
+		if clean != file && !strings.HasSuffix(clean, "/"+file) {
+			continue
+		}
+		for _, symbol := range symbols {
+			if symbol != "" && (l.Symbol == symbol || strings.HasSuffix(l.Symbol, "::"+symbol)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c loadedCase) executable() bool {
+	return c.Case.Status != "pending_source" && c.Oracle.FixtureStatus != "requires_review"
+}
+
+func hasFileLine(locations []findingLocation, file string) bool {
+	for _, l := range locations {
+		clean := filepath.ToSlash(filepath.Clean(l.Path))
+		if l.StartLine > 0 && (clean == file || strings.HasSuffix(clean, "/"+file)) {
+			return true
+		}
+	}
+	return false
 }
