@@ -132,10 +132,11 @@ type IndexCapabilities struct {
 // RepoFacts is the deterministic whole-repo program index. It answers "what
 // structure was observed", never "what is dangerous".
 type RepoFacts struct {
-	SchemaVersion string            `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	Scope         ScannedScope      `json:"scope"`
-	Capabilities  IndexCapabilities `json:"capabilities"`
+	CoverageStatus string            `json:"coverage_status,omitempty"`
+	SchemaVersion  string            `json:"schema_version"`
+	RunID          string            `json:"run_id"`
+	Scope          ScannedScope      `json:"scope"`
+	Capabilities   IndexCapabilities `json:"capabilities"`
 	// IndexNote names the cause when a capability is degraded, so a reader
 	// can tell a repository with no indirect calls from an extractor that
 	// could not run.
@@ -183,10 +184,11 @@ type RepoFacts struct {
 // OP-TEE's 11,301 indexed definitions, which no prompt can carry. Pages are
 // written to disk and fetched one at a time.
 type ProjectMap struct {
-	SchemaVersion string            `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	Scope         ScannedScope      `json:"scope"`
-	Capabilities  IndexCapabilities `json:"capabilities"`
+	CoverageStatus string            `json:"coverage_status,omitempty"`
+	SchemaVersion  string            `json:"schema_version"`
+	RunID          string            `json:"run_id"`
+	Scope          ScannedScope      `json:"scope"`
+	Capabilities   IndexCapabilities `json:"capabilities"`
 
 	Repository    RepositoryCard        `json:"repository"`
 	Modules       []ModuleCard          `json:"modules,omitempty"`

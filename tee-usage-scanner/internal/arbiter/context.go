@@ -25,14 +25,16 @@ type caseContext struct {
 func loadCaseContext(runDir string, pack artifacts.CasePack) caseContext {
 	var ctx caseContext
 
-	var model artifacts.ArchitectureModel
-	if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &model); err == nil {
-		sliced := sliceArchitecture(model, pack.ArchitectureRefs)
-		ctx.archModel = &sliced
-	}
+	if runfs.LegacyPriorEnabled(runDir) {
+		var model artifacts.ArchitectureModel
+		if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &model); err == nil {
+			sliced := sliceArchitecture(model, pack.ArchitectureRefs)
+			ctx.archModel = &sliced
+		}
 
-	if allInvariants, err := runfs.ReadProjectInvariants(runDir); err == nil {
-		ctx.invariants = sliceInvariants(allInvariants, pack.RelatedInvariants)
+		if allInvariants, err := runfs.ReadProjectInvariants(runDir); err == nil {
+			ctx.invariants = sliceInvariants(allInvariants, pack.RelatedInvariants)
+		}
 	}
 
 	for _, ref := range pack.ToolFactRefs {

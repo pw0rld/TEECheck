@@ -40,7 +40,7 @@ func (c *AnthropicClient) Generate(ctx context.Context, req GenerateRequest) (Ge
 		Model:       c.model,
 		System:      strings.TrimSpace(req.SystemPrompt),
 		Messages:    buildAnthropicMessages(req.Messages),
-		MaxTokens:   c.maxTokens,
+		MaxTokens:   requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
 		Temperature: req.Temperature,
 	}
 	if body.Temperature == 0.0 {

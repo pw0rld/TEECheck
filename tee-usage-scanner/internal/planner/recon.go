@@ -60,16 +60,16 @@ const (
 const (
 	// reconMinModules — the project has more than one part, and the gate
 	// should not be satisfiable from whichever one the first listing named.
-	reconMinModules = 5
-	// reconMinSymbols — fifteen function capsules is roughly three pages,
+	reconMinModules = 3
+	// reconMinSymbols — six function capsules provide a small cross-module sample,
 	// enough that the Planner has seen what this project's code looks like
 	// rather than one function's neighbourhood.
-	reconMinSymbols = 15
-	// reconMinSpread — the requirement that resists gaming. Fifteen
+	reconMinSymbols = 6
+	// reconMinSpread — the requirement that resists gaming. Six
 	// functions from one module is not reconnaissance of a 34-module
 	// project, and without a spread floor the cheapest way to satisfy a
 	// count is to page through whatever the first list_functions returned.
-	reconMinSpread = 3
+	reconMinSpread = 2
 	// minTreeReads — with no index, real source reading is the only
 	// evidence that anything was looked at. A directory listing is not.
 	minTreeReads = 5
@@ -282,6 +282,12 @@ func moduleOfSymbolID(id string) string {
 // would be a question about a name — which is exactly what this check is
 // here to refuse.
 func (r *ReconState) SawSymbol(id artifacts.SymbolID) bool {
+	if r.Mode == ReconModeTreeOnly {
+		path := strings.SplitN(string(id), "::", 2)[0]
+		if validObservedPath(path) && len(r.linesRead[path]) > 0 {
+			return true
+		}
+	}
 	if r.symbolsViewed[string(id)] {
 		return true
 	}
@@ -424,6 +430,11 @@ func (r *ReconState) Skipped() bool { return r.skipped }
 // finished looking.
 func (r *ReconState) ExhaustReconBudget() { r.budgetExhausted = true }
 
+func (r *ReconState) ExhaustReconTokenBudget() {
+	r.budgetExhausted = true
+	r.phase = PhaseInvestigation
+}
+
 // AllowDone reports whether `done` may be dispatched.
 //
 // The final round wins unconditionally. The forced-done prompt tells the
@@ -439,7 +450,7 @@ func (r *ReconState) AllowDone(isFinalRound bool) bool {
 // model open one function, raise a lead on it, flip to investigation and
 // skip MAP entirely — which is the behaviour the gate exists to stop.
 func (r *ReconState) AllowLead() bool {
-	return r.skipped || r.budgetExhausted || r.Satisfied()
+	return r.skipped || r.budgetExhausted || r.Satisfied() || (r.Mode == ReconModeTreeOnly && len(r.linesRead) > 0)
 }
 
 // OpenedLead flips the pass into investigation. This is the only way Pass B
@@ -480,4 +491,18 @@ func (r *ReconState) TerminationReason(finishedGated bool) string {
 		return terminationReconIncomplete
 	}
 	return ""
+}
+
+// Source-based leads must name a normalized relative file that was actually
+// read. Directory listings and failed reads never populate linesRead.
+func validObservedPath(path string) bool {
+	if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
+		return false
+	}
+	for _, part := range strings.Split(path, "/") {
+		if part == ".." || part == "." || part == "" {
+			return false
+		}
+	}
+	return true
 }

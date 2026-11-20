@@ -26,13 +26,9 @@ const DefaultPlannerAgentID = "planner-001"
 
 // DefaultActionsPerRound is how many actions one round may request.
 //
-// It is a named constant because the reconnaissance gate's cost is measured
-// in actions while the budget is denominated in rounds, and the conversion
-// between them is this number. It was a literal 3 inside Run until the two
-// were found to disagree — the gate needed 22 actions and the budget
-// afforded 18, so the gate could never be met and every run left
-// reconnaissance through the escape. TestReconBudget_CanReachTheIndexedGate
-// is what now keeps them reconcilable.
+// The gate is measured in actions while the budget is measured in rounds.
+// Its current eleven-action minimum fits inside the reconnaissance allowance;
+// tests keep these constraints consistent when either side changes.
 const DefaultActionsPerRound = 3
 
 // RunConfig is the input to Run. Everything the main loop needs is
@@ -240,6 +236,9 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 
 loop:
 	for !cfg.Budget.Exhausted() {
+		if recon.Phase() == PhaseReconnaissance && cfg.Budget.ReconTokenExhausted() {
+			recon.ExhaustReconTokenBudget()
+		}
 		inRecon := recon.Phase() == PhaseReconnaissance
 		if inRecon {
 			cfg.Budget.ConsumeReconRound()
@@ -315,6 +314,49 @@ loop:
 			roundPrompt += "You have not inspected any files yet. Emit a done with empty candidates[] and a summary explaining what would have been needed.\n"
 		}
 
+		// Check the complete next request before dispatch. Crossing a phase
+		// allowance releases reconnaissance; crossing the exploration allowance
+		// switches to a compact final prompt while its token reserve remains.
+		predictedInput := requestInputUpperBound(systemPrompt, roundPrompt)
+		if inRecon && !isFinalRound && cfg.Budget.OutputAllowance(predictedInput, true, false) < minimumReplyTokens {
+			recon.ExhaustReconTokenBudget()
+			inRecon = false
+			registry = cfg.Registry
+			systemPrompt = BuildSystemPrompt(advertisedActions(cfg.Registry), obligations, knowledge, recon.Phase())
+			roundPrompt = BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths) + reconStatusBlock(recon)
+			predictedInput = requestInputUpperBound(systemPrompt, roundPrompt)
+		}
+		if !isFinalRound && cfg.Budget.OutputAllowance(predictedInput, inRecon, false) < minimumReplyTokens {
+			isFinalRound = true
+		}
+		prepareFinal := func(prompt string, compact bool) string {
+			isFinalRound = true
+			// Convergence is investigation work even when reconnaissance has
+			// not completed. Its own allowance must not block the final reply.
+			if inRecon {
+				recon.ExhaustReconTokenBudget()
+				inRecon = false
+				registry = cfg.Registry
+			}
+			if !strings.Contains(prompt, "FINAL ROUND") {
+				prompt += "\nFINAL ROUND — convergence reserve. Reply with exactly one done action and no exploration actions.\n"
+			}
+			if compact || cfg.Budget.OutputAllowance(requestInputUpperBound(systemPrompt, prompt), false, true) < minimumReplyTokens {
+				available := cfg.Budget.MaxTokens - cfg.Budget.TokensUsed
+				if cfg.Budget.MaxTokens <= 0 {
+					available = 20000
+				}
+				if cfg.Budget.MaxInvestigationTokens > 0 && cfg.Budget.MaxInvestigationTokens-cfg.Budget.InvestigationTokensUsed < available {
+					available = cfg.Budget.MaxInvestigationTokens - cfg.Budget.InvestigationTokensUsed
+				}
+				systemPrompt, prompt = convergencePrompt(state, observedPaths, available)
+			}
+			return prompt
+		}
+		if isFinalRound {
+			roundPrompt = prepareFinal(roundPrompt, false)
+		}
+
 		// TotalRounds, not MaxRounds: reconnaissance rounds are granted on
 		// top of the investigation budget, so the ceiling grows as they are
 		// spent. The run that printed "round 6/8" had used 6 of 14.
@@ -330,11 +372,17 @@ loop:
 		// It is a closure rather than a method so the corrective re-ask below
 		// reuses exactly the same accounting instead of a second copy of it.
 		askOnce := func(prompt string) (llm.GenerateResponse, error) {
+			inputBudget := requestInputUpperBound(systemPrompt, prompt)
+			outputBudget := cfg.Budget.OutputAllowance(inputBudget, inRecon, isFinalRound)
+			if outputBudget < minimumReplyTokens {
+				return llm.GenerateResponse{}, fmt.Errorf("token budget cannot fit request input and a bounded reply")
+			}
 			genReq := llm.GenerateRequest{
-				SystemPrompt: systemPrompt,
-				Messages:     []llm.Message{{Role: "user", Content: prompt}},
-				Temperature:  cfg.Temperature,
-				JSONMode:     true,
+				SystemPrompt:    systemPrompt,
+				Messages:        []llm.Message{{Role: "user", Content: prompt}},
+				Temperature:     cfg.Temperature,
+				JSONMode:        true,
+				MaxOutputTokens: outputBudget,
 			}
 			_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
 			genResp, err := cfg.Client.Generate(ctx, genReq)
@@ -354,17 +402,11 @@ loop:
 				return llm.GenerateResponse{}, err
 			}
 
-			// Prefer provider-reported token usage. If the provider did
-			// not return it (older OpenAI-compatible endpoints, stream
-			// responses), fall back to a crude ~4 chars/token estimate so
-			// the budget still advances.
-			callIn := genResp.Usage.PromptTokens
-			callOut := genResp.Usage.CompletionTokens
-			if callIn == 0 && callOut == 0 {
-				callIn = len(systemPrompt)/4 + len(prompt)/4
-				callOut = len(genResp.Text) / 4
-			}
-			cfg.Budget.ConsumeTokens(callIn + callOut)
+			// Missing input/output fields are independently unknown, never
+			// free. Preserve a larger provider total (e.g. reasoning tokens).
+			callIn, callOut := accountedUsage(genResp, inputBudget)
+
+			cfg.Budget.ConsumePhaseTokens(callIn+callOut, inRecon)
 			tokensIn += callIn
 			tokensOut += callOut
 
@@ -419,6 +461,9 @@ loop:
 				"Do not narrate, explain, or announce what you are about to do. Do not wrap the object in another object.\n" +
 				"Reply with the JSON object described in the response format and NOTHING else — no prose before it, no prose after it, no markdown fence.\n" +
 				"Your rejected reply began: " + truncate(genResp.Text, 200) + "\n"
+			if cfg.Budget.OutputAllowance(requestInputUpperBound(systemPrompt, retryPrompt), inRecon, isFinalRound) < minimumReplyTokens {
+				retryPrompt = prepareFinal(retryPrompt, true)
+			}
 			if retryResp, retryErr := askOnce(retryPrompt); retryErr == nil {
 				genResp = retryResp
 				parsed, parseErr = ParseLLMResponse(genResp.Text)
@@ -503,6 +548,8 @@ loop:
 
 			var result actions.ActionResult
 			switch {
+			case isFinalRound && act.Name != "done":
+				result = actions.ActionResult{Name: act.Name, Error: "final round permits only done; exploration would spend the convergence reserve"}
 			case act.Name == ActionOpenAuditLead:
 				var lead artifacts.AuditLead
 				lead, result = openLead(cfg, recon, observations, act.Args, roundNum)
@@ -715,6 +762,10 @@ loop:
 	// passes, dedupes and caps them, and calls Write exactly once.
 	merged := Merge(packs, thin)
 
+	// Post-processing can add citation diagnostics; persist those as well.
+	if err := runfs.WriteJSON(bundlePath, bundle); err != nil && runErr == nil {
+		runErr = fmt.Errorf("write final evidence bundle: %w", err)
+	}
 	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
 }
 
@@ -763,6 +814,18 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 			continue
 		}
 
+		// Observation IDs identify recorded tool output, not a JSON file.
+		// Keep the namespaces separate before filesystem validation and retain
+		// a diagnostic so an invalid citation cannot disappear silently.
+		var keptRefs []string
+		for _, ref := range unionStrings(wire.ToolFactRefs, executedToolFactRefs) {
+			if strings.HasPrefix(strings.TrimSpace(ref), "obs:") {
+				errs = append(errs, artifacts.RoundError{Round: -1, Action: fmt.Sprintf("done.investigations[%d].tool_fact_refs", i), Error: fmt.Sprintf("observation reference %q is not a ToolFact file; use reason_fact_refs for observations", ref)})
+				continue
+			}
+			keptRefs = append(keptRefs, ref)
+		}
+		wire.ToolFactRefs = keptRefs
 		inv := investigations.Build(wire)
 		// Union before Validate so an executed ref is subject to the same
 		// on-disk resolution check as a model-reported one.
@@ -772,7 +835,6 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		// the Planner reached it, shipped evidence the old invariant had
 		// selected. Closing that channel is half of what makes a lead the
 		// Planner's own.
-		inv.ToolFactRefs = unionStrings(inv.ToolFactRefs, executedToolFactRefs)
 		inv, _ = investigations.Validate(inv, validationIn)
 
 		if cfg.RunDir != "" {

@@ -67,7 +67,7 @@ var actionArgSchemas = map[string]string{
 	"tree_sitter_outline": `{"path": string (a source file: .c/.h/.rs/...)}`,
 	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
-	"open_audit_lead":     `{"security_question": string, "target_symbol_ids": [string (symbol_ids you have opened with get_function_card)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
+	"open_audit_lead":     `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
 	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
 	"done":                `{"summary": string, "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
@@ -234,7 +234,7 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	b.WriteString("\n")
 
 	b.WriteString("=== BUDGET ===\n")
-	fmt.Fprintf(&b, "rounds: %d/%d\n", budget.RoundsUsed, budget.MaxRounds)
+	fmt.Fprintf(&b, "rounds: %d/%d\n", budget.RoundsUsed, budget.TotalRounds())
 	fmt.Fprintf(&b, "tokens: %d/%d\n", budget.TokensUsed, budget.MaxTokens)
 	b.WriteString("\n")
 

@@ -10,6 +10,7 @@
     "run_id": { "type": "string", "minLength": 1 },
     "scope": { "$ref": "#/$defs/scannedScope" },
     "capabilities": { "$ref": "#/$defs/capabilities" },
+    "coverage_status": { "enum": ["partial"] },
     "index_note": {
       "type": "string",
       "description": "Why a capability is degraded. A reader must be able to tell a repository with no indirect calls from an extractor that could not run."

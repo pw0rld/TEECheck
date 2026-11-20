@@ -92,10 +92,7 @@ func main() {
 			}
 		}
 	case "run", "plan":
-		// Since M4 (T2.1), `plan` is a convenience alias for
-		// `run --mode llm`. config.parsePlan forces cfg.Mode = "llm"
-		// before we get here, so pipeline.Run dispatches to the L3
-		// planner branch automatically.
+		// Both spellings use the same LLM-backed pipeline and controls.
 		var runPath string
 		runPath, err = pipeline.Run(cfg)
 		if err == nil {

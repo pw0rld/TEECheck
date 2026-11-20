@@ -27,17 +27,18 @@ func probeConfig(t *testing.T, mode string) config.Config {
 	}
 	outputDir := t.TempDir()
 	return config.Config{
-		Command:       "run",
-		Target:        target,
-		Mode:          mode,
-		Focus:         "runtime",
-		RunID:         "pipeline-stage-001",
-		OutputDir:     outputDir,
-		KnowledgeRoot: filepath.Join(outputDir, "knowledge"),
-		LLMModel:      "fake-model-1",
-		MaxHotspots:   4,
-		MaxCases:      4,
-		StaticTools:   "auto",
+		EnableLegacyPrior: true, // These fixtures explicitly exercise legacy stage events.
+		Command:           "run",
+		Target:            target,
+		Mode:              mode,
+		Focus:             "runtime",
+		RunID:             "pipeline-stage-001",
+		OutputDir:         outputDir,
+		KnowledgeRoot:     filepath.Join(outputDir, "knowledge"),
+		LLMModel:          "fake-model-1",
+		MaxHotspots:       4,
+		MaxCases:          4,
+		StaticTools:       "auto",
 	}
 }
 
@@ -77,8 +78,14 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 		t.Fatal("completed pipeline did not record planner limits")
 	}
 	limits := manifest.Configuration.Planner
-	if limits.MaxInvestigationRounds != 8 || limits.MaxReconRounds != 10 || limits.MaxAggregateTokens != 120000 {
+	if limits.MaxInvestigationRounds != 8 || limits.MaxReconRounds != 10 || limits.MaxAggregateTokens != 200000 {
 		t.Fatalf("planner limits = %+v", limits)
+	}
+	if limits.ReconMaxTokens != 60000 || limits.InvestigationMaxTokens != 140000 || limits.ReserveTokensForDone != 20000 {
+		t.Fatalf("phase/finalization limits were not recorded: %+v", limits)
+	}
+	if !manifest.Configuration.EnableLegacyPrior {
+		t.Fatal("explicit legacy-prior opt-in missing from manifest")
 	}
 
 	all := readEvents(t, runDir)

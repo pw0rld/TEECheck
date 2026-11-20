@@ -24,7 +24,7 @@ func reconBudget() planner.Budget {
 	return planner.Budget{
 		MaxRounds:        8,
 		MaxReconRounds:   6,
-		MaxTokens:        120000,
+		MaxTokens:        200000,
 		PerActionTimeout: 30 * time.Second,
 		WallClock:        10 * time.Minute,
 	}

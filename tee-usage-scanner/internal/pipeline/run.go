@@ -126,6 +126,9 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		MaxInvestigationRounds: plannerBudget.MaxRounds,
 		MaxReconRounds:         plannerBudget.MaxReconRounds,
 		MaxAggregateTokens:     plannerBudget.MaxTokens,
+		ReconMaxTokens:         plannerBudget.MaxReconTokens,
+		InvestigationMaxTokens: plannerBudget.MaxInvestigationTokens,
+		ReserveTokensForDone:   plannerBudget.ConvergenceReserveTokens,
 		PerActionTimeoutMs:     plannerBudget.PerActionTimeout.Milliseconds(),
 		WallClockTimeoutMs:     plannerBudget.WallClock.Milliseconds(),
 	}); err != nil {
@@ -289,25 +292,20 @@ func RunWithClient(cfg config.Config, client llm.Client) (runDir string, err err
 		return runDir, fmt.Errorf("project map: %w", err)
 	}
 
-	// Project Understanding Layer (§3.4): the Architecture model and Project
-	// Invariants, derived once here and reused by the planner and agents
-	// downstream. Hard-wired for now to surface any failure loudly;
-	// container cases (empty knowledge root, a non-TEE repo) are exercised
-	// by TestPipelineEndToEnd_FakeClient.
-	//
-	// client is the injected llm.Client, reused by every agent stage
-	// (architecture/invariants/expert/... ) rather than each stage
-	// constructing its own. Run() supplies the production client via
-	// RunWithClient; tests inject a fake.
-	if err := stage("architecture", func() error {
-		return architecture.Run(stageCfg, forAgent("architecture-001"))
-	}); err != nil {
-		return runDir, fmt.Errorf("architecture: %w", err)
-	}
-	if err := stage("invariants", func() error {
-		return invariants.Run(stageCfg, forAgent("invariants-001"))
-	}); err != nil {
-		return runDir, fmt.Errorf("invariants: %w", err)
+	// The old pre-investigation models have no source evidence in their
+	// prompts. Keep them explicitly opt-in during migration; ordinary runs
+	// proceed from the program map to grounded investigation instead.
+	if cfg.EnableLegacyPrior {
+		if err := stage("architecture", func() error {
+			return architecture.Run(stageCfg, forAgent("architecture-001"))
+		}); err != nil {
+			return runDir, fmt.Errorf("architecture: %w", err)
+		}
+		if err := stage("invariants", func() error {
+			return invariants.Run(stageCfg, forAgent("invariants-001"))
+		}); err != nil {
+			return runDir, fmt.Errorf("invariants: %w", err)
+		}
 	}
 
 	// === Agent 1: L3 Planner ===
@@ -539,10 +537,13 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// empty invariants) — the planner degrades rather than failing.
 	var archPtr *artifacts.ArchitectureModel
 	var archModel artifacts.ArchitectureModel
-	if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &archModel); err == nil {
-		archPtr = &archModel
+	var invs []artifacts.ProjectInvariant
+	if cfg.EnableLegacyPrior {
+		if err := runfs.ReadJSON(runfs.ArchitectureModelPath(runDir), &archModel); err == nil {
+			archPtr = &archModel
+		}
+		invs, _ = runfs.ReadProjectInvariants(runDir)
 	}
-	invs, _ := runfs.ReadProjectInvariants(runDir)
 	tweText, _ := os.ReadFile(runfs.TWEAgentContextPath(runDir))
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())

@@ -13,10 +13,13 @@ import "time"
 // Budget bounds the planner loop in four independent dimensions.
 // Any single dimension exhausting triggers termination.
 type Budget struct {
-	MaxRounds        int           // max investigation rounds
-	MaxTokens        int           // input + output tokens summed across all rounds
-	PerActionTimeout time.Duration // single-action runaway guard
-	WallClock        time.Duration // end-to-end hard stop
+	MaxRounds                int           // max investigation rounds
+	MaxTokens                int           // input + output tokens summed across all rounds
+	MaxReconTokens           int           // reconnaissance input + output allowance
+	MaxInvestigationTokens   int           // investigation allowance, including convergence
+	ConvergenceReserveTokens int           // reserved inside total/investigation limits for final done
+	PerActionTimeout         time.Duration // single-action runaway guard
+	WallClock                time.Duration // end-to-end hard stop
 
 	// MaxReconRounds is the reconnaissance allowance, granted on top of
 	// MaxRounds rather than out of it.
@@ -31,44 +34,35 @@ type Budget struct {
 	MaxReconRounds int
 
 	// runtime state
-	startedAt       time.Time
-	RoundsUsed      int
-	ReconRoundsUsed int
-	TokensUsed      int
+	startedAt               time.Time
+	RoundsUsed              int
+	ReconRoundsUsed         int
+	TokensUsed              int
+	ReconTokensUsed         int
+	InvestigationTokensUsed int
 }
 
 // NewDefaultBudget returns the spec-default budget:
 //   - 8 investigation rounds
 //   - 10 reconnaissance rounds on top of them
-//   - 120000 input+output tokens
+//   - 200000 input+output tokens (60000 recon, 140000 investigation)
+//   - 20000 investigation tokens reserved for convergence
 //   - 30s per action timeout
 //   - 10min total wall clock
 //
-// Ten reconnaissance rounds is what the indexed gate costs at
-// DefaultActionsPerRound actions a round, plus room to think. The gate needs
-// 1 repository card + reconMinModules listings + reconMinSymbols cards + 1
-// relation query = 22 successful actions; ten rounds afford 30.
-//
-// It was six. Six affords 18, and the comment here claimed the gate cost
-// "nineteen actions" — 1 + 5 + 15 + 1 is 22, not 19. At the wrong figure the
-// shortfall looked like one slot; at the right one there is no slack at all.
-// The gate was therefore unsatisfiable by construction, and both real runs
-// against OP-TEE left reconnaissance through the budget escape having landed
-// 10 and 12 of the 22 actions.
-//
-// The slack matters as much as the total: a model spends rounds deciding
-// where to look next, and rounds where a browsing action fails buy no
-// progress at all — recon-001 lost two to a symbol_id it had truncated.
-//
-// Per-provider tuning happens at the caller level; this is the
-// universal baseline.
+// The indexed gate needs eleven successful actions (one repository card,
+// three module listings, six function cards and one relation query). The
+// remaining reconnaissance rounds allow failures and source inspection.
 func NewDefaultBudget() Budget {
 	return Budget{
-		MaxRounds:        8,
-		MaxReconRounds:   10,
-		MaxTokens:        120000,
-		PerActionTimeout: 30 * time.Second,
-		WallClock:        10 * time.Minute,
+		MaxRounds:                8,
+		MaxReconRounds:           10,
+		MaxTokens:                200000,
+		MaxReconTokens:           60000,
+		MaxInvestigationTokens:   140000,
+		ConvergenceReserveTokens: 20000,
+		PerActionTimeout:         30 * time.Second,
+		WallClock:                10 * time.Minute,
 	}
 }
 
@@ -112,7 +106,14 @@ func (b *Budget) TotalRounds() int {
 // for it — the model cannot be told both "you MUST call done" and "done is
 // refused".
 func (b *Budget) IsFinalRound() bool {
-	return b.MaxRounds > 0 && b.RoundsUsed >= b.TotalRounds()
+	if b.MaxRounds > 0 && b.RoundsUsed >= b.TotalRounds() {
+		return true
+	}
+	if b.ConvergenceReserveTokens <= 0 {
+		return false
+	}
+	return (b.MaxTokens > 0 && b.MaxTokens-b.TokensUsed <= b.ConvergenceReserveTokens) ||
+		(b.MaxInvestigationTokens > 0 && b.MaxInvestigationTokens-b.InvestigationTokensUsed <= b.ConvergenceReserveTokens)
 }
 
 // ConsumeTokens adds n to TokensUsed.
@@ -138,4 +139,52 @@ func (b *Budget) TerminationReason() string {
 		return "wall_clock"
 	}
 	return ""
+}
+
+// ConsumePhaseTokens records actual token usage even when a provider exceeds
+// its request limit: overruns must remain visible instead of being clamped.
+func (b *Budget) ConsumePhaseTokens(n int, recon bool) {
+	b.ConsumeTokens(n)
+	if recon {
+		b.ReconTokensUsed += n
+	} else {
+		b.InvestigationTokensUsed += n
+	}
+}
+
+func (b Budget) ReconTokenExhausted() bool {
+	return b.MaxReconTokens > 0 && b.ReconTokensUsed >= b.MaxReconTokens
+}
+
+// OutputAllowance bounds a request's output after conservatively reserving
+// its input and the final-answer reserve. A zero phase limit means unlimited
+// for compatibility with callers supplying older custom budgets.
+func (b Budget) OutputAllowance(input int, recon, final bool) int {
+	remaining := int(^uint(0) >> 1)
+	limit := func(max, used int) {
+		if max > 0 && max-used-input < remaining {
+			remaining = max - used - input
+		}
+	}
+	limit(b.MaxTokens, b.TokensUsed)
+	if !final {
+		remaining -= b.ConvergenceReserveTokens
+	}
+	if recon {
+		if b.MaxReconTokens > 0 && b.MaxReconTokens-b.ReconTokensUsed-input < remaining {
+			remaining = b.MaxReconTokens - b.ReconTokensUsed - input
+		}
+	} else if b.MaxInvestigationTokens > 0 {
+		phaseRemaining := b.MaxInvestigationTokens - b.InvestigationTokensUsed - input
+		if !final {
+			phaseRemaining -= b.ConvergenceReserveTokens
+		}
+		if phaseRemaining < remaining {
+			remaining = phaseRemaining
+		}
+	}
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }

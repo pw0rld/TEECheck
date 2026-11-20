@@ -99,6 +99,10 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 		return write(cfg.RunDir, facts)
 	}
 	facts.Symbols = decodeSymbols(symbolRows)
+	if len(facts.Symbols) == 0 {
+		facts.IndexNote = "symbol query returned no indexed definitions; source coverage is partial"
+		return write(cfg.RunDir, facts)
+	}
 	facts.Capabilities.Symbols = artifacts.CapabilityAvailable
 
 	// Each remaining query degrades only its own capability. A field-access
@@ -210,6 +214,9 @@ func joinNotes(notes []string) string {
 // stage that writes a file the next stage cannot parse has not degraded, it
 // has broken.
 func write(runDir string, facts artifacts.RepoFacts) error {
+	if facts.Capabilities.Symbols == artifacts.CapabilityUnavailable || len(facts.Capsules) == 0 {
+		facts.CoverageStatus = artifacts.CapabilityPartial
+	}
 	data, err := json.Marshal(facts)
 	if err != nil {
 		return fmt.Errorf("marshal repo facts: %w", err)
@@ -219,6 +226,16 @@ func write(runDir string, facts artifacts.RepoFacts) error {
 	}
 	if err := runfs.WriteJSON(runfs.RepoFactsPath(runDir), facts); err != nil {
 		return fmt.Errorf("write repo facts: %w", err)
+	}
+	if facts.CoverageStatus == artifacts.CapabilityPartial {
+		manifest, err := runfs.LoadManifest(runDir)
+		if err != nil {
+			return err
+		}
+		manifest.CoverageStatus = artifacts.CapabilityPartial
+		if err := runfs.WriteJSON(runfs.ManifestPath(runDir), manifest); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -10,6 +10,7 @@
     "run_id": { "type": "string", "minLength": 1 },
     "scope": { "$ref": "#/$defs/scannedScope" },
     "capabilities": { "$ref": "#/$defs/capabilities" },
+    "coverage_status": { "enum": ["partial"] },
     "repository": { "$ref": "#/$defs/repositoryCard" },
     "modules": { "type": "array", "items": { "$ref": "#/$defs/moduleCard" } },
     "function_pages": { "type": "array", "items": { "$ref": "#/$defs/functionCardPageRef" } }

@@ -7,12 +7,13 @@ import (
 )
 
 type Manifest struct {
-	SchemaVersion string `json:"schema_version"`
-	RunID         string `json:"run_id"`
-	RepoURL       string `json:"repo_url"`
-	LocalPath     string `json:"local_path"`
-	Commit        string `json:"commit"`
-	Focus         string `json:"focus"`
+	CoverageStatus string `json:"coverage_status,omitempty"`
+	SchemaVersion  string `json:"schema_version"`
+	RunID          string `json:"run_id"`
+	RepoURL        string `json:"repo_url"`
+	LocalPath      string `json:"local_path"`
+	Commit         string `json:"commit"`
+	Focus          string `json:"focus"`
 	// Hint is the free-text concern the caller supplied ("I suspect the TA
 	// loading path"). It is recorded here, not only passed to the planner,
 	// because a run's result cannot be read without knowing what the run was
@@ -48,15 +49,16 @@ type BuildProvenance struct {
 // RunConfiguration records the resolved, secret-free controls that materially
 // affect pipeline output.
 type RunConfiguration struct {
-	Command         string           `json:"command"`
-	Mode            string           `json:"mode,omitempty"`
-	Samples         int              `json:"samples,omitempty"`
-	MaxCases        int              `json:"max_cases,omitempty"`
-	MaxHotspots     int              `json:"max_hotspots,omitempty"`
-	MaxDialogRounds int              `json:"max_dialog_rounds,omitempty"`
-	StaticTools     string           `json:"static_tools,omitempty"`
-	LLM             LLMConfiguration `json:"llm"`
-	Planner         *PlannerLimits   `json:"planner,omitempty"`
+	EnableLegacyPrior bool             `json:"enable_legacy_prior"`
+	Command           string           `json:"command"`
+	Mode              string           `json:"mode,omitempty"`
+	Samples           int              `json:"samples,omitempty"`
+	MaxCases          int              `json:"max_cases,omitempty"`
+	MaxHotspots       int              `json:"max_hotspots,omitempty"`
+	MaxDialogRounds   int              `json:"max_dialog_rounds,omitempty"`
+	StaticTools       string           `json:"static_tools,omitempty"`
+	LLM               LLMConfiguration `json:"llm"`
+	Planner           *PlannerLimits   `json:"planner,omitempty"`
 }
 
 type LLMConfiguration struct {
@@ -75,6 +77,9 @@ type PlannerLimits struct {
 	MaxInvestigationRounds int   `json:"max_investigation_rounds"`
 	MaxReconRounds         int   `json:"max_recon_rounds"`
 	MaxAggregateTokens     int   `json:"max_aggregate_tokens"`
+	ReconMaxTokens         int   `json:"recon_max_tokens"`
+	InvestigationMaxTokens int   `json:"investigation_max_tokens"`
+	ReserveTokensForDone   int   `json:"reserve_tokens_for_done"`
 	PerActionTimeoutMs     int64 `json:"per_action_timeout_ms"`
 	WallClockTimeoutMs     int64 `json:"wall_clock_timeout_ms"`
 }
@@ -178,15 +183,17 @@ type Findings struct {
 }
 
 type FindingItem struct {
-	FindingID  string            `json:"finding_id"`
-	SliceID    string            `json:"slice_id"`
-	Status     string            `json:"status"`
-	Severity   string            `json:"severity"`
-	Confidence string            `json:"confidence"`
-	Files      []string          `json:"files,omitempty"`
-	Locations  []FindingLocation `json:"locations,omitempty"`
-	Summary    string            `json:"summary"`
-	Evidence   []string          `json:"evidence,omitempty"`
+	// RelatedTWEs carries explicit weakness classes independently of an opaque finding identifier.
+	RelatedTWEs []string          `json:"related_twes,omitempty"`
+	FindingID   string            `json:"finding_id"`
+	SliceID     string            `json:"slice_id"`
+	Status      string            `json:"status"`
+	Severity    string            `json:"severity"`
+	Confidence  string            `json:"confidence"`
+	Files       []string          `json:"files,omitempty"`
+	Locations   []FindingLocation `json:"locations,omitempty"`
+	Summary     string            `json:"summary"`
+	Evidence    []string          `json:"evidence,omitempty"`
 
 	// Sections is the additive (PR-07, §25/§7.9) machine-readable
 	// counterpart to the arbiter review packet Markdown: anchored
@@ -204,6 +211,7 @@ type FindingItem struct {
 type FindingLocation struct {
 	Path      string `json:"path"`
 	StartLine int    `json:"start_line"`
+	Symbol    string `json:"symbol,omitempty"`
 }
 
 type PromptSnippet struct {

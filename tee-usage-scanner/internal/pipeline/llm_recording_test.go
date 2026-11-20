@@ -60,17 +60,18 @@ func TestPipeline_RecordsLLMCallsPerAgent(t *testing.T) {
 	outputDir := t.TempDir()
 
 	cfg := config.Config{
-		Command:       "run",
-		Target:        filepath.Join(root, "testdata", "sample_repo"),
-		Mode:          "llm",
-		Focus:         "runtime",
-		RunID:         "pipeline-record-001",
-		OutputDir:     outputDir,
-		KnowledgeRoot: filepath.Join(outputDir, "knowledge"),
-		LLMModel:      "fake-model-1",
-		MaxHotspots:   4,
-		MaxCases:      4,
-		StaticTools:   "auto",
+		EnableLegacyPrior: true,
+		Command:           "run",
+		Target:            filepath.Join(root, "testdata", "sample_repo"),
+		Mode:              "llm",
+		Focus:             "runtime",
+		RunID:             "pipeline-record-001",
+		OutputDir:         outputDir,
+		KnowledgeRoot:     filepath.Join(outputDir, "knowledge"),
+		LLMModel:          "fake-model-1",
+		MaxHotspots:       4,
+		MaxCases:          4,
+		StaticTools:       "auto",
 	}
 
 	fake := &llmtest.FakeClient{

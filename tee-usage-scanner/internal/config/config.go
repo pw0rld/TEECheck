@@ -41,6 +41,9 @@ type Config struct {
 	MaxDialogRounds    int
 	Target             string
 	Mode               string
+	// EnableLegacyPrior opts into the old architecture/invariant model stages.
+	// The default pipeline grounds investigation in the project map and code.
+	EnableLegacyPrior bool
 	// Samples is the number of independent planner passes to run
 	// per pipeline invocation. Default 1 = the legacy behavior.
 	// With samples > 1, each pass after the first is told which
@@ -500,6 +503,7 @@ func parseRun(args []string) (Config, error) {
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
+	fs.BoolVar(&cfg.EnableLegacyPrior, "enable-legacy-prior", false, "Run legacy pre-investigation architecture and invariant model stages")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	// Upstream identity overrides. Needed when the scanned directory is not
 	// the project it represents — a benchmark fixture is a subtree of the
@@ -566,30 +570,14 @@ func parseRun(args []string) (Config, error) {
 	return cfg, nil
 }
 
-// parsePlan is the L3 planner-only entry point. It accepts the same
-// flags as "run" but always invokes the L3 LLM planner directly,
-// then hands the candidates off to the existing 4-agent audit
-// pipeline (cases/expert/challenger/verifier/arbiter).
-//
-// The only required argument is the target (URL or local path).
-// LLM mode is forced on for the planner itself and validated below;
-// the downstream 4-agent pipeline is always LLM-backed.
+// parsePlan is a compatibility alias for the same LLM-backed run pipeline.
+// Mode is fixed by parseRun; injecting a retired --mode flag breaks parsing.
 func parsePlan(args []string) (Config, error) {
-	// Force --mode=llm BEFORE parseRun sees the args so parseRun's
-	// internal "if Mode == llm { validate provider config }" block fires.
-	args = append([]string{"--mode", "llm"}, args...)
-
 	cfg, err := parseRun(args)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.Command = "plan"
-	// Belt + suspenders: explicitly force llm mode in case parseRun's
-	// logic changes.
-	cfg.Mode = "llm"
-	if err := validateProviderConfig(cfg, "plan"); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 

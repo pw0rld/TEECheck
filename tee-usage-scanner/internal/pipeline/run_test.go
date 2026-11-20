@@ -78,16 +78,17 @@ func TestPipelineEndToEnd_FakeClient(t *testing.T) {
 	knowledgeRoot := filepath.Join(outputDir, "knowledge")
 
 	cfg := config.Config{
-		Command:       "run",
-		Target:        filepath.Join(root, "testdata", "sample_repo"),
-		Mode:          "llm",
-		Focus:         "runtime",
-		RunID:         "pipeline-test-001",
-		OutputDir:     outputDir,
-		KnowledgeRoot: knowledgeRoot,
-		MaxHotspots:   4,
-		MaxCases:      4,
-		StaticTools:   "auto",
+		EnableLegacyPrior: true,
+		Command:           "run",
+		Target:            filepath.Join(root, "testdata", "sample_repo"),
+		Mode:              "llm",
+		Focus:             "runtime",
+		RunID:             "pipeline-test-001",
+		OutputDir:         outputDir,
+		KnowledgeRoot:     knowledgeRoot,
+		MaxHotspots:       4,
+		MaxCases:          4,
+		StaticTools:       "auto",
 	}
 
 	fake := &llmtest.FakeClient{

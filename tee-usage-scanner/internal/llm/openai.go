@@ -50,7 +50,7 @@ func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req Generate
 		Messages:    buildMessages(req.SystemPrompt, req.Messages),
 		Temperature: req.Temperature,
 		Stream:      false,
-		MaxTokens:   c.maxTokens,
+		MaxTokens:   requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
 	}
 	if body.Temperature == 0.0 {
 		body.Temperature = c.temperature
@@ -131,7 +131,7 @@ func (c *OpenAIClient) generateResponses(ctx context.Context, req GenerateReques
 	body := openAIResponsesRequest{
 		Model:           c.model,
 		Input:           input,
-		MaxOutputTokens: c.maxTokens,
+		MaxOutputTokens: requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
 		Store:           false,
 	}
 	if c.reasoningEffort != "" {

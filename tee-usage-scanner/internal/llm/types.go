@@ -12,6 +12,8 @@ type GenerateRequest struct {
 	Messages     []Message
 	Temperature  float64
 	JSONMode     bool
+	// MaxOutputTokens optionally caps this call below the configured limit.
+	MaxOutputTokens int
 }
 
 // GenerateResponse carries both what the caller needs and what a debugger
@@ -49,4 +51,11 @@ type Usage struct {
 
 type Client interface {
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
+}
+
+func requestOutputLimit(configured, requested int) int {
+	if requested > 0 && requested < configured {
+		return requested
+	}
+	return configured
 }

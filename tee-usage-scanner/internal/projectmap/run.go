@@ -72,7 +72,8 @@ func Run(cfg config.Config) error {
 		// Carried forward verbatim. A Planner reading the map must be able to
 		// tell "this module has no recorded functions" from "no index was
 		// built", and the map is the only thing it reads.
-		Capabilities: facts.Capabilities,
+		Capabilities:   facts.Capabilities,
+		CoverageStatus: facts.CoverageStatus,
 		Repository: artifacts.RepositoryCard{
 			DocumentedPurpose: documentedPurpose(readFirstReadme(manifest.LocalPath)),
 			Languages:         facts.Languages,
@@ -87,6 +88,10 @@ func Run(cfg config.Config) error {
 		return err
 	}
 	m.FunctionPages = pages
+	if len(pages) == 0 {
+		m.Capabilities.Symbols = artifacts.CapabilityUnavailable
+		m.CoverageStatus = artifacts.CapabilityPartial
+	}
 
 	data, err := json.Marshal(m)
 	if err != nil {
