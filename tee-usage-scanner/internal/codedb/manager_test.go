@@ -79,7 +79,14 @@ func setupRetryBuild(t *testing.T, engine *retryBuildEngine) (*Manager, Scope) {
 }
 
 func TestEnsureDatabase_TransientFailureRetriesOnce(t *testing.T) {
-	for _, marker := range []string{"exit status 100", "java.lang.InternalError", "MMapPage", "DiskWritableStringStore", "SIGBUS"} {
+	for _, marker := range []string{
+		"exit status 100", "java.lang.InternalError", "MMapPage", "DiskWritableStringStore", "SIGBUS",
+		"exit status 2: OpenJDK 64-Bit Server VM: SIGSEGV; Problematic frame: ~StubRoutines::updateBytesCRC32",
+		"Problematic frame: ~StubRoutines::updateBytesCRC32",
+		"An error report file is saved as hs_err_pid123.log",
+		"SIGSEGV in OpenJDK 64-Bit Server VM",
+		"HotSpot: Core dump will be written",
+	} {
 		t.Run(marker, func(t *testing.T) {
 			e := &retryBuildEngine{failures: []error{fmt.Errorf("database build failed: %s", marker)}}
 			m, scope := setupRetryBuild(t, e)
@@ -100,7 +107,13 @@ func TestEnsureDatabase_TransientFailureRetriesOnce(t *testing.T) {
 }
 
 func TestEnsureDatabase_NonTransientFailureDoesNotRetry(t *testing.T) {
-	for _, failure := range []error{errors.New("compiler failed: missing header"), errors.New("exit status 1"), errors.New("exit status 1000"), fmt.Errorf("MMapPage: %w", context.Canceled), fmt.Errorf("SIGBUS: %w", context.DeadlineExceeded)} {
+	for _, failure := range []error{
+		errors.New("compiler failed: missing header"), errors.New("exit status 1"), errors.New("exit status 1000"),
+		errors.New("compiler process: SIGSEGV"), errors.New("Core dump will be written by compiler"),
+		fmt.Errorf("MMapPage: %w", context.Canceled), fmt.Errorf("SIGBUS: %w", context.DeadlineExceeded),
+		fmt.Errorf("OpenJDK SIGSEGV problematic frame: %w", context.Canceled),
+		fmt.Errorf("hs_err_pid123.log: %w", context.DeadlineExceeded),
+	} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			e := &retryBuildEngine{failures: []error{failure}}
 			m, scope := setupRetryBuild(t, e)
@@ -115,13 +128,17 @@ func TestEnsureDatabase_NonTransientFailureDoesNotRetry(t *testing.T) {
 }
 
 func TestEnsureDatabase_TransientRecoveryFailureIsNotCached(t *testing.T) {
-	e := &retryBuildEngine{failures: []error{errors.New("MMapPage"), errors.New("SIGBUS")}}
-	m, scope := setupRetryBuild(t, e)
-	if _, err := m.Ensure(context.Background(), scope); err == nil {
-		t.Fatal("expected recovery failure")
-	}
-	if len(e.calls) != 2 || m.State(scope) != StateAbsent {
-		t.Fatalf("calls=%d state=%s", len(e.calls), m.State(scope))
+	for _, failure := range []error{errors.New("MMapPage"), errors.New("OpenJDK SIGSEGV: Problematic frame: ~StubRoutines::updateBytesCRC32")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			e := &retryBuildEngine{failures: []error{failure, failure}}
+			m, scope := setupRetryBuild(t, e)
+			if _, err := m.Ensure(context.Background(), scope); err == nil {
+				t.Fatal("expected recovery failure")
+			}
+			if len(e.calls) != 2 || m.State(scope) != StateAbsent {
+				t.Fatalf("calls=%d state=%s", len(e.calls), m.State(scope))
+			}
+		})
 	}
 }
 

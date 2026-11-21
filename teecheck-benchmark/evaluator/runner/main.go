@@ -112,7 +112,7 @@ func main() {
 	mode := flag.String("mode", "validate", "validate, evaluate, or score")
 	list := flag.Bool("list", false, "list valid case identifiers")
 	resultsDir := flag.String("results", "results", "scanner results and score reports directory")
-	scannerCommand := flag.String("scanner-command", "", "command template with {input}, {run_dir}, {case}, and {variant} placeholders")
+	scannerCommand := flag.String("scanner-command", "", "command template with {input}, {run_dir}, {case}, {variant}, {attempt_id}, {repo_url}/{repository}, and {commit}/{revision} placeholders")
 	requireInScope := flag.Bool("require-in-scope", false, "reject scoring/evaluation when no reviewed in-scope case is selected")
 	timeout := flag.Duration("timeout", 30*time.Minute, "timeout for each scanner invocation")
 	flag.Parse()

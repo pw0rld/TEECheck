@@ -17,11 +17,12 @@ import (
 // persisted to rounds.jsonl on disk for debugging and post-hoc
 // analysis but is not fed back to the LLM.
 type PlannerState struct {
-	RunID      string                   `json:"run_id"`
-	Rounds     []artifacts.RoundRecord  `json:"rounds"`
-	Candidates []artifacts.Candidate    `json:"candidates"`
-	AuditLeads []artifacts.AuditLead    `json:"audit_leads,omitempty"`
-	SinksSeen  []artifacts.SinkHitGroup `json:"sinks_seen,omitempty"`
+	RunID      string                      `json:"run_id"`
+	Rounds     []artifacts.RoundRecord     `json:"rounds"`
+	Candidates []artifacts.Candidate       `json:"candidates"`
+	AuditLeads []artifacts.AuditLead       `json:"audit_leads,omitempty"`
+	Contracts  []artifacts.CaseInvariantV2 `json:"contracts,omitempty"`
+	SinksSeen  []artifacts.SinkHitGroup    `json:"sinks_seen,omitempty"`
 
 	// Investigations holds every TWEInvestigation the Planner has built so
 	// far this run (§7.5, §9.5). Each entry already carries its own

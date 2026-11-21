@@ -69,6 +69,18 @@ func bindPlannerContracts(raw []artifacts.CaseInvariantV2, cfg RunConfig) ([]art
 			problem(bound.InvariantID, err)
 			continue
 		}
+		if bound.Grounding == "source_bound" && lead.State != artifacts.LeadStateClosed {
+			updated := cloneLead(lead)
+			updated.State = artifacts.LeadStateFormalized
+			updated.ContractIDs = unionStrings(updated.ContractIDs, []string{bound.InvariantID})
+			if updated.State != lead.State || len(updated.ContractIDs) != len(lead.ContractIDs) {
+				if err := appendAuditLead(runfs.AuditLeadsPath(cfg.RunDir), updated); err != nil {
+					problem(bound.InvariantID, fmt.Errorf("persist formalized lead: %w", err))
+				} else {
+					leads[bound.LeadRef] = updated
+				}
+			}
+		}
 		out = append(out, bound)
 	}
 	return contracts.MergeAll(nil, out), problems

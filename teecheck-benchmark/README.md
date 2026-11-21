@@ -202,8 +202,33 @@ go run ./evaluator/runner \
   -mode evaluate \
   -results /tmp/teecheck-benchmark-results \
   -timeout 45m \
-  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --repo-url {repository} --commit {revision} --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
+  -scanner-command '. ../tee-usage-scanner/.env.local; (cd ../tee-usage-scanner && go run ./cmd/teecheck run {input} --repo-url {repo_url} --commit {commit} --focus tee --run-id scan --output-dir {run_dir} --knowledge-root knowledge --max-cases 8 --max-hotspots 8)'
 ```
+
+Command placeholders are shell-quoted by the runner:
+
+| Placeholder | Value |
+| --- | --- |
+| `{input}` | Absolute path to the vulnerable or fixed fixture directory |
+| `{run_dir}` | Fresh output directory owned by this attempt |
+| `{case}`, `{variant}`, `{attempt_id}` | Case, source variant, and attempt identifiers |
+| `{repo_url}` | Upstream repository from `case.yaml`; `{repository}` is a compatible alias |
+| `{commit}` | Vulnerable revision from `case.yaml` or fixed revision from `oracle.yaml`; `{revision}` is a compatible alias |
+
+Do not quote placeholders again. Unrelated shell syntax, including `${HOME}`
+and braces in embedded scripts, remains intact.
+
+For each scanner process the runner also sets `TEECHECK_REPO_URL` and
+`TEECHECK_COMMIT` to that variant's upstream identity, replacing inherited values.
+TEECheck uses these as defaults when `--repo-url` and `--commit` are absent, so a
+command such as `teecheck run {input} --output-dir {run_dir}` also works for
+cropped fixtures without their own Git metadata. Explicit scanner flags take
+precedence. If a command sources another environment file, that file can replace
+the defaults; the explicit flags in the example above preserve the case identity.
+Every resulting bundle must still match the requested repository and revision;
+missing or conflicting identity is rejected rather than scored. Supplying this
+metadata does not turn a cropped fixture into a full Git checkout or create a
+CodeQL database.
 
 Rescore existing results:
 

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The two variants of a case must report DIFFERENT upstream revisions. The
 // fact layer derives its cache key from (repository, commit, operation), so a
@@ -29,6 +32,9 @@ func TestCommandValues_VariantCarriesItsOwnRevision(t *testing.T) {
 	}
 
 	for _, v := range []map[string]string{vuln, fixed} {
+		if v["repo_url"] != v["repository"] || v["commit"] != v["revision"] {
+			t.Errorf("identity aliases differ: %+v", v)
+		}
 		if v["repository"] != "https://github.com/OP-TEE/optee_os" {
 			t.Errorf("repository = %q, want the upstream OP-TEE URL", v["repository"])
 		}
@@ -41,5 +47,36 @@ func TestCommandValues_VariantCarriesItsOwnRevision(t *testing.T) {
 	}
 	if vuln["variant"] != "vulnerable" || fixed["variant"] != "fixed" {
 		t.Errorf("variant not carried through")
+	}
+}
+
+func TestExpandCommand_QuotesAliasesWithoutExpandingValuesAgain(t *testing.T) {
+	values := map[string]string{
+		"input":    "/fixtures/O'Brien/{commit}",
+		"repo_url": "https://example.test/upstream/repo",
+		"commit":   "vulnerable-revision",
+	}
+	got := expandCommand("teecheck run {input} --repo-url {repo_url} --commit {commit}; echo ${HOME}", values)
+	want := "teecheck run '/fixtures/O'\\''Brien/{commit}' --repo-url 'https://example.test/upstream/repo' --commit 'vulnerable-revision'; echo ${HOME}"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestExpandCommand_PreservesUnrelatedShellBraces(t *testing.T) {
+	got := expandCommand("teecheck run {input}; echo ${HOME}; awk '{print}'", map[string]string{"input": "/fixture"})
+	if got != "teecheck run '/fixture'; echo ${HOME}; awk '{print}'" {
+		t.Fatalf("unrelated shell syntax changed: %q", got)
+	}
+}
+
+func TestScannerEnvironment_OverridesDuplicateIdentity(t *testing.T) {
+	got := scannerEnvironment([]string{
+		"PATH=/bin", "TEECHECK_REPO_URL=stale", "TEECHECK_COMMIT=stale",
+		"TEECHECK_REPO_URL=also-stale", "TEECHECK_COMMIT=also-stale", "OTHER=keep=equal",
+	}, "https://example.test/repo", "fixed-revision")
+	want := []string{"PATH=/bin", "OTHER=keep=equal", "TEECHECK_REPO_URL=https://example.test/repo", "TEECHECK_COMMIT=fixed-revision"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("environment = %q, want %q", got, want)
 	}
 }

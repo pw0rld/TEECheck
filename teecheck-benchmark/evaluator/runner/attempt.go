@@ -36,6 +36,10 @@ type latestAttempt struct {
 // Every invocation owns a new directory. Publish its pointer before starting
 // the command, so a crash cannot cause the scorer to reuse an earlier result.
 func runScannerAttempt(c loadedCase, variant, variantDir, template string, timeout time.Duration) error {
+	input, err := filepath.Abs(filepath.Join(c.Dir, variant))
+	if err != nil {
+		return err
+	}
 	parent := filepath.Join(variantDir, "attempts")
 	if err := os.MkdirAll(parent, 0755); err != nil {
 		return err
@@ -55,14 +59,12 @@ func runScannerAttempt(c loadedCase, variant, variantDir, template string, timeo
 	if err := writeJSONAtomic(filepath.Join(variantDir, "latest.json"), latestAttempt{record.AttemptID}); err != nil {
 		return err
 	}
-	input, err := filepath.Abs(filepath.Join(c.Dir, variant))
-	if err != nil {
-		return err
-	}
 	values := commandValues(c, variant, input, dir)
 	values["attempt_id"] = record.AttemptID
+	command := expandCommand(template, values)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cmd := exec.CommandContext(ctx, "sh", "-c", expandCommand(template, values))
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = scannerEnvironment(os.Environ(), values["repo_url"], values["commit"])
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	fmt.Printf("RUN %s/%s attempt=%s\n", c.Case.ID, variant, record.AttemptID)
 	runErr := cmd.Run()
@@ -108,6 +110,21 @@ func runScannerAttempt(c loadedCase, variant, variantDir, template string, timeo
 		fmt.Printf("WARN %s/%s %s: %s\n", c.Case.ID, variant, record.Status, record.Error)
 	}
 	return writeJSONAtomic(filepath.Join(dir, "attempt.json"), record)
+}
+
+// Fixture directories may have no Git metadata (or inherit the benchmark's
+// metadata). Give each scanner process its own upstream identity, replacing
+// stale values inherited from the invoking shell. Explicit scanner flags can
+// still override these defaults, and their output must pass the identity gate.
+func scannerEnvironment(base []string, repository, revision string) []string {
+	env := make([]string, 0, len(base)+2)
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "TEECHECK_REPO_URL" && key != "TEECHECK_COMMIT" {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "TEECHECK_REPO_URL="+repository, "TEECHECK_COMMIT="+revision)
 }
 
 func checkAttemptIdentity(c loadedCase, variant string, validation runbundle.Report) error {

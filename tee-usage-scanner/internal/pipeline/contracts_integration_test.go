@@ -18,8 +18,12 @@ import (
 )
 
 type contractPipelineClient struct {
-	role  string
-	calls int
+	role              string
+	calls             int
+	legacyCandidate   bool
+	immediateContract bool
+	sourceRef         string
+	closingContract   map[string]any
 }
 
 func (c *contractPipelineClient) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
@@ -33,6 +37,7 @@ func (c *contractPipelineClient) Generate(_ context.Context, req llm.GenerateReq
 			if len(ref) != 2 {
 				return llm.GenerateResponse{}, fmt.Errorf("no observation")
 			}
+			c.sourceRef = ref[1]
 			body, _ := json.Marshal(map[string]any{"actions": []any{map[string]any{"name": "open_audit_lead", "args": map[string]any{"security_question": "Does accept check its input?", "target_symbol_ids": []string{"demo.c::accept"}, "reason": []string{"Observed unconditional acceptance"}, "reason_fact_refs": []string{ref[1]}}}}})
 			return llm.GenerateResponse{Text: string(body)}, nil
 		case 3:
@@ -40,8 +45,30 @@ func (c *contractPipelineClient) Generate(_ context.Context, req llm.GenerateReq
 			if len(lead) != 2 {
 				return llm.GenerateResponse{}, fmt.Errorf("no lead id in prompt")
 			}
-			body, _ := json.Marshal(map[string]any{"actions": []any{map[string]any{"name": "done", "args": map[string]any{"summary": "Input contract investigated", "candidates": []any{}, "case_invariants": []any{map[string]any{"lead_ref": lead[1], "subjects": []any{map[string]any{"path": "demo.c", "symbol": "accept"}}, "preconditions": []string{"the argument can be non-positive"}, "required_property": map[string]any{"kind": "input_guard", "statement": "accept rejects non-positive input"}, "security_effect": "input acceptance decision", "verification_queries": []any{}, "related_twes": []string{"TWE-GUARD-001"}}}}}}})
+			c.closingContract = map[string]any{"lead_ref": lead[1], "subjects": []any{map[string]any{"path": "demo.c", "symbol": "accept"}}, "preconditions": []string{"the argument can be non-positive"}, "required_property": map[string]any{"kind": "input_guard", "statement": "accept rejects non-positive input"}, "security_effect": "input acceptance decision", "verification_queries": []any{}, "related_twes": []string{"TWE-GUARD-001"}}
+			if c.immediateContract {
+				body, _ := json.Marshal(map[string]any{"actions": []any{
+					map[string]any{"name": "update_lead", "args": map[string]any{"lead_id": lead[1], "add_notes": []any{map[string]any{"fact_ref": c.sourceRef, "summary": "The source returns an unconditional acceptance decision"}}}},
+					map[string]any{"name": "formalize_contract", "args": map[string]any{"lead_id": lead[1], "contract": c.closingContract}},
+					map[string]any{"name": "close_lead", "args": map[string]any{"lead_id": lead[1], "reason": "Recorded the source obligation for independent review", "fact_refs": []string{c.sourceRef}}},
+				}})
+				return llm.GenerateResponse{Text: string(body)}, nil
+			}
+			args := map[string]any{"summary": "Input contract investigated", "candidates": []any{}, "case_invariants": []any{c.closingContract}}
+			if c.legacyCandidate {
+				args["case_invariants"] = []any{}
+				args["candidates"] = []any{map[string]any{"id": "input-guard", "kind": "authorization", "priority": "high", "paths": []string{"demo.c"}, "symbols": []string{"accept"}, "why_selected": []string{"Input is accepted without a check"}}}
+			}
+			body, _ := json.Marshal(map[string]any{"actions": []any{map[string]any{"name": "done", "args": args}}})
 			return llm.GenerateResponse{Text: string(body)}, nil
+		case 4:
+			if c.immediateContract {
+				return llm.GenerateResponse{Text: `{"actions":[{"name":"done","args":{"summary":"Recorded contract during investigation", "candidates":[]}}]}`}, nil
+			}
+			if c.legacyCandidate {
+				body, _ := json.Marshal(map[string]any{"formalizations": []any{map[string]any{"candidate_index": 0, "case_invariants": []any{c.closingContract}}}})
+				return llm.GenerateResponse{Text: string(body)}, nil
+			}
 		}
 		return llm.GenerateResponse{}, fmt.Errorf("unexpected planner call")
 	}
@@ -54,17 +81,29 @@ func (c *contractPipelineClient) Generate(_ context.Context, req llm.GenerateReq
 }
 
 func TestPipeline_ContractDiscoveryReachesIndependentAssessmentAndArbiter(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy_candidate=%v", legacy), func(t *testing.T) { testContractPipeline(t, legacy, false) })
+	}
+	t.Run("immediate_contract_lifecycle", func(t *testing.T) { testContractPipeline(t, false, true) })
+}
+
+func testContractPipeline(t *testing.T, legacy, immediate bool) {
+	t.Helper()
 	root, out := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "demo.c"), []byte("int accept(int value) { return 1; }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, e, c, v := &contractPipelineClient{role: "planner"}, &contractPipelineClient{role: "expert"}, &contractPipelineClient{role: "challenger"}, &contractPipelineClient{role: "verifier"}
+	p, e, c, v := &contractPipelineClient{role: "planner", legacyCandidate: legacy, immediateContract: immediate}, &contractPipelineClient{role: "expert"}, &contractPipelineClient{role: "challenger"}, &contractPipelineClient{role: "verifier"}
 	a := &contractPipelineClient{role: "arbiter"}
 	dir, err := pipeline.RunWithClients(config.Config{Command: "run", Target: root, Mode: "llm", Focus: "tee", RunID: "contract-smoke", OutputDir: out, KnowledgeRoot: filepath.Join(out, "knowledge")}, pipeline.RoleClients{Planner: p, Expert: e, Challenger: c, Verifier: v, Arbiter: a})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.calls != 3 || e.calls != 1 || c.calls != 1 || v.calls != 1 {
+	plannerCalls := 3
+	if legacy || immediate {
+		plannerCalls = 4
+	}
+	if p.calls != plannerCalls || e.calls != 1 || c.calls != 1 || v.calls != 1 {
 		t.Fatalf("unexpected calls: %d %d %d %d", p.calls, e.calls, c.calls, v.calls)
 	}
 	if a.calls != 0 {

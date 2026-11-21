@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +20,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
-const StructFieldWriteOperation = "cpp.contract.direct_struct_field_assignment"
+const StructFieldWriteOperation = contracts.StructFieldWriteOperation
 
 // ContractQueryResult is produced by a registered executor, never by a model.
 // Missing query matches remain unresolved instead of being interpreted as safe.
@@ -59,27 +58,10 @@ func registeredQuery(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) boo
 	return q.Backend == "codeql" && q.Operation == StructFieldWriteOperation && c.RequiredProperty.Kind == "direct_struct_field_assignment"
 }
 
-var contractIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 func fieldWriteQuery(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (string, error) {
-	if !registeredQuery(c, q) || len(c.Subjects) == 0 || len(q.Parameters) < 2 || len(q.Parameters) > 3 {
-		return "", fmt.Errorf("query does not describe one registered struct-field property")
-	}
-	for name := range q.Parameters {
-		if name != "type" && name != "field" && name != "subject" {
-			return "", fmt.Errorf("unknown query parameter %q", name)
-		}
-	}
-	s, err := fieldWriteSubject(c, q)
+	s, typeName, field, err := contracts.StructFieldWriteTarget(c, q)
 	if err != nil {
 		return "", err
-	}
-	typeName, field := q.Parameters["type"], q.Parameters["field"]
-	if !contractIdentifier.MatchString(typeName) || !contractIdentifier.MatchString(field) || !contractIdentifier.MatchString(s.Symbol) {
-		return "", fmt.Errorf("invalid query identifier")
-	}
-	if c.RequiredProperty.Destination != typeName+"."+field || len(c.RequiredProperty.TargetFields) != 1 || c.RequiredProperty.TargetFields[0] != field || c.RequiredProperty.Source != "" || c.RequiredProperty.Authority != "" {
-		return "", fmt.Errorf("query parameters differ from the declared property")
 	}
 	return fmt.Sprintf(`/**
  * @name Contract struct field assignment
@@ -110,25 +92,6 @@ select d, "teecheck-contract-field:" + answer
 `, strconv.Quote(field), strconv.Quote(typeName), strconv.Quote(s.Symbol), strconv.Quote(filepath.ToSlash(s.Path)), s.StartLine, s.EndLine, strconv.Quote(field), strconv.Quote(typeName)), nil
 }
 
-// Explicitly bind the query target when context contains more than one
-// function. Subject ordering is not part of a logical contract's identity.
-func fieldWriteSubject(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (artifacts.ContractSubject, error) {
-	target := q.Parameters["subject"]
-	if target == "" && len(c.Subjects) == 1 {
-		return c.Subjects[0], nil
-	}
-	var found []artifacts.ContractSubject
-	for _, s := range c.Subjects {
-		if target == s.Path+"::"+s.Symbol {
-			found = append(found, s)
-		}
-	}
-	if len(found) != 1 {
-		return artifacts.ContractSubject{}, fmt.Errorf("query requires a unique subject parameter for its target definition")
-	}
-	return found[0], nil
-}
-
 func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (ContractQueryResult, error) {
 	result := ContractQueryResult{Assessment: "unresolved", ReasonCode: "no_registered_query", Reason: "No registered executor for this property and operation."}
 	if !registeredQuery(c, q) {
@@ -147,7 +110,7 @@ func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInva
 		result.ReasonCode, result.Reason = "query_property_mismatch", err.Error()
 		return result, nil
 	}
-	subject, _ := fieldWriteSubject(c, q)
+	subject, _, _, _ := contracts.StructFieldWriteTarget(c, q)
 	if r.engine == nil || !r.engine.Available() || r.db == nil {
 		result.ReasonCode, result.Reason = "tool_unavailable", "Registered CodeQL executor is unavailable."
 		return result, nil

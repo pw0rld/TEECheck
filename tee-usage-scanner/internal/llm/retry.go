@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,9 +29,9 @@ type RetryConfig struct {
 }
 
 // NewRetryingClient wraps an underlying llm.Client with retry-on-
-// transient-error semantics. Non-transient errors (4xx, policy refusals,
+// transient-error semantics. Non-transient errors (4xx except 429, policy refusals,
 // parse errors, context cancellation) short-circuit immediately. Transient errors
-// (5xx, connection resets, i/o timeouts, request deadline exceeded)
+// (429, rate limiting, 5xx, connection resets, i/o timeouts, request deadline exceeded)
 // retry with exponential backoff capped at MaxDelay.
 //
 // This is the defense against GLM's intermittent 5xx responses and
@@ -134,6 +136,7 @@ func IsPolicyRefusal(err error) bool {
 // IsTransient reports whether an error from an LLM Generate call is
 // likely to succeed on retry. The set of retryable errors is:
 //
+//   - HTTP 429 / rate_limit_error responses
 //   - HTTP 5xx status codes (server error, bad gateway, unavailable,
 //     gateway timeout, etc.)
 //   - Network-level connection resets, refusals, timeouts
@@ -143,7 +146,7 @@ func IsPolicyRefusal(err error) bool {
 //
 // Not retryable:
 //   - Explicit content/safety policy refusals, even with HTTP 5xx status
-//   - HTTP 4xx status codes (auth, validation, quota)
+//   - Other HTTP 4xx status codes (auth, validation)
 //   - JSON parse failures (nondeterministic prompt issue, not network)
 //   - context.Canceled (user requested stop)
 //   - Any other error
@@ -157,17 +160,23 @@ func IsTransient(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
+	msg := strings.ToLower(err.Error())
+	// An explicit HTTP response takes precedence over incidental transport
+	// words in its body. In particular, an auth/validation failure mentioning
+	// "timeout" or "rate_limit_error" must not become retryable.
+	if match := responseStatus.FindStringSubmatch(msg); len(match) == 2 {
+		status, _ := strconv.Atoi(match[1])
+		if status >= 400 && status < 500 {
+			return status == 429
+		}
+		if status >= 500 && status < 600 {
+			return true
+		}
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	// Explicit HTTP 5xx.
-	if strings.Contains(msg, "status 500") || strings.Contains(msg, "status 501") ||
-		strings.Contains(msg, "status 502") || strings.Contains(msg, "status 503") ||
-		strings.Contains(msg, "status 504") || strings.Contains(msg, "status 505") ||
-		strings.Contains(msg, "status 506") || strings.Contains(msg, "status 507") ||
-		strings.Contains(msg, "status 508") || strings.Contains(msg, "status 509") ||
-		strings.Contains(msg, "status 510") || strings.Contains(msg, "status 511") {
+	if strings.Contains(msg, "rate_limit_error") {
 		return true
 	}
 	// Network-level symptoms.
@@ -182,3 +191,5 @@ func IsTransient(err error) bool {
 	}
 	return false
 }
+
+var responseStatus = regexp.MustCompile(`\b(?:status(?: code)?|http)(?:\s*:\s*|\s+)([0-9]{3})\b`)

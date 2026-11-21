@@ -191,8 +191,8 @@ func evaluate(cases []loadedCase, resultsDir, commandTemplate string, timeout ti
 }
 
 // commandValues builds the placeholders one scan command is expanded with.
-// repository/revision let the scanner be told which upstream project and
-// revision the fixture represents: the fixture is a subtree of this
+// repo_url/commit (also available as repository/revision) identify the upstream
+// project and revision the fixture represents: the fixture is a subtree of this
 // repository, so git would otherwise report the benchmark's own origin and
 // HEAD. Each variant carries its OWN revision — the fact layer keys its cache
 // on (repository, commit, operation), so sharing one would make the fixed run
@@ -209,15 +209,34 @@ func commandValues(c loadedCase, variant, input, runDir string) map[string]strin
 		"variant":    variant,
 		"repository": c.Case.Repository,
 		"revision":   revision,
+		"repo_url":   c.Case.Repository,
+		"commit":     revision,
 	}
 }
 
+var commandPlaceholder = regexp.MustCompile(`\{([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+
 func expandCommand(template string, values map[string]string) string {
-	out := template
-	for key, value := range values {
-		out = strings.ReplaceAll(out, "{"+key+"}", shellQuote(value))
+	var out strings.Builder
+	start := 0
+	for _, match := range commandPlaceholder.FindAllStringSubmatchIndex(template, -1) {
+		// Shell environment expansion is not a runner placeholder.
+		if match[0] > 0 && template[match[0]-1] == '$' {
+			continue
+		}
+		key := template[match[2]:match[3]]
+		value, ok := values[key]
+		if !ok {
+			// The template is also a shell command; unrelated braces may
+			// belong to awk, shell functions, or an embedded script.
+			continue
+		}
+		out.WriteString(template[start:match[0]])
+		out.WriteString(shellQuote(value))
+		start = match[1]
 	}
-	return out
+	out.WriteString(template[start:])
+	return out.String()
 }
 
 func shellQuote(value string) string {

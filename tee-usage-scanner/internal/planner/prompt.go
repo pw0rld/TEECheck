@@ -55,21 +55,24 @@ type PriorKnowledge struct {
 // Keep entries terse (one line each). When a new action is added
 // to the registry, add a matching entry here.
 var actionArgSchemas = map[string]string{
-	"get_repository_card": `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
-	"list_modules":        `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
-	"list_functions":      `{"module": string (a path from list_modules), "page": int (0-based)}` + ` — one page of function cards. The reply names the next cursor; a module absent from the index is not a module without functions`,
-	"find_symbols":        `{"name": string (a function name), "page": int (0-based, optional)}` + ` — every indexed definition carrying that name, with its symbol_id. More than one is normal: two files can each define a static function of the same name, and choosing between them is yours to do, by id`,
-	"get_function_card":   `{"symbol_id": string (from find_symbols or list_functions)}` + ` — one definition's callers, callees and the struct fields it touches and writes, each with the scope of what that check can prove`,
-	"get_callers":         `{"symbol_id": string}` + ` — the resolved callers of one definition, together with the repository-wide counts of call sites this list cannot cover. An absent caller is not proof of unreachability`,
-	"list_dir":            `{"path": string (repo-relative), "depth": int (0-3)}`,
-	"read_file":           `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
-	"ripgrep":             `{"pattern": string (regex), "globs": [string]} — these are the ONLY two arguments and any other is rejected. globs may be path-qualified relative to the repo root ("core/crypto/*.c") or bare ("*.c","*.h"). For a case-insensitive search put the flag in the pattern itself, e.g. "(?i)<pattern>". Zero matches is reported as "(no matches)", which means the search ran and found nothing — it is not evidence that the thing does not exist elsewhere`,
-	"tree_sitter_outline": `{"path": string (a source file: .c/.h/.rs/...)}`,
-	"reverse_trace":       `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
-	"repomix_summarize":   `{"path": string (repo-relative), "compress": bool (optional)}`,
-	"open_audit_lead":     `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
-	"twe_playbook_detail": `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
-	"done":                `{"summary": string, "case_invariants": [CaseInvariantV2 (see CASE CONTRACTS; optional)], "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
+	"get_repository_card":   `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
+	"list_modules":          `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
+	"list_functions":        `{"module": string (a path from list_modules), "page": int (0-based)}` + ` — one page of function cards. The reply names the next cursor; a module absent from the index is not a module without functions`,
+	"find_symbols":          `{"name": string (a function name), "page": int (0-based, optional)}` + ` — every indexed definition carrying that name, with its symbol_id. More than one is normal: two files can each define a static function of the same name, and choosing between them is yours to do, by id`,
+	"get_function_card":     `{"symbol_id": string (from find_symbols or list_functions)}` + ` — one definition's callers, callees and the struct fields it touches and writes, each with the scope of what that check can prove`,
+	"get_callers":           `{"symbol_id": string}` + ` — the resolved callers of one definition, together with the repository-wide counts of call sites this list cannot cover. An absent caller is not proof of unreachability`,
+	"list_dir":              `{"path": string (repo-relative), "depth": int (0-3)}`,
+	"read_file":             `{"path": string (repo-relative), "start": int (1-indexed), "end": int (1-indexed, 0 for cap)}`,
+	"ripgrep":               `{"pattern": string (regex), "globs": [string]} — these are the ONLY two arguments and any other is rejected. globs may be path-qualified relative to the repo root ("core/crypto/*.c") or bare ("*.c","*.h"). For a case-insensitive search put the flag in the pattern itself, e.g. "(?i)<pattern>". Zero matches is reported as "(no matches)", which means the search ran and found nothing — it is not evidence that the thing does not exist elsewhere`,
+	"tree_sitter_outline":   `{"path": string (a source file: .c/.h/.rs/...)}`,
+	"reverse_trace":         `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
+	"repomix_summarize":     `{"path": string (repo-relative), "compress": bool (optional)}`,
+	"open_audit_lead":       `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
+	ActionUpdateLead:        `{"lead_id": string, "add_notes": [{"fact_ref": string, "summary": string (at most 240 UTF-8 bytes)}], "add_ruled_out": [string]} — retain important evidence across rounds; refs must be successful observations or executed ToolFacts from this sample. Summaries and ruled-out hypotheses remain your interpretations, not verified verdicts`,
+	ActionFormalizeContract: `{"lead_id": string, "contract": CaseInvariantV2 (see CASE CONTRACTS)} — bind a precise obligation to source you have read now. Correct any returned validation errors in a later round. Accepted contracts persist without being repeated in done`,
+	ActionCloseLead:         `{"lead_id": string, "reason": string, "fact_refs": [string]} — archive a question with at least one current-sample evidence reference. Closing is an investigation decision, not proof of safety and does not discard accepted contracts`,
+	"twe_playbook_detail":   `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
+	"done":                  `{"summary": string, "case_invariants": [CaseInvariantV2 (see CASE CONTRACTS; optional)], "candidates": [{"id": string, "kind": string, "priority": "high"|"medium"|"low", "paths": [string], "symbols": [string], "why_selected": [string], "sink_category": string, "confidence": float (0.0-1.0)}], "investigations": [{"twe_ids": [string], "invariant_ids": [string], "architecture_refs": [string], "classification": "standard"|"variant" (only meaningful with exactly one twe_id — see APPROACH), "filled_roles": {"<role>": {"path": string, "start_line": int, "symbol": string}}, "missing_roles": [string], "required_evidence": [string], "counterevidence": [string], "coverage_gaps": [string], "tool_fact_refs": [string]}] (optional)}`,
 }
 
 // BuildSystemPrompt returns the system prompt for one planner phase.
@@ -130,6 +133,9 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 
 	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {
+		if phase != PhaseInvestigation && (name == ActionUpdateLead || name == ActionFormalizeContract || name == ActionCloseLead) {
+			continue
+		}
 		schema, ok := actionArgSchemas[name]
 		if name == "fact_layer_query" {
 			schema = factLayerQuerySchema()
@@ -148,7 +154,8 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 		b.WriteString("  2. Look for the evidence that would settle it EITHER way. A lead you close because the contract holds is as complete an answer as one you confirm.\n")
 		b.WriteString("  3. Use fact_layer_query when a structural question needs a real answer rather than a reading.\n")
 		b.WriteString("  4. Check the TWE catalog above against what you found: does a known threat need a role or a lifecycle stage your reading did not cover? If so, that is a new question to investigate — not a finding.\n")
-		b.WriteString("  5. When you have evidence, call done with candidates and, where a TWE applies, an investigations entry.\n\n")
+		b.WriteString("  5. Call update_lead to keep short cited evidence notes and ruled-out hypotheses available across rounds. Use formalize_contract as soon as a precise obligation has source anchors; correct validation errors while investigation time remains.\n")
+		b.WriteString("  6. Close answered leads with cited reasons, then call done. Accepted contracts already persist; include any remaining candidates or investigations and explain missing evidence.\n\n")
 	} else {
 		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, and what the index can and cannot answer.\n")
 		b.WriteString("  2. list_modules — the parts, with their sizes. Sizes are how you tell the project's own code from vendored dependencies.\n")
@@ -253,13 +260,7 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 		b.WriteString("\n")
 	}
 
-	if len(state.AuditLeads) > 0 {
-		b.WriteString("=== AUDIT LEADS AVAILABLE FOR CONTRACTS ===\n")
-		for _, lead := range state.AuditLeads {
-			fmt.Fprintf(&b, "{\"lead_id\":%q} targets=%v question=%s\n", lead.LeadID, lead.TargetSymbolIDs, lead.SecurityQuestion)
-		}
-		b.WriteString("\n")
-	}
+	b.WriteString(leadMemoryBlock(state, 8192))
 	if len(state.Investigations) > 0 {
 		b.WriteString("=== ACTIVE TWE INVESTIGATIONS ===\n")
 		for _, inv := range state.Investigations {

@@ -2,10 +2,10 @@ package planner
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 )
 
@@ -15,51 +15,76 @@ const minimumReplyTokens = 256
 // framing overhead as well; provider usage remains the final accounting source.
 func requestInputUpperBound(system, prompt string) int { return len(system) + len(prompt) + 256 }
 
-// convergencePrompt drops large navigation pages but retains source evidence
-// and the exact observed-path whitelist. Its size is bounded before a request
-// is sent, so an expensive final prompt cannot consume its own reply reserve.
+// convergencePrompt drops large navigation pages but retains the contract
+// interface and real lead identities before adding source evidence. Otherwise
+// replacing the normal system prompt at the budget boundary also erases the
+// only instructions for turning a candidate into a contract.
+//
+// Whole records are added only while they fit. A cut must not turn a partial
+// source observation or lead identity into something that looks complete.
 func convergencePrompt(state *PlannerState, observed map[string]bool, available int) (string, string) {
-	system := "You are TEECheck's security audit planner. Return one JSON object with actions containing EXACTLY ONE done action. Report only source-grounded candidates. Missing coverage is not a vulnerability. Never invent evidence or paths."
+	system := "You are TEECheck's defensive code-contract planner. Return one JSON object with actions containing EXACTLY ONE done action. Define obligations, never verdicts. Missing evidence is not a vulnerability. Never invent evidence, leads, symbols, or paths."
+	maxBytes := available - minimumReplyTokens - len(system) - 256
+	if maxBytes > 12000 {
+		maxBytes = 12000
+	}
+	if maxBytes <= 0 {
+		// The caller's OutputAllowance check will refuse a request which
+		// cannot even fit the fixed system instructions and minimum reply.
+		return system, ""
+	}
 	var b strings.Builder
-	b.WriteString("FINAL ROUND — token/round budget reserve. You MUST call done now; no exploration actions. Use {\"actions\":[{\"name\":\"done\",\"args\":{\"summary\":\"...\",\"candidates\":[]}}]}.\n")
-	b.WriteString("OBSERVED PATHS (the only paths that may be cited):\n")
+	appendIfFits := func(s string) bool {
+		if b.Len()+len(s) > maxBytes {
+			return false
+		}
+		b.WriteString(s)
+		return true
+	}
+	if !appendIfFits("FINAL ROUND — token/round budget reserve. Call done now; no exploration actions. Use {\"actions\":[{\"name\":\"done\",\"args\":{\"summary\":\"...\",\"case_invariants\":[],\"candidates\":[]}}]}.\n") {
+		return system, ""
+	}
+	appendIfFits("CASE CONTRACTS: Prefer case_invariants for grounded obligations. Shape: {\"lead_ref\":\"real lead_id\",\"subjects\":[{\"path\":\"observed path\",\"symbol\":\"observed definition\"}],\"preconditions\":[\"when the obligation applies\"],\"required_property\":{\"kind\":\"property kind\",\"statement\":\"what must hold\"},\"security_effect\":\"decision affected\",\"evidence_refs\":[{\"kind\":\"observation\",\"ref\":\"observed ref\"}],\"verification_queries\":[],\"related_twes\":[]}.\n")
+	appendIfFits("AUDIT LEADS (identities and evidence from this sample):\n")
+	for i := len(state.AuditLeads) - 1; i >= 0; i-- {
+		lead := state.AuditLeads[i]
+		if lead.LeadID == "" || (lead.RunID != "" && lead.RunID != state.RunID) {
+			continue
+		}
+		data, _ := json.Marshal(struct {
+			LeadID          string               `json:"lead_id"`
+			TargetSymbolIDs []artifacts.SymbolID `json:"target_symbol_ids"`
+			ReasonFactRefs  []string             `json:"reason_fact_refs"`
+		}{lead.LeadID, lead.TargetSymbolIDs, lead.ReasonFactRefs})
+		appendIfFits(string(data) + "\n")
+	}
+	appendIfFits("Use only this sample's real lead IDs and source you read. A subject must match the referenced lead's target. Include observed consumers needed for the preconditions. Leave unsupported verification_queries empty; never weaken the obligation to fit a query. Preserve candidates with missing grounding and explain the gap.\n")
+
+	appendIfFits("OBSERVED PATHS (the only paths that may be cited):\n")
 	paths := make([]string, 0, len(observed))
 	for p := range observed {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	maxBytes := available - minimumReplyTokens - len(system) - 256
-	if maxBytes > 12000 {
-		maxBytes = 12000
-	}
-	if maxBytes < 0 {
-		maxBytes = 0
-	}
+	// Navigation cannot crowd out all the remaining source evidence.
+	pathLimit := b.Len() + (maxBytes-b.Len())/3
 	for _, p := range paths {
-		if b.Len()+len(p)+2 > maxBytes/2 {
+		if b.Len()+len(p)+1 > pathLimit {
 			break
 		}
-		fmt.Fprintf(&b, "%s\n", p)
+		appendIfFits(p + "\n")
 	}
-	b.WriteString("Recent successful observations (excerpts; do not infer absence outside them):\n")
+	appendIfFits("Recent successful observations (excerpts; do not infer absence outside them):\n")
 	for i := len(state.Rounds) - 1; i >= 0; i-- {
 		for _, o := range state.Rounds[i].Observations {
 			if !o.OK {
 				continue
 			}
 			data, _ := json.Marshal(o)
-			if b.Len()+len(data)+1 > maxBytes {
-				continue
-			}
-			b.Write(data)
-			b.WriteByte('\n')
+			appendIfFits(string(data) + "\n")
 		}
 	}
-	prompt := b.String()
-	if len(prompt) > maxBytes && maxBytes > 0 {
-		prompt = prompt[:maxBytes]
-	}
-	return system, prompt
+	return system, b.String()
 }
 
 func accountedUsage(response llm.GenerateResponse, inputUpperBound int) (int, int) {

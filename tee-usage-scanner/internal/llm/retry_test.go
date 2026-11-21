@@ -45,8 +45,17 @@ func TestIsTransient(t *testing.T) {
 		{"anthropic 500", fmt.Errorf("anthropic status 500: internal error"), true},
 		{"ordinary 502", fmt.Errorf("openai status 502: bad gateway"), true},
 		{"anthropic 503", fmt.Errorf("openai status 503: service unavailable"), true},
+		{"rate limited", errors.New("llm status 429: too many requests"), true},
+		{"http rate limited", errors.New("HTTP 429: try again later"), true},
+		{"structured rate limited", errors.New(`{"error":{"type":"rate_limit_error"}}`), true},
 		{"anthropic 401", fmt.Errorf("anthropic status 401: unauthorized"), false},
 		{"anthropic 400", fmt.Errorf("anthropic status 400: bad request"), false},
+		{"forbidden with rate limit text", errors.New("llm status 403: rate_limit_error"), false},
+		{"not found with timeout text", errors.New("llm status 404: i/o timeout"), false},
+		{"validation wins over wrapped deadline", errors.Join(errors.New("llm status 400: bad request"), context.DeadlineExceeded), false},
+		{"policy wins over rate limit", errors.New("llm status 429: rate_limit_error; content_filter"), false},
+		{"canceled rate limit", errors.Join(errors.New("llm status 429: rate limited"), context.Canceled), false},
+		{"invalid status prefix", errors.New("llm status 4290: unknown code"), false},
 		{"connection reset", errors.New("connection reset by peer"), true},
 		{"connection refused", errors.New("connection refused"), true},
 		{"i/o timeout wrapped", fmt.Errorf("Post https://...: i/o timeout"), true},
@@ -204,21 +213,47 @@ func TestRetryingClient_RetriesOn5xxThenSucceeds(t *testing.T) {
 	}
 }
 
-func TestRetryingClient_DoesNotRetryOn4xx(t *testing.T) {
+func TestRetryingClient_RateLimitBackoffThenSuccess(t *testing.T) {
 	fake := &fakeClient{responses: []fakeResponse{
-		{err: fmt.Errorf("anthropic status 401: unauthorized")},
+		{err: errors.New("llm status 429: too many requests")},
+		{err: errors.New(`{"error":{"type":"rate_limit_error"}}`)},
+		{text: "completed after rate limit"},
 	}}
+	var delays []time.Duration
 	client := llm.NewRetryingClient(fake, llm.RetryConfig{
 		MaxAttempts: 3,
 		BaseDelay:   time.Millisecond,
+		MaxDelay:    10 * time.Millisecond,
+		Logger: func(attempt int, _ error, delay time.Duration) {
+			if attempt != len(delays)+1 {
+				t.Errorf("retry attempt=%d, want %d", attempt, len(delays)+1)
+			}
+			delays = append(delays, delay)
+		},
 	})
-
-	_, err := client.Generate(context.Background(), llm.GenerateRequest{})
-	if err == nil {
-		t.Fatal("expected error")
+	resp, err := client.Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || resp.Text != "completed after rate limit" || fake.calls.Load() != 3 {
+		t.Fatalf("response=%+v err=%v calls=%d", resp, err, fake.calls.Load())
 	}
-	if fake.calls.Load() != 1 {
-		t.Errorf("calls = %d, want 1 (non-transient, no retry)", fake.calls.Load())
+	if !reflect.DeepEqual(delays, []time.Duration{time.Millisecond, 3 * time.Millisecond}) {
+		t.Fatalf("backoff delays=%v", delays)
+	}
+}
+
+func TestRetryingClient_DoesNotRetryOn4xx(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 404} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			failure := fmt.Errorf("anthropic status %d: request rejected", status)
+			fake := &fakeClient{responses: []fakeResponse{{err: failure}}}
+			client := llm.NewRetryingClient(fake, llm.RetryConfig{
+				MaxAttempts: 3,
+				BaseDelay:   time.Millisecond,
+			})
+			_, err := client.Generate(context.Background(), llm.GenerateRequest{})
+			if !errors.Is(err, failure) || fake.calls.Load() != 1 {
+				t.Fatalf("err=%v calls=%d, want original error after one call", err, fake.calls.Load())
+			}
+		})
 	}
 }
 

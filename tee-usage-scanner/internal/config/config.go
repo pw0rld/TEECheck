@@ -490,6 +490,8 @@ func parseRun(args []string) (Config, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	cfg := Config{
 		Command:            "run",
+		RepoURL:            firstNonEmptyEnv("TEECHECK_REPO_URL"),
+		Commit:             firstNonEmptyEnv("TEECHECK_COMMIT"),
 		Focus:              "tee",
 		OutputDir:          filepath.Clean("runs"),
 		KnowledgeRoot:      filepath.Clean("knowledge"),
@@ -519,8 +521,8 @@ func parseRun(args []string) (Config, error) {
 	// the project it represents — a benchmark fixture is a subtree of the
 	// TEECheck repository, so git would label it with TEECheck's own origin
 	// and HEAD instead of the CVE's upstream repository and revision.
-	fs.StringVar(&cfg.RepoURL, "repo-url", "", "Upstream repository URL this source represents (overrides git detection)")
-	fs.StringVar(&cfg.Commit, "commit", "", "Upstream revision this source represents (overrides git detection)")
+	fs.StringVar(&cfg.RepoURL, "repo-url", cfg.RepoURL, "Upstream repository URL this source represents (overrides TEECHECK_REPO_URL and git detection)")
+	fs.StringVar(&cfg.Commit, "commit", cfg.Commit, "Upstream revision this source represents (overrides TEECHECK_COMMIT and git detection)")
 	fs.StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Output directory")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root")
 	fs.IntVar(&cfg.MaxCases, "max-cases", cfg.MaxCases, "Maximum case packs")

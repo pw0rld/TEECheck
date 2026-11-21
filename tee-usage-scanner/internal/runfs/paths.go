@@ -109,7 +109,8 @@ func RoundsLogPath(runDir string) string {
 	return filepath.Join(runDir, "04_planner", "rounds.jsonl")
 }
 
-// AuditLeadsPath is the run's audit leads, one JSON object per line.
+// AuditLeadsPath is the run's append-only lead revisions, one JSON object per
+// line. The last record for a (run, sample, lead_id) is its current state.
 //
 // JSONL rather than a JSON array because a lead is appended the moment it
 // opens, from a loop that runs once per --samples pass. An array would make

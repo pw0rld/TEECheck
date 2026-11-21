@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/investigations"
@@ -216,6 +217,11 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	var leads []artifacts.AuditLead
 
 	var donePayload actions.DonePayload
+	var doneAccepted bool
+	// Closing contracts are linked to the converted candidate index, so a
+	// successful formalization replaces that candidate's thin pack instead of
+	// leaving a second, unformalized copy beside it.
+	var closingContracts map[int][]artifacts.CaseInvariantV2
 	var terminationReason string
 	var runErr error
 	var coverageGaps []string
@@ -370,6 +376,7 @@ loop:
 		// these rather than replacing them: the round really did cost two
 		// calls, and rounds.jsonl must not under-report it.
 		var tokensIn, tokensOut int
+		var isContractClosing bool
 
 		// askOnce performs one LLM call for this round, including token
 		// accounting, blob persistence and the started/completed event pair.
@@ -381,6 +388,13 @@ loop:
 			if outputBudget < minimumReplyTokens {
 				return llm.GenerateResponse{}, fmt.Errorf("token budget cannot fit request input and a bounded reply")
 			}
+			if isContractClosing && outputBudget > 8192 {
+				outputBudget = 8192
+			} else if isFinalRound && len(state.AuditLeads) > 0 && outputBudget > 8192+minimumReplyTokens {
+				// Keep room for the single closing repair if done still emits
+				// legacy candidates. This remains within the existing reserve.
+				outputBudget -= 8192
+			}
 			genReq := llm.GenerateRequest{
 				SystemPrompt:    systemPrompt,
 				Messages:        []llm.Message{{Role: "user", Content: prompt}},
@@ -389,15 +403,28 @@ loop:
 				MaxOutputTokens: outputBudget,
 			}
 			_ = cfg.Events.Emit(events.LLMCallStarted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum))
-			genResp, err := cfg.Client.Generate(ctx, genReq)
+			requestCtx := ctx
+			if isContractClosing && cfg.Budget.WallClock > 0 {
+				var cancel context.CancelFunc
+				requestCtx, cancel = context.WithDeadline(ctx, cfg.Budget.startedAt.Add(cfg.Budget.WallClock))
+				defer cancel()
+			}
+			genResp, err := cfg.Client.Generate(requestCtx, genReq)
 			if err != nil {
+				var callIn, callOut int
+				if genResp.Usage.PromptTokens > 0 || genResp.Usage.CompletionTokens > 0 || genResp.Usage.TotalTokens > 0 {
+					callIn, callOut = accountedUsage(genResp, inputBudget)
+					cfg.Budget.ConsumePhaseTokens(callIn+callOut, inRecon)
+					tokensIn += callIn
+					tokensOut += callOut
+				}
 				// Emit a completion event with Error populated so
 				// downstream consumers can pair the started/completed
 				// events even on failure.
 				// The bytes the client got as far as, even though the
 				// call failed — a non-2xx body or a timed-out request is
 				// exactly what needs reading afterwards.
-				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, 0, 0, "", "").
+				failed := events.LLMCallCompleted(cfg.RunID, cfg.AgentID, cfg.Model, roundNum, callIn, callOut, "", "").
 					WithWireBodies(
 						events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
 						events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw)))
@@ -430,7 +457,7 @@ loop:
 			// responseBlob is the message the parser extracted, while these
 			// two are what actually crossed the wire.
 			_ = cfg.Events.Emit(events.LLMCallCompleted(
-				cfg.RunID, cfg.AgentID, cfg.Model, roundNum, tokensIn, tokensOut, promptBlob, responseBlob).
+				cfg.RunID, cfg.AgentID, cfg.Model, roundNum, callIn, callOut, promptBlob, responseBlob).
 				WithWireBodies(
 					events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
 					events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw))))
@@ -585,6 +612,12 @@ loop:
 					leads = append(leads, lead)
 					state.AuditLeads = append(state.AuditLeads, lead)
 				}
+			case act.Name == ActionUpdateLead:
+				result = updateLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
+			case act.Name == ActionFormalizeContract:
+				result = formalizeContract(cfg, state, observations, executedToolFactRefs, roundRec, act.Args)
+			case act.Name == ActionCloseLead:
+				result = closeLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
 			case act.Name == "done" && !recon.AllowDone(isFinalRound):
 				result = actions.ActionResult{
 					Name: "done",
@@ -686,8 +719,41 @@ loop:
 
 			if result.Name == "done" && result.OK {
 				if err := json.Unmarshal([]byte(result.Output), &donePayload); err == nil {
-					state.AppendRoundAndPersist(roundRec, roundsLog)
+					doneAccepted = true
+					donePayload.CaseInvariants = contracts.MergeAll(donePayload.CaseInvariants, state.Contracts)
 					terminationReason = "llm_done"
+					closingState := *state
+					closingState.Rounds = append(append([]artifacts.RoundRecord(nil), state.Rounds...), roundRec)
+					var closeErrors []artifacts.RoundError
+					var closeGaps []string
+					closingContracts, closeErrors, closeGaps, err = formalizeCandidates(ctx, cfg, &donePayload, &closingState, observations, func(system, prompt string) (llm.GenerateResponse, error) {
+						// A single bounded closing call shares this round's trace and
+						// accounting and can use the convergence reserve.
+						systemPrompt = system
+						inRecon, isFinalRound = false, true
+						isContractClosing = true
+						return askOnce(prompt)
+					})
+					runErrors = append(runErrors, closeErrors...)
+					coverageGaps = append(coverageGaps, closeGaps...)
+					roundRec.CoverageGaps = append(roundRec.CoverageGaps, closeGaps...)
+					roundRec.TokensIn, roundRec.TokensOut = tokensIn, tokensOut
+					if err != nil {
+						runErr = fmt.Errorf("round %d: contract formalization: %w", roundNum, err)
+						terminationReason = "llm_error"
+						if cfg.Budget.WallClock > 0 && time.Since(cfg.Budget.startedAt) >= cfg.Budget.WallClock {
+							terminationReason = "wall_clock"
+						}
+						if llm.IsPolicyRefusal(err) {
+							terminationReason = "policy_refusal"
+							coverageGaps = append(coverageGaps, policyRefusalCoverageGap)
+							roundRec.CoverageGaps = append(roundRec.CoverageGaps, policyRefusalCoverageGap)
+						}
+					}
+					if err := state.AppendRoundAndPersist(roundRec, roundsLog); err != nil {
+						runErr = fmt.Errorf("round %d: persist: %w", roundNum, err)
+						terminationReason = "persist_error"
+					}
 					emitRoundDone()
 					break loop
 				}
@@ -705,6 +771,11 @@ loop:
 
 	if terminationReason == "" {
 		terminationReason = cfg.Budget.TerminationReason()
+	}
+	// A later cancellation/refusal must not erase contracts already accepted
+	// by formalize_contract in earlier rounds.
+	if !doneAccepted {
+		donePayload.CaseInvariants = contracts.MergeAll(donePayload.CaseInvariants, state.Contracts)
 	}
 	if terminationReason == "" {
 		terminationReason = "unknown"
@@ -786,7 +857,26 @@ loop:
 			Round: -1, Action: "case_pack.manifest", Error: err.Error()})
 	} else {
 		for i, cand := range bundle.Candidates {
-			thin = append(thin, BuildFromCandidate(cand, manifest, i))
+			pack := BuildFromCandidate(cand, manifest, i)
+			bound, errs := bindPlannerContracts(closingContracts[i], cfg)
+			bundle.Errors = append(bundle.Errors, errs...)
+			for _, c := range bound {
+				if c.Grounding != "source_bound" {
+					continue
+				}
+				pack.CaseInvariants = append(pack.CaseInvariants, c)
+				pack.RelatedTWEs = unionStrings(pack.RelatedTWEs, c.RelatedTWEs)
+				for _, subject := range c.Subjects {
+					pack.TargetFiles = unionStrings(pack.TargetFiles, []string{subject.Path})
+					pack.TargetSymbols = unionStrings(pack.TargetSymbols, []string{subject.Symbol})
+				}
+			}
+			if len(closingContracts[i]) > 0 && len(pack.CaseInvariants) == 0 {
+				gap := fmt.Sprintf("Candidate %s contract could not be bound to current source.", cand.ID)
+				pack.CoverageGaps = append(pack.CoverageGaps, gap)
+				bundle.CoverageGaps = append(bundle.CoverageGaps, gap)
+			}
+			thin = append(thin, pack)
 		}
 	}
 	// Nothing is written to 03_cases/ here. Run is invoked once per

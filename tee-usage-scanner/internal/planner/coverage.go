@@ -30,6 +30,7 @@ func advertisedActions(reg *actions.Registry) []string {
 	out := make([]string, 0, len(names)+1)
 	out = append(out, names...)
 	out = append(out, ActionOpenAuditLead)
+	out = append(out, ActionUpdateLead, ActionFormalizeContract, ActionCloseLead)
 	sort.Strings(out)
 	return out
 }
@@ -199,6 +200,13 @@ func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMa
 		ReconRoundsUsed:    cfg.Budget.ReconRoundsUsed,
 		LeadsOpened:        leadsOpen,
 	}
+	if current, err := contractLeads(cfg); err == nil {
+		for _, lead := range current {
+			if lead.State == artifacts.LeadStateClosed {
+				entry.LeadsClosed++
+			}
+		}
+	}
 	replaced := false
 	for i := range ledger.BySample {
 		if ledger.BySample[i].SampleIndex == entry.SampleIndex {
@@ -221,7 +229,7 @@ func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMa
 			reviewed[mod] = true
 		}
 		capsules += s.CapsulesReviewed
-		leads += s.LeadsOpened
+		leads += max(0, s.LeadsOpened-s.LeadsClosed)
 	}
 	ledger.ModulesReviewed = len(reviewed)
 	ledger.FunctionCapsulesReviewed = capsules

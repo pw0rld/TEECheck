@@ -300,9 +300,10 @@ func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
 
 var internalExit100 = regexp.MustCompile(`\bexit status 100\b`)
 
-// CodeQL uses exit 100 for internal errors. The named JVM/TRAP mmap markers
-// also occur in wrappers that omit the process exit code. Retrying is bounded
-// to once; ordinary build, configuration and extractor errors are unchanged.
+// CodeQL uses exit 100 for internal errors. JVM/TRAP mmap markers and native
+// JVM crash reports also occur in wrappers that omit the process exit code.
+// Retrying is bounded to once; ordinary build, configuration and extractor
+// errors are unchanged.
 func isTransientBuildFailure(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -314,6 +315,18 @@ func isTransientBuildFailure(err error) bool {
 	for _, marker := range []string{"internalerror", "mmappage", "diskwritablestringstore", "sigbus"} {
 		if strings.Contains(message, marker) {
 			return true
+		}
+	}
+	// These headers identify a JVM fatal-error report even when its wrapper
+	// returns a generic exit status (for example exit 2 rather than exit 100).
+	if strings.Contains(message, "problematic frame:") || strings.Contains(message, "hs_err") {
+		return true
+	}
+	if strings.Contains(message, "sigsegv") || strings.Contains(message, "core dump will be written") {
+		for _, marker := range []string{"java", "jvm", "openjdk", "hotspot", "stubroutines"} {
+			if strings.Contains(message, marker) {
+				return true
+			}
 		}
 	}
 	return false

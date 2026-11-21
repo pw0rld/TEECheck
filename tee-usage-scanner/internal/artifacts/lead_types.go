@@ -51,6 +51,26 @@ type AuditLead struct {
 	// less real for describing a break this project has that no playbook
 	// names.
 	RelatedTWEs []string `json:"related_twes,omitempty"`
+
+	// EvidenceNotes persist the planner's compact reading notes beyond the
+	// recent-round prompt window. The summary is an interpretation; FactRef
+	// identifies the actual observed evidence on which it depends.
+	EvidenceNotes []LeadEvidenceNote `json:"evidence_notes,omitempty"`
+	TaintFactRefs []string           `json:"taint_fact_refs,omitempty"`
+	// RuledOut records hypotheses the planner set aside, not a machine proof
+	// that the associated code is safe. Its evidence remains in EvidenceNotes.
+	RuledOut      []string `json:"ruled_out,omitempty"`
+	ContractIDs   []string `json:"contract_ids,omitempty"`
+	CloseReason   string   `json:"close_reason,omitempty"`
+	CloseFactRefs []string `json:"close_fact_refs,omitempty"`
+}
+
+// LeadEvidenceNote is limited to 240 UTF-8 bytes by update_lead. AddedAtRound
+// is assigned by the runtime, never trusted from an LLM payload.
+type LeadEvidenceNote struct {
+	FactRef      string `json:"fact_ref"`
+	Summary      string `json:"summary"`
+	AddedAtRound int    `json:"added_at_round"`
 }
 
 // Lead states (§6.2).
@@ -112,4 +132,5 @@ type SampleCoverage struct {
 	RoundsUsed         int      `json:"rounds_used"`
 	ReconRoundsUsed    int      `json:"recon_rounds_used"`
 	LeadsOpened        int      `json:"leads_opened"`
+	LeadsClosed        int      `json:"leads_closed,omitempty"`
 }

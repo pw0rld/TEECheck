@@ -30,6 +30,11 @@ export TEECHECK_LLM_API_KEY="your-key"
 A Git URL may replace the local path. `teecheck plan` is an alias for `run`.
 All audit runs use the LLM pipeline; the old heuristic scanner was retired.
 
+For a local fixture, set `TEECHECK_REPO_URL` and `TEECHECK_COMMIT` to identify the
+upstream source revision. `--repo-url` and `--commit` override these environment
+defaults; otherwise repository identity is detected from the input. The
+benchmark runner supplies both variables separately for each case variant.
+
 ## Pipeline
 
 ```text
@@ -93,6 +98,11 @@ Expert. The Verifier checks source citations and uses bounded follow-up dialogs.
 The Arbiter gates confirmed wording on evidence completeness. None of these
 mechanisms substitutes for a human verdict or an executable reproduction.
 
+HTTP 429 and rate-limit responses use the bounded retry policy. Other HTTP 4xx
+responses remain terminal. CodeQL database creation retries a recognized JVM
+memory/native-runtime crash once with a single thread; ordinary compiler
+crashes do not qualify for that added native-crash retry.
+
 Explicit upstream policy refusals are non-retryable, including refusals returned
 with HTTP 5xx status codes. The planner records `policy_refusal`, retains opened
 audit leads, and writes the unreviewed scope to its round log and evidence bundle.
@@ -101,13 +111,41 @@ to another review role. Provider response details remain available for diagnosis
 
 ## Case contracts and verification
 
-Pass B can emit `done.case_invariants`, or attach `case_invariants` to an
-investigation. Every Planner contract must refer to an AuditLead from the same
+Pass B can call `formalize_contract` during investigation, emit
+`done.case_invariants`, or attach `case_invariants` to an investigation.
+Every Planner contract must refer to an AuditLead from the same
 sample. The scanner binds its subjects to current source definitions and saves
 line ranges, content hashes, the logical property and a separate verification
 plan. Contracts are also available to findings produced by the deterministic
 lane. Unsupported properties remain explicit; a missing query does not prove
 safety or a violation.
+
+The compact final-round prompt retains this contract format and the current
+sample's lead IDs. If `done` still returns legacy candidates, the planner makes
+at most one closing request within the same round, token budget, and deadline
+(at most 8,192 output tokens). It supplies successful source reads and matching
+leads from that sample, then binds accepted contracts directly to the original
+candidate's CasePack. Missing leads, unread or unknown symbols, invalid replies,
+and insufficient budget leave explicit gaps and an unformalized candidate.
+An upstream policy refusal stops this request without a prompt or model retry.
+
+The lead controls support an incremental workflow:
+
+- `update_lead` keeps cited notes and ruled-out hypotheses across rounds. Each
+  note is limited to 240 UTF-8 bytes and must cite this sample's successful
+  observation or an actually executed, validated ToolFact. Notes remain agent
+  interpretations. The active-lead prompt uses at most 2 KiB per lead and
+  8 KiB overall, explicitly marking omitted records.
+- `formalize_contract` immediately checks source subjects, evidence references,
+  scope and registered query parameters. Invalid drafts return a correctable
+  action error without advancing the lead. Accepted contracts persist through
+  an empty final candidate list or a later model failure.
+- `close_lead` archives a question with its reason and current-sample evidence.
+  It does not assert safety or remove accepted contracts. Lead revisions are
+  appended to `audit_leads.jsonl`; the last revision for each lead is current.
+
+These controls do not enable cross-process resume or introduce a new taint
+analysis query. Those require separate source-freshness and query validation.
 
 Expert and Challenger independently review each contract. Verifier produces one
 `InvariantAssessment` per contract, separating `satisfied`, `violated`, and
