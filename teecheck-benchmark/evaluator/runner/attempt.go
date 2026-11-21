@@ -64,10 +64,16 @@ func runScannerAttempt(c loadedCase, variant, variantDir, template string, timeo
 	command := expandCommand(template, values)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	configureScannerProcess(cmd)
+	// Also bound inherited stdout/stderr pipes if a child outlives its shell.
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = scannerEnvironment(os.Environ(), values["repo_url"], values["commit"])
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	fmt.Printf("RUN %s/%s attempt=%s\n", c.Case.ID, variant, record.AttemptID)
 	runErr := cmd.Run()
+	// Reap any remaining processes in our own group on both cancellation and
+	// shell exit. A scanner invocation does not own background services.
+	_ = cleanupScannerProcess(cmd)
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	cancel()
 	record.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)

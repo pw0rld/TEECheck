@@ -72,8 +72,6 @@ func (s *PlannerState) AppendRound(r artifacts.RoundRecord) {
 // and appended to (not overwritten) on subsequent calls. The parent
 // directory is created if missing.
 func (s *PlannerState) AppendRoundAndPersist(r artifacts.RoundRecord, logPath string) error {
-	s.AppendRound(r)
-
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for rounds log: %w", err)
 	}
@@ -91,6 +89,10 @@ func (s *PlannerState) AppendRoundAndPersist(r artifacts.RoundRecord, logPath st
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("write rounds log: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync rounds log: %w", err)
+	}
+	s.AppendRound(r)
 	return nil
 }
 

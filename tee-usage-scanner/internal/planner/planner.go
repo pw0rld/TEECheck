@@ -18,6 +18,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/sourcehash"
 )
 
 // DefaultPlannerAgentID is used in events when RunConfig.AgentID is
@@ -37,14 +38,18 @@ const DefaultActionsPerRound = 3
 // RunConfig is the input to Run. Everything the main loop needs is
 // passed explicitly — no package-level state.
 type RunConfig struct {
-	RunID       string
-	RepoRoot    string
-	RunDir      string
-	Profile     PromptProfile
-	Client      llm.Client
-	Registry    *actions.Registry
-	Budget      Budget
-	Temperature float64
+	RunID    string
+	RepoRoot string
+	RunDir   string
+	// Resume restores the last committed round from this run directory.
+	Resume bool
+	// ResumePrepared means the caller restored journals before opening Events.
+	ResumePrepared bool
+	Profile        PromptProfile
+	Client         llm.Client
+	Registry       *actions.Registry
+	Budget         Budget
+	Temperature    float64
 	// MaxActionsPerRound caps how many actions the LLM may request in
 	// one round. Defaults to DefaultActionsPerRound if zero.
 	MaxActionsPerRound int
@@ -171,6 +176,29 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 		cfg.AgentID = DefaultPlannerAgentID
 	}
 
+	var resumed *Checkpoint
+	if cfg.Resume {
+		var err error
+		resumed, err = InspectCheckpoint(cfg.RunDir, cfg.RepoRoot)
+		if err != nil {
+			return failedResult(cfg, err.Error(), "resume_error")
+		}
+		if resumed.RunID != cfg.RunID || resumed.SampleIndex != cfg.SampleIndex || resumed.Profile != cfg.Profile {
+			return failedResult(cfg, "checkpoint belongs to another run, sample, or source profile", "resume_error")
+		}
+		if resumed.ConfigSHA256 != checkpointConfigHash(cfg) {
+			return failedResult(cfg, "planner configuration changed since checkpoint", "resume_error")
+		}
+		if !cfg.ResumePrepared {
+			if err := RestoreCheckpointJournals(resumed); err != nil {
+				return failedResult(cfg, err.Error(), "resume_error")
+			}
+		}
+		if resumed.Completed && resumed.CachedResult != nil {
+			return resumed.CachedResult.RunResult()
+		}
+	}
+
 	cfg.Budget.Start()
 	loopStartedAt := time.Now()
 
@@ -244,6 +272,113 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	// sample rather than per run because two --samples passes are pointed at
 	// different code on purpose.
 	var observations ObservationSet
+
+	// The source tree is fingerprinted before the first request. Run artifacts
+	// inside the checkout are excluded; every other file remains part of identity.
+	var stable *Checkpoint
+	checkpointEnabled := cfg.RunDir != "" && cfg.RepoRoot != ""
+	var treeHash, binaryHash string
+	if resumed != nil {
+		state = resumed.State
+		recon = resumed.Recon.restore()
+		cfg.Budget = resumed.Budget
+		elapsed := time.Duration(resumed.ElapsedNanos)
+		cfg.Budget.startedAt = time.Now().Add(-elapsed)
+		loopStartedAt = cfg.Budget.startedAt
+		loopDet = &LoopDetector{lastAction: resumed.Loop.Action, lastArgs: resumed.Loop.Args, count: resumed.Loop.Count}
+		observedPaths = resumed.ObservedPaths
+		observations.ok = resumed.Observations
+		leads = resumed.Leads
+		executedToolFactRefs = resumed.ExecutedToolFactRefs
+		coverageGaps = resumed.CoverageGaps
+		runErrors = resumed.RunErrors
+		donePayload, doneAccepted, closingContracts = resumed.DonePayload, resumed.DoneAccepted, resumed.ClosingContracts
+		treeHash, binaryHash = resumed.TreeContentHash, resumed.ExecutableSHA256
+		if resumed.InFlight != nil {
+			cfg.Budget.ConsumePhaseTokens(resumed.InFlight.ReservedTokens, resumed.InFlight.Recon)
+			coverageGaps = append(coverageGaps, "Interrupted LLM request charged its reserved token allowance because final usage is unknown.")
+		}
+		if resumed.InterruptedRound {
+			coverageGaps = append(coverageGaps, "Interrupted round outputs were discarded at the last committed journal boundary; spent rounds, tokens, and query quota were retained.")
+		}
+		stable = resumed
+	} else if checkpointEnabled {
+		var err error
+		treeHash, err = sourcehash.TreeExcluding(cfg.RepoRoot, []string{cfg.RunDir})
+		if err != nil {
+			return failedResult(cfg, "fingerprint source: "+err.Error(), "checkpoint_error")
+		}
+		binaryHash, err = executableHash()
+		if err != nil {
+			return failedResult(cfg, err.Error(), "checkpoint_error")
+		}
+	}
+	saveCommitted := func() error {
+		if !checkpointEnabled {
+			return nil
+		}
+		currentTree, err := sourcehash.TreeExcluding(cfg.RepoRoot, []string{cfg.RunDir})
+		if err != nil {
+			return err
+		}
+		if currentTree != treeHash {
+			return fmt.Errorf("source contents changed during planner run")
+		}
+		paths := make([]string, 0, len(observedPaths))
+		for p := range observedPaths {
+			paths = append(paths, p)
+		}
+		hashes, err := sourcehash.Files(cfg.RepoRoot, paths)
+		if err != nil {
+			return err
+		}
+		cp := &Checkpoint{SchemaVersion: checkpointVersion, RunID: cfg.RunID, SampleIndex: cfg.SampleIndex, Profile: cfg.Profile,
+			ConfigSHA256: checkpointConfigHash(cfg), ExecutableSHA256: binaryHash, TreeContentHash: treeHash, ObservedFileHashes: hashes,
+			State: state, Recon: snapshotRecon(recon), Budget: cfg.Budget, ElapsedNanos: time.Since(loopStartedAt).Nanoseconds(),
+			ObservedPaths: observedPaths, Observations: observations.ok, Loop: loopSnapshot{loopDet.lastAction, loopDet.lastArgs, loopDet.count},
+			Leads: leads, ExecutedToolFactRefs: executedToolFactRefs, CoverageGaps: coverageGaps, RunErrors: runErrors, DonePayload: donePayload,
+			DoneAccepted: doneAccepted, ClosingContracts: closingContracts, TerminationReason: terminationReason, AvoidPaths: cfg.AvoidPaths,
+			Journals: map[string]JournalBoundary{}, runDir: cfg.RunDir}
+		if len(state.Rounds) > 0 {
+			cp.LastCommittedRound = state.Rounds[len(state.Rounds)-1].Round
+		}
+		for _, name := range checkpointJournalNames {
+			boundary, err := journalBoundary(filepath.Join(cfg.RunDir, filepath.FromSlash(name)), -1)
+			if err != nil {
+				return err
+			}
+			cp.Journals[name] = boundary
+		}
+		cp.EventOffset = cp.Journals["events.jsonl"].Offset
+		if err = writeCheckpoint(cp); err != nil {
+			return err
+		}
+		// Freeze all maps/slices so an in-flight round cannot alter the saved state.
+		stable, err = cloneCheckpoint(cp)
+		return err
+	}
+	saveProgress := func(pending *pendingLLM) error {
+		if !checkpointEnabled || stable == nil {
+			return nil
+		}
+		cp, err := cloneCheckpoint(stable)
+		if err != nil {
+			return err
+		}
+		cp.Budget = cfg.Budget
+		cp.ElapsedNanos = time.Since(loopStartedAt).Nanoseconds()
+		cp.CoverageGaps = coverageGaps
+		cp.InFlight = pending
+		cp.InterruptedRound = cfg.Budget.RoundsUsed > cp.LastCommittedRound
+		return writeCheckpoint(cp)
+	}
+	if resumed == nil {
+		if err := saveCommitted(); err != nil {
+			return failedResult(cfg, "write initial checkpoint: "+err.Error(), "checkpoint_error")
+		}
+	} else if err := saveProgress(nil); err != nil {
+		return failedResult(cfg, "restore checkpoint budget: "+err.Error(), "checkpoint_error")
+	}
 
 loop:
 	for !cfg.Budget.Exhausted() {
@@ -410,7 +545,23 @@ loop:
 				requestCtx, cancel = context.WithDeadline(ctx, cfg.Budget.startedAt.Add(cfg.Budget.WallClock))
 				defer cancel()
 			}
-			genResp, err := cfg.Client.Generate(requestCtx, genReq)
+			if err := saveProgress(&pendingLLM{ReservedTokens: inputBudget + outputBudget, Recon: inRecon}); err != nil {
+				return llm.GenerateResponse{}, fmt.Errorf("persist request checkpoint: %w", err)
+			}
+			stopHeartbeat := func() error { return nil }
+			if checkpointEnabled {
+				stopHeartbeat = checkpointHeartbeat(cfg.RunDir)
+			}
+			var genResp llm.GenerateResponse
+			var err error
+			func() {
+				defer func() {
+					if heartbeatErr := stopHeartbeat(); heartbeatErr != nil && err == nil {
+						err = fmt.Errorf("persist active time: %w", heartbeatErr)
+					}
+				}()
+				genResp, err = cfg.Client.Generate(requestCtx, genReq)
+			}()
 			if err != nil {
 				var callIn, callOut int
 				if genResp.Usage.PromptTokens > 0 || genResp.Usage.CompletionTokens > 0 || genResp.Usage.TotalTokens > 0 {
@@ -431,6 +582,13 @@ loop:
 						events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw)))
 				failed.Error = err.Error()
 				_ = cfg.Events.Emit(failed)
+				var unresolvedRequest *pendingLLM
+				if callIn+callOut == 0 && !llm.IsPolicyRefusal(err) {
+					unresolvedRequest = &pendingLLM{ReservedTokens: inputBudget + outputBudget, Recon: inRecon}
+				}
+				if checkpointErr := saveProgress(unresolvedRequest); checkpointErr != nil {
+					return llm.GenerateResponse{}, fmt.Errorf("%w; persist request budget: %v", err, checkpointErr)
+				}
 				return llm.GenerateResponse{}, err
 			}
 			// Credit entry reading only after these actual source excerpts
@@ -466,6 +624,9 @@ loop:
 				WithWireBodies(
 					events.BestEffortRef(cfg.Blobs, []byte(genResp.RawRequest)),
 					events.BestEffortRef(cfg.Blobs, []byte(genResp.Raw))))
+			if err := saveProgress(nil); err != nil {
+				return llm.GenerateResponse{}, fmt.Errorf("persist request budget: %w", err)
+			}
 			return genResp, nil
 		}
 
@@ -482,8 +643,13 @@ loop:
 			}
 			if persistErr := state.AppendRoundAndPersist(failedRound, roundsLog); persistErr != nil {
 				runErr = fmt.Errorf("%w; persist refusal checkpoint: %v", runErr, persistErr)
+				return
 			}
 			_ = cfg.Events.Emit(events.PlannerRoundCompleted(cfg.RunID, cfg.AgentID, roundNum, 0, 0))
+			if err := saveCommitted(); err != nil {
+				runErr = fmt.Errorf("persist checkpoint: %w", err)
+				terminationReason = "checkpoint_error"
+			}
 		}
 
 		genResp, err := askOnce(roundPrompt)
@@ -532,11 +698,19 @@ loop:
 		if parseErr != nil {
 			runErr = fmt.Errorf("round %d: %w", roundNum, parseErr)
 			terminationReason = "llm_malformed"
-			state.AppendRoundAndPersist(artifacts.RoundRecord{
+			if err := state.AppendRoundAndPersist(artifacts.RoundRecord{
 				Round:   roundNum,
 				Thought: "<unparseable>: " + truncate(genResp.Text, 500),
-			}, roundsLog)
+			}, roundsLog); err != nil {
+				runErr = fmt.Errorf("persist malformed round: %w", err)
+				terminationReason = "persist_error"
+				break
+			}
 			_ = cfg.Events.Emit(events.PlannerRoundCompleted(cfg.RunID, cfg.AgentID, roundNum, 0, 0))
+			if err := saveCommitted(); err != nil {
+				runErr = fmt.Errorf("persist checkpoint: %w", err)
+				terminationReason = "checkpoint_error"
+			}
 			break
 		}
 
@@ -643,6 +817,7 @@ loop:
 					Agent:      cfg.AgentID,
 					Round:      roundNum,
 				}
+				stopQueryHeartbeat := func() error { return nil }
 				if act.Name == actions.TraceTaintAction {
 					timeout := cfg.Budget.TaintQueryTimeout
 					if timeout <= 0 {
@@ -658,9 +833,28 @@ loop:
 							timeout = remaining
 						}
 					}
-					request.TracePolicy = &actions.TracePolicy{ObservedSymbol: recon.SawSymbol, TakeQuery: cfg.Budget.ConsumeTaintQuery, Timeout: timeout}
+					request.TracePolicy = &actions.TracePolicy{ObservedSymbol: recon.SawSymbol, TakeQuery: func() bool {
+						if !cfg.Budget.ConsumeTaintQuery() {
+							return false
+						}
+						if err := saveProgress(nil); err != nil {
+							runErr = fmt.Errorf("persist query budget: %w", err)
+							return false
+						}
+						if checkpointEnabled {
+							stopQueryHeartbeat = checkpointHeartbeat(cfg.RunDir)
+						}
+						return true
+					}, Timeout: timeout}
 				}
-				result = registry.Run(ctx, request)
+				func() {
+					defer func() {
+						if err := stopQueryHeartbeat(); err != nil {
+							runErr = fmt.Errorf("persist active query time: %w", err)
+						}
+					}()
+					result = registry.Run(ctx, request)
+				}()
 			}
 			loopDet.Record(act.Name, argsStr)
 			// Source coverage comes from the actual bounded response below,
@@ -781,8 +975,14 @@ loop:
 					if err := state.AppendRoundAndPersist(roundRec, roundsLog); err != nil {
 						runErr = fmt.Errorf("round %d: persist: %w", roundNum, err)
 						terminationReason = "persist_error"
+						emitRoundDone()
+						break loop
 					}
 					emitRoundDone()
+					if err := saveCommitted(); err != nil {
+						runErr = fmt.Errorf("persist checkpoint: %w", err)
+						terminationReason = "checkpoint_error"
+					}
 					break loop
 				}
 			}
@@ -795,6 +995,11 @@ loop:
 			break
 		}
 		emitRoundDone()
+		if err := saveCommitted(); err != nil {
+			runErr = fmt.Errorf("persist checkpoint: %w", err)
+			terminationReason = "checkpoint_error"
+			break
+		}
 	}
 
 	if terminationReason == "" {
@@ -933,7 +1138,32 @@ loop:
 	if err := runfs.WriteJSON(bundlePath, bundle); err != nil && runErr == nil {
 		runErr = fmt.Errorf("write final evidence bundle: %w", err)
 	}
-	return RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
+	result := RunResult{Bundle: bundle, Err: runErr, Investigations: invs, CasePacks: merged}
+	if checkpointEnabled && stable != nil {
+		cp, err := cloneCheckpoint(stable)
+		// An error can leave an uncommitted round. Keep its last persisted
+		// budget reservation instead of replacing it with the older stable budget.
+		if runErr != nil {
+			var data []byte
+			data, err = os.ReadFile(CheckpointPath(cfg.RunDir))
+			if err == nil {
+				err = json.Unmarshal(data, cp)
+				cp.runDir = cfg.RunDir
+			}
+		}
+		if err == nil {
+			cp.TerminationReason = terminationReason
+			if runErr == nil {
+				cp.Completed = true
+				cp.CachedResult = &CheckpointResult{Bundle: bundle, Investigations: invs, CasePacks: merged}
+			}
+			err = writeCheckpoint(cp)
+		}
+		if err != nil && result.Err == nil {
+			result.Err = fmt.Errorf("persist final checkpoint: %w", err)
+		}
+	}
+	return result
 }
 
 // processInvestigations converts the LLM's loosely-typed `done.investigations`

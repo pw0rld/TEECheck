@@ -1,5 +1,8 @@
 # Role-specific model configuration
 
+This is the model-routing reference. See [HARNESS.md](HARNESS.md) for the run
+lifecycle and [CONTRACTS.md](CONTRACTS.md) for evidence and decision rules.
+
 `teecheck run` and its `plan` alias accept `--role-config path/to/roles.json`.
 `TEECHECK_ROLE_CONFIG` provides the same file path through the environment.
 The file is read at startup. Unspecified values inherit the global `--llm-*`

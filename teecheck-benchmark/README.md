@@ -2,6 +2,9 @@
 
 This directory contains the executable source fixtures, evaluation runner, and
 reviewable score reports used to measure TEECheck.
+The scanner's current execution and evidence contracts are documented in
+[HARNESS.md](../tee-usage-scanner/docs/HARNESS.md) and
+[CONTRACTS.md](../tee-usage-scanner/docs/CONTRACTS.md).
 
 ## Directory Layout
 
@@ -174,6 +177,42 @@ planner discovery.
 `--samples` remains one run's coverage expansion. Re-running `evaluate` creates
 new independent attempts, but `score` selects the latest attempt for each
 variant; it does not pretend a multi-sample run is a repeat-stability study.
+
+On Unix, each scanner command starts in its own process group. Cancellation or
+timeout sends `SIGKILL` to that group, including the shell and descendants that
+retain the group; inherited output pipes have a bounded wait. Normal completion
+also cleans up remaining processes in that group. A descendant that deliberately
+creates a new session or process group can escape this mechanism and needs OS
+containment if stronger isolation is required. Other platforms retain direct
+process cancellation with the bounded pipe wait. A timeout is still `ERROR`,
+never a valid empty scan.
+
+### Development and holdout reporting
+
+`datasets/split.v1.json` records the original 23 dev / 21 holdout pairs. Among executable
+pairs, dev contains 14 in-scope cases and holdout contains 11 in-scope cases.
+Keep that assignment stable when reporting experiments. Cases
+`CVE-2016-6129`, `CVE-2020-16273`, and `CVE-2026-44362` from the original holdout
+have already been used in debugging discussion; a later run over all 11 must
+not be called an untouched blind test. Report tuning-exposed cases separately
+and disclose model knowledge of public CVEs. A high score on these fixtures
+alone does not establish discovery performance on unseen defects.
+
+For repeatability, run separate `evaluate` invocations with `--samples 1` in the
+scanner command and retain each result directory. Report the vulnerable/fixed
+paired pass rate, specificity, invalid/incomplete counts, cost, and run-to-run
+variation. Larger scanner `--samples` values measure expanded work within one
+attempt. Cache speedups and improved recall require measurements; no multiplier
+or target score is implied by the engineering changes.
+
+For repeated full-repository scans, add scanner `--codeql-cache-dir <dir>` or set
+`TEECHECK_CODEQL_CACHE_DIR` to reuse versioned source and CodeQL database masters.
+Queries use private database copies; cache validation and copying still cost time
+and disk. See [cache and resume details](../tee-usage-scanner/docs/HARNESS.md).
+Scanner `--resume` continues an existing run with matching source and settings;
+the runner's `evaluate` intentionally starts a fresh attempt. Do not inject resume
+into the scanner command to reuse an old attempt, or count a resumed Planner as a
+new independent sample.
 
 ### `reports/`
 

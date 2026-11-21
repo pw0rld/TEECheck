@@ -256,3 +256,74 @@ func TestPrepareRejectsInvalidParametersBeforeExecution(t *testing.T) {
 		t.Fatal("preparation invoked query engine")
 	}
 }
+
+func TestServiceRecoversVerifiedCacheAcrossProcesses(t *testing.T) {
+	s, p, eng, db := serviceFixture(t)
+	original, path, err := s.Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(eng, db)
+	recovered, recoveredPath, ok := restarted.Cached(p)
+	if !ok || recoveredPath != path || recovered.ContentSHA256 != original.ContentSHA256 {
+		t.Fatalf("disk fact was not recovered: ok=%v path=%s", ok, recoveredPath)
+	}
+	if _, _, err = restarted.Run(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if eng.calls != 1 || db.calls != 1 {
+		t.Fatalf("resume repeated query: engine=%d db=%d", eng.calls, db.calls)
+	}
+}
+func TestServiceRestartRejectsMismatchedDiskFact(t *testing.T) {
+	for _, field := range []string{"key", "source", "query", "scope", "parameters", "content"} {
+		t.Run(field, func(t *testing.T) {
+			s, p, eng, db := serviceFixture(t)
+			fact, path, err := s.Run(context.Background(), p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var meta Result
+			if err = json.Unmarshal(fact.Result, &meta); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "key":
+				fact.ArgumentsSHA256 = "another-key"
+			case "source":
+				meta.SourceSHA256 = "another-source"
+			case "query":
+				meta.QuerySHA256 = "another-query"
+			case "scope":
+				fact.Scope.Commit = "another-commit"
+			case "parameters":
+				meta.Parameters.SourceParamIndex = 11
+			case "content":
+				fact.ContentSHA256 = "invalid"
+			}
+			fact.Result, _ = json.Marshal(meta)
+			// A correct self-hash alone must not grant the wrong query identity.
+			if field != "content" {
+				fact.ContentSHA256 = artifacts.ToolFactContentSHA256(fact)
+			}
+			body, _ := json.Marshal(fact)
+			if err = os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			restarted := NewService(eng, db)
+			if _, _, ok := restarted.Cached(p); ok {
+				t.Fatal("mismatched disk evidence recovered")
+			}
+			if _, _, err = restarted.Run(context.Background(), p); err == nil {
+				t.Fatal("invalid immutable artifact overwritten")
+			}
+			if eng.calls != 1 {
+				t.Fatal("invalid disk evidence triggered another query")
+			}
+			after, _ := os.ReadFile(path)
+			if string(after) != string(body) {
+				t.Fatal("invalid evidence changed")
+			}
+		})
+	}
+}

@@ -374,7 +374,9 @@ go test ./... -count=1
 go vet ./...
 ```
 
-See [the target architecture](docs/ARCHITECTURE.md) for the migration toward
-case-scoped invariants and evidence-derived security architecture. That document
-contains planned components as well as implemented ones. Historical evaluation
-records describe their own revisions and must not be reused as current scores.
+See the [current architecture](docs/ARCHITECTURE.md), [execution guide](docs/HARNESS.md),
+[contract semantics](docs/CONTRACTS.md) and [role configuration](docs/ROLE_MODELS.md).
+The execution guide covers optional `--codeql-cache-dir` reuse and source-validated
+`--resume --run-dir` recovery. Deferred designs and old roadmaps live in
+`docs/history/`; historical evaluation records describe their own revisions and
+must not be reused as current scores.

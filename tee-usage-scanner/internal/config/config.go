@@ -15,6 +15,7 @@ type Config struct {
 	Command      string
 	RunID        string
 	RunDir       string
+	Resume       bool
 	RepoURL      string
 	LocalPath    string
 	Commit       string
@@ -66,6 +67,8 @@ type Config struct {
 	MaxTaintQueries         int
 	MaxTaintQueriesExplicit bool
 	TaintQueryTimeout       time.Duration
+	// Empty retains per-run source and database isolation.
+	CodeQLCacheDir string
 }
 
 func Parse(args []string) (Config, error) {
@@ -520,16 +523,20 @@ func parseRun(args []string) (Config, error) {
 		Samples:            1,
 		MaxTaintQueries:    8,
 		TaintQueryTimeout:  5 * time.Minute,
+		CodeQLCacheDir:     firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")
 	fs.IntVar(&cfg.MaxTaintQueries, "max-taint-queries", cfg.MaxTaintQueries, "Maximum uncached taint queries per planner pass; 0 disables the separate query cap")
 	fs.DurationVar(&cfg.TaintQueryTimeout, "taint-query-timeout", cfg.TaintQueryTimeout, "Timeout for each uncached taint query")
+	fs.StringVar(&cfg.CodeQLCacheDir, "codeql-cache-dir", cfg.CodeQLCacheDir, "Optional shared immutable source/CodeQL database cache; queries use private run-local database copies")
 	fs.StringVar(&cfg.RoleConfigFile, "role-config", os.Getenv("TEECHECK_ROLE_CONFIG"), "JSON file with startup-only per-role LLM overrides; credentials use api_key_env references")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.BoolVar(&cfg.EnableLegacyPrior, "enable-legacy-prior", false, "Run legacy pre-investigation architecture and invariant model stages")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
+	fs.BoolVar(&cfg.Resume, "resume", false, "Resume a checkpoint in --run-dir; repeat the original scan/model settings")
+	fs.StringVar(&cfg.RunDir, "run-dir", "", "Existing run directory for --resume")
 	// Upstream identity overrides. Needed when the scanned directory is not
 	// the project it represents — a benchmark fixture is a subtree of the
 	// TEECheck repository, so git would label it with TEECheck's own origin
@@ -557,7 +564,16 @@ func parseRun(args []string) (Config, error) {
 	for i := 0; i < len(args); i++ {
 		if !strings.HasPrefix(args[i], "-") && target == "" {
 			// Check it's not a value for the previous flag
+			previousTakesValue := false
 			if i > 0 && strings.HasPrefix(args[i-1], "-") && !strings.Contains(args[i-1], "=") {
+				previousTakesValue = true
+				if f := fs.Lookup(strings.TrimLeft(args[i-1], "-")); f != nil {
+					if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+						previousTakesValue = false
+					}
+				}
+			}
+			if previousTakesValue {
 				flagArgs = append(flagArgs, args[i])
 			} else {
 				target = args[i]
@@ -600,6 +616,15 @@ func parseRun(args []string) (Config, error) {
 	}
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	// Also check remaining args after flag parse
+	if cfg.Resume && cfg.RunDir == "" {
+		cfg.RunDir = target
+	}
+	if cfg.Resume && target == "" {
+		target = cfg.RunDir
+	}
+	if cfg.RunDir != "" && !cfg.Resume {
+		return Config{}, fmt.Errorf("--run-dir requires --resume")
+	}
 	if target == "" {
 		remaining := fs.Args()
 		if len(remaining) > 0 {

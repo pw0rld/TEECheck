@@ -118,46 +118,106 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	if cfg.TaintQueryTimeout < 0 {
 		return "", fmt.Errorf("taint query timeout must not be negative")
 	}
-	// === Repo Acquisition ===
-	fetch, err := repofetch.Fetch(cfg.Target)
-	if err != nil {
-		return "", fmt.Errorf("fetch repo: %w", err)
-	}
-	if fetch.Cloned {
-		fmt.Printf("Cloned %s to %s (commit: %s)\n", fetch.RepoURL, fetch.LocalPath, truncate(fetch.Commit, 12))
+	var fetch repofetch.FetchResult
+	var resumeCP *planner.Checkpoint
+	var unlock func()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	if cfg.Resume {
+		lockDir := cfg.RunDir
+		if lockDir == "" {
+			lockDir = cfg.Target
+		}
+		unlock, err = lockRunDirectory(lockDir, true)
+		if err != nil {
+			return lockDir, err
+		}
+		cfg, resumeCP, err = inspectResume(cfg, roleSettings)
+		if err != nil {
+			return cfg.RunDir, err
+		}
+		runDir = cfg.RunDir
+		// Inspect tool identity before changing any prior artifacts.
+		probe := codeql.New()
+		version := "unavailable"
+		if probe.Available() {
+			version, err = probe.Version(context.Background())
+			if err != nil {
+				version = "error"
+			}
+		}
+		original, loadErr := runfs.LoadManifest(runDir)
+		if loadErr != nil {
+			return runDir, loadErr
+		}
+		if original.ToolVersions["codeql"] != version {
+			return runDir, fmt.Errorf("resume CodeQL version changed")
+		}
+		if err = prepareResumeArtifacts(runDir, resumeCP); err != nil {
+			return runDir, fmt.Errorf("prepare resume: %w", err)
+		}
 	} else {
-		fmt.Printf("Using local repo at %s (commit: %s)\n", fetch.LocalPath, truncate(fetch.Commit, 12))
+		// === Repo Acquisition ===
+		if cfg.CodeQLCacheDir != "" && repofetch.IsURL(cfg.Target) {
+			fetch = repofetch.FetchResult{RepoURL: cfg.Target, Commit: cfg.Commit}
+			if fetch.Commit == "" {
+				fetch.Commit = "HEAD"
+			}
+		} else {
+			fetch, err = repofetch.Fetch(cfg.Target)
+		}
+		if err != nil {
+			return "", fmt.Errorf("fetch repo: %w", err)
+		}
+		if fetch.Cloned {
+			fmt.Printf("Cloned %s to %s (commit: %s)\n", fetch.RepoURL, fetch.LocalPath, truncate(fetch.Commit, 12))
+		} else if fetch.LocalPath != "" {
+			fmt.Printf("Using local repo at %s (commit: %s)\n", fetch.LocalPath, truncate(fetch.Commit, 12))
+		} else {
+			fmt.Printf("Resolving %s@%s through shared source cache\n", fetch.RepoURL, fetch.Commit)
+		}
+
+		cfg.LocalPath = fetch.LocalPath
+		cfg.RepoURL, cfg.Commit = resolveRepoIdentity(cfg, fetch)
+
+		// === Init Run ===
+		if err := knowledge.EnsureLayout(cfg.KnowledgeRoot); err != nil {
+			return "", fmt.Errorf("ensure knowledge layout: %w", err)
+		}
+		initCfg := cfg
+		runDir, err = runinit.Run(initCfg, time.Now())
+		if err != nil {
+			return "", fmt.Errorf("init run: %w", err)
+		}
+		if err := runinit.RecordRoleConfigurations(runDir, roleSettings); err != nil {
+			return runDir, fmt.Errorf("record role configuration: %w", err)
+		}
+		plannerBudget := configuredPlannerBudget(cfg)
+		if err := runinit.RecordPlannerLimits(runDir, artifacts.PlannerLimits{
+			MaxInvestigationRounds: plannerBudget.MaxRounds,
+			MaxReconRounds:         plannerBudget.MaxReconRounds,
+			MaxAggregateTokens:     plannerBudget.MaxTokens,
+			ReconMaxTokens:         plannerBudget.MaxReconTokens,
+			InvestigationMaxTokens: plannerBudget.MaxInvestigationTokens,
+			ReserveTokensForDone:   plannerBudget.ConvergenceReserveTokens,
+			PerActionTimeoutMs:     plannerBudget.PerActionTimeout.Milliseconds(),
+			WallClockTimeoutMs:     plannerBudget.WallClock.Milliseconds(),
+			MaxTaintQueries:        plannerBudget.MaxTaintQueries,
+			TaintQueryTimeoutMs:    plannerBudget.TaintQueryTimeout.Milliseconds(),
+		}); err != nil {
+			return runDir, fmt.Errorf("record planner limits: %w", err)
+		}
+
 	}
 
-	cfg.LocalPath = fetch.LocalPath
-	cfg.RepoURL, cfg.Commit = resolveRepoIdentity(cfg, fetch)
-
-	// === Init Run ===
-	if err := knowledge.EnsureLayout(cfg.KnowledgeRoot); err != nil {
-		return "", fmt.Errorf("ensure knowledge layout: %w", err)
-	}
-	initCfg := cfg
-	runDir, err = runinit.Run(initCfg, time.Now())
-	if err != nil {
-		return "", fmt.Errorf("init run: %w", err)
-	}
-	if err := runinit.RecordRoleConfigurations(runDir, roleSettings); err != nil {
-		return runDir, fmt.Errorf("record role configuration: %w", err)
-	}
-	plannerBudget := configuredPlannerBudget(cfg)
-	if err := runinit.RecordPlannerLimits(runDir, artifacts.PlannerLimits{
-		MaxInvestigationRounds: plannerBudget.MaxRounds,
-		MaxReconRounds:         plannerBudget.MaxReconRounds,
-		MaxAggregateTokens:     plannerBudget.MaxTokens,
-		ReconMaxTokens:         plannerBudget.MaxReconTokens,
-		InvestigationMaxTokens: plannerBudget.MaxInvestigationTokens,
-		ReserveTokensForDone:   plannerBudget.ConvergenceReserveTokens,
-		PerActionTimeoutMs:     plannerBudget.PerActionTimeout.Milliseconds(),
-		WallClockTimeoutMs:     plannerBudget.WallClock.Milliseconds(),
-		MaxTaintQueries:        plannerBudget.MaxTaintQueries,
-		TaintQueryTimeoutMs:    plannerBudget.TaintQueryTimeout.Milliseconds(),
-	}); err != nil {
-		return runDir, fmt.Errorf("record planner limits: %w", err)
+	if unlock == nil {
+		unlock, err = lockRunDirectory(runDir, false)
+		if err != nil {
+			return runDir, err
+		}
 	}
 
 	stageCfg := cfg
@@ -180,8 +240,10 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	if manifestErr == nil {
 		runID = manifest.RunID
 	}
-	_ = rec.Emit(events.RunStarted(runID, cfg.Target, cfg.Mode, cfg.Focus))
-	_ = rec.Emit(events.RunConfig(runID, processCommand()))
+	if !cfg.Resume {
+		_ = rec.Emit(events.RunStarted(runID, cfg.Target, cfg.Mode, cfg.Focus))
+		_ = rec.Emit(events.RunConfig(runID, processCommand()))
+	}
 	defer func() {
 		reason := "completed"
 		errMsg := ""
@@ -225,6 +287,16 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	// stage brackets a pipeline stage with stage_started /
 	// stage_completed. See runStage for why the seam lives here.
 	stage := func(name string, fn func() error) error {
+		if cfg.Resume && name == "l3_planner" {
+			started := time.Now()
+			e := fn()
+			reason, message := "completed", ""
+			if e != nil {
+				reason, message = "error", e.Error()
+			}
+			_ = rec.Emit(events.StageCompleted(runID, name, reason, time.Since(started).Milliseconds(), message))
+			return e
+		}
 		return runStage(rec, runID, name, fn)
 	}
 
@@ -277,66 +349,105 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 		return runDir, fmt.Errorf("record CodeQL version: %w", err)
 	}
 	codeDB := codedb.New(indexEng,
-		executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent}))
+		executor.Bind(exec, executor.Binding{RunID: runID, Agent: indexAgent})).WithCacheDir(cfg.CodeQLCacheDir)
 
-	srcRoot, pinned := acquireSourceScope(context.Background(), codeDB,
-		runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
-	scopeReason := "target directory; no pinned checkout"
-	if pinned {
-		scopeReason = fmt.Sprintf("pinned checkout of %s@%s", cfg.RepoURL, truncate(cfg.Commit, 12))
-	}
-	fmt.Printf("Source scope: %s (%s)\n", srcRoot, scopeReason)
-	_ = rec.Emit(events.SourceScopeResolved(runID, srcRoot, scopeReason))
-	stageCfg.LocalPath = srcRoot
-	// The manifest is the run's single statement of what was scanned, and
-	// most stages read the tree from it rather than from their own config:
-	// preprocess walks manifest.LocalPath, and invariants, expert and
-	// verifier resolve every citation against it. Leaving it at the target
-	// directory while the tools read the checkout would put the two scopes
-	// back — the same split as reading two different trees, only harder to see because
-	// nothing would print it. runinit writes the manifest before this point
-	// (the checkout needs the run directory to live in), so it is corrected
-	// here rather than pre-computed.
-	if err := recordScannedRoot(runDir, srcRoot, pinned); err != nil {
-		return runDir, fmt.Errorf("record scanned root: %w", err)
-	}
-
-	if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
-		return "", fmt.Errorf("preprocess: %w", err)
-	}
-
-	// 01A / 01B: the deterministic whole-repo program index, and the neutral
-	// navigation view derived from it. They run before architecture because
-	// architecture consumes the map, and before the planner because the
-	// planner browses it.
-	//
-	// The CodeQL database is built here, once. It used to be built inside
-	// the planner's first round: 91.6 seconds of the planner's own budget
-	// spent on infrastructure, and invisible as such because it arrived as a
-	// round-0 tool call.
-	if err := stage("repo_index", func() error {
-		return repoindex.Run(stageCfg, codeDB, indexEng)
-	}); err != nil {
-		return runDir, fmt.Errorf("repo index: %w", err)
-	}
-	if err := stage("project_map", func() error { return projectmap.Run(stageCfg) }); err != nil {
-		return runDir, fmt.Errorf("project map: %w", err)
-	}
-
-	// The old pre-investigation models have no source evidence in their
-	// prompts. Keep them explicitly opt-in during migration; ordinary runs
-	// proceed from the program map to grounded investigation instead.
-	if cfg.EnableLegacyPrior {
-		if err := stage("architecture", func() error {
-			return architecture.Run(forRoleConfig("architecture-001"), forAgent("architecture-001"))
-		}); err != nil {
-			return runDir, fmt.Errorf("architecture: %w", err)
+	srcRoot := cfg.LocalPath
+	if !cfg.Resume {
+		var pinned bool
+		srcRoot, pinned = acquireSourceScope(context.Background(), codeDB,
+			runDir, cfg.RepoURL, cfg.Commit, fetch.LocalPath)
+		if cfg.CodeQLCacheDir != "" && repofetch.IsURL(cfg.Target) && !pinned {
+			return runDir, fmt.Errorf("cannot resolve remote source in CodeQL cache")
 		}
-		if err := stage("invariants", func() error {
-			return invariants.Run(forRoleConfig("invariants-001"), forAgent("invariants-001"))
-		}); err != nil {
-			return runDir, fmt.Errorf("invariants: %w", err)
+		if pinned && cfg.CodeQLCacheDir != "" {
+			resolved, resolveErr := codeDB.ResolvedCommit(codedb.Scope{RunDir: runDir, Repository: cfg.RepoURL, Commit: cfg.Commit})
+			if resolveErr != nil {
+				return runDir, resolveErr
+			}
+			// Preserve an explicitly requested revision (including short SHAs and
+			// parent expressions) for benchmark identity checks. The cache binding
+			// pins it to resolved for this run; only an implicit HEAD needs expansion.
+			if cfg.Commit == "HEAD" {
+				cfg.Commit, stageCfg.Commit = resolved, resolved
+			}
+			// RecordToolVersion updated the manifest after it was initially read.
+			// Reload before pinning so the cache path preserves tool provenance.
+			pinnedManifest, loadErr := runfs.LoadManifest(runDir)
+			if loadErr != nil {
+				return runDir, loadErr
+			}
+			pinnedManifest.Commit = cfg.Commit
+			if pinnedManifest.Metadata == nil {
+				pinnedManifest.Metadata = map[string]any{}
+			}
+			pinnedManifest.Metadata["resolved_source_commit"] = resolved
+			if err := runfs.WriteJSON(runfs.ManifestPath(runDir), pinnedManifest); err != nil {
+				return runDir, err
+			}
 		}
+		scopeReason := "target directory; no pinned checkout"
+		if pinned {
+			scopeReason = fmt.Sprintf("pinned checkout of %s@%s", cfg.RepoURL, truncate(cfg.Commit, 12))
+		}
+		fmt.Printf("Source scope: %s (%s)\n", srcRoot, scopeReason)
+		_ = rec.Emit(events.SourceScopeResolved(runID, srcRoot, scopeReason))
+		stageCfg.LocalPath = srcRoot
+		// The manifest is the run's single statement of what was scanned, and
+		// most stages read the tree from it rather than from their own config:
+		// preprocess walks manifest.LocalPath, and invariants, expert and
+		// verifier resolve every citation against it. Leaving it at the target
+		// directory while the tools read the checkout would put the two scopes
+		// back — the same split as reading two different trees, only harder to see because
+		// nothing would print it. runinit writes the manifest before this point
+		// (the checkout needs the run directory to live in), so it is corrected
+		// here rather than pre-computed.
+		if err := recordScannedRoot(runDir, srcRoot, pinned); err != nil {
+			return runDir, fmt.Errorf("record scanned root: %w", err)
+		}
+
+		if err := stage("preprocess", func() error { return preprocessor.Run(stageCfg) }); err != nil {
+			return "", fmt.Errorf("preprocess: %w", err)
+		}
+
+		// 01A / 01B: the deterministic whole-repo program index, and the neutral
+		// navigation view derived from it. They run before architecture because
+		// architecture consumes the map, and before the planner because the
+		// planner browses it.
+		//
+		// The CodeQL database is built here, once. It used to be built inside
+		// the planner's first round: 91.6 seconds of the planner's own budget
+		// spent on infrastructure, and invisible as such because it arrived as a
+		// round-0 tool call.
+		if err := stage("repo_index", func() error {
+			return repoindex.Run(stageCfg, codeDB, indexEng)
+		}); err != nil {
+			return runDir, fmt.Errorf("repo index: %w", err)
+		}
+		if err := stage("project_map", func() error { return projectmap.Run(stageCfg) }); err != nil {
+			return runDir, fmt.Errorf("project map: %w", err)
+		}
+
+		// The old pre-investigation models have no source evidence in their
+		// prompts. Keep them explicitly opt-in during migration; ordinary runs
+		// proceed from the program map to grounded investigation instead.
+		if cfg.EnableLegacyPrior {
+			if err := stage("architecture", func() error {
+				return architecture.Run(forRoleConfig("architecture-001"), forAgent("architecture-001"))
+			}); err != nil {
+				return runDir, fmt.Errorf("architecture: %w", err)
+			}
+			if err := stage("invariants", func() error {
+				return invariants.Run(forRoleConfig("invariants-001"), forAgent("invariants-001"))
+			}); err != nil {
+				return runDir, fmt.Errorf("invariants: %w", err)
+			}
+		}
+
+		if err := recordResumeSettings(runDir, cfg, roleSettings); err != nil {
+			return runDir, fmt.Errorf("record resume settings: %w", err)
+		}
+	} else {
+		stageCfg.LocalPath = srcRoot
 	}
 
 	// === Agent 1: L3 Planner ===
@@ -643,9 +754,31 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 	// allPacks before the loop is what makes the pass-1 hard-error and
 	// nil-bundle paths below fall back to these grounded cases instead of
 	// aborting the run — the "independent of the planner" contract made good.
-	detPacks, derr := deterministicCasesFn(context.Background(), eng, db, queryPackDir, runDir, srcRoot, manifest.RepoURL, manifest.Commit, cfg.Focus)
-	if derr != nil {
-		return fmt.Errorf("deterministic fact lane: %w", derr)
+	deterministicPath := filepath.Join(runfs.PlannerDir(runDir), "deterministic-case-packs.json")
+	var detPacks []artifacts.CasePack
+	var resumeCP *planner.Checkpoint
+	if cfg.Resume {
+		var err error
+		resumeCP, err = planner.InspectCheckpoint(runDir, srcRoot)
+		if err != nil {
+			return err
+		}
+		detPacks, err = decodeDeterministicPacks(deterministicPath)
+		if err != nil {
+			return fmt.Errorf("resume deterministic packs: %w", err)
+		}
+		if resumeCP.SampleIndex >= samples {
+			return fmt.Errorf("resume sample index exceeds configured passes")
+		}
+	} else {
+		var derr error
+		detPacks, derr = deterministicCasesFn(context.Background(), eng, db, queryPackDir, runDir, srcRoot, manifest.RepoURL, manifest.Commit, cfg.Focus)
+		if derr != nil {
+			return fmt.Errorf("deterministic fact lane: %w", derr)
+		}
+		if err := writeResumeJSON(deterministicPath, detPacks); err != nil {
+			return err
+		}
 	}
 	if len(detPacks) > 0 {
 		fmt.Printf("[deterministic] promoted %d grounded case pack(s) from the fact layer\n", len(detPacks))
@@ -656,37 +789,48 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 		if samples > 1 {
 			fmt.Printf("\n=== Planner pass %d/%d (avoiding %d previously-covered targets) ===\n", pass, samples, len(avoid))
 		}
-		result := planner.Run(context.Background(), planner.RunConfig{
-			RunID:    manifest.RunID,
-			RepoRoot: srcRoot,
-			RunDir:   runDir,
-			// Every pass restarts at round 1, so without this each one's
-			// observation refs would collide with the last's — and a lead
-			// raised in pass 2 would cite pass 1's evidence, from a pass
-			// deliberately pointed at different code.
-			SampleIndex:   pass - 1,
-			Profile:       promptProfile,
-			Client:        client,
-			Registry:      registry,
-			Budget:        configuredPlannerBudget(cfg),
-			Temperature:   cfg.LLMTemp,
-			KnowledgeRoot: cfg.KnowledgeRoot,
-			AvoidPaths:    avoid,
-			Events:        rec,
-			Blobs:         blobs,
-			Model:         cfg.LLMModel,
-			Executor:      exec,
-			// Project Understanding prior knowledge (§7.5): the planner
-			// investigates against these, and reaches the fact layer via
-			// the fact_layer_query action registered above.
-			TWEContext:   string(tweText),
-			Architecture: archPtr,
-			Invariants:   invs,
-			// §24 Case Pack: common_defenses / common_false_positives per
-			// TWE, consumed when a done.investigations entry builds a Case
-			// Pack for the Challenger (internal/challenger/phase1.go).
-			TWEPlaybooks: twePlaybooks,
-		})
+		var result planner.RunResult
+		if resumeCP != nil && pass-1 < resumeCP.SampleIndex {
+			var err error
+			result, err = loadPassResult(runDir, pass)
+			if err != nil {
+				return fmt.Errorf("resume earlier pass: %w", err)
+			}
+		} else {
+			result = planner.Run(context.Background(), planner.RunConfig{
+				Resume:         cfg.Resume && resumeCP != nil && pass-1 == resumeCP.SampleIndex,
+				ResumePrepared: cfg.Resume,
+				RunID:          manifest.RunID,
+				RepoRoot:       srcRoot,
+				RunDir:         runDir,
+				// Every pass restarts at round 1, so without this each one's
+				// observation refs would collide with the last's — and a lead
+				// raised in pass 2 would cite pass 1's evidence, from a pass
+				// deliberately pointed at different code.
+				SampleIndex:   pass - 1,
+				Profile:       promptProfile,
+				Client:        client,
+				Registry:      registry,
+				Budget:        configuredPlannerBudget(cfg),
+				Temperature:   cfg.LLMTemp,
+				KnowledgeRoot: cfg.KnowledgeRoot,
+				AvoidPaths:    avoid,
+				Events:        rec,
+				Blobs:         blobs,
+				Model:         cfg.LLMModel,
+				Executor:      exec,
+				// Project Understanding prior knowledge (§7.5): the planner
+				// investigates against these, and reaches the fact layer via
+				// the fact_layer_query action registered above.
+				TWEContext:   string(tweText),
+				Architecture: archPtr,
+				Invariants:   invs,
+				// §24 Case Pack: common_defenses / common_false_positives per
+				// TWE, consumed when a done.investigations entry builds a Case
+				// Pack for the Challenger (internal/challenger/phase1.go).
+				TWEPlaybooks: twePlaybooks,
+			})
+		}
 
 		if result.Bundle != nil {
 			m := result.Bundle.PlannerMeta
@@ -726,6 +870,9 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 				break
 			}
 			break
+		}
+		if err := savePassResult(runDir, pass, result); err != nil {
+			return fmt.Errorf("persist planner pass: %w", err)
 		}
 		bundles = append(bundles, result.Bundle)
 		// Case Packs accumulate across passes and are deduped, capped and

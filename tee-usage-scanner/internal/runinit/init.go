@@ -3,6 +3,7 @@ package runinit
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,11 +22,32 @@ var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
 func Run(cfg config.Config, now time.Time) (string, error) {
 	cfg = cfg.WithLLMProviderDefaults()
 	runID := strings.TrimSpace(cfg.RunID)
-	if runID == "" {
-		runID = defaultRunID(cfg, now)
+	outputDir := cfg.OutputDir
+	if outputDir == "" {
+		outputDir = "."
 	}
-
-	runRoot := filepath.Join(cfg.OutputDir, runID)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", fmt.Errorf("create output directory: %w", err)
+	}
+	var runRoot string
+	if runID == "" {
+		// MkdirTemp reserves a unique run atomically, even when concurrent
+		// benchmark workers share the same timestamp and repository.
+		var err error
+		runRoot, err = os.MkdirTemp(outputDir, defaultRunID(cfg, now)+"-")
+		if err != nil {
+			return "", fmt.Errorf("create unique run directory: %w", err)
+		}
+		runID = filepath.Base(runRoot)
+	} else {
+		if runID == "." || runID == ".." || filepath.Base(runID) != runID || strings.ContainsAny(runID, "/\\") {
+			return "", fmt.Errorf("run ID must be a single directory name")
+		}
+		runRoot = filepath.Join(outputDir, runID)
+		if err := os.Mkdir(runRoot, 0o755); err != nil {
+			return "", fmt.Errorf("create run directory %s (existing runs require --resume): %w", runRoot, err)
+		}
+	}
 	stageDirs := []string{
 		filepath.Join(runRoot, "01_profile"),
 		filepath.Join(runRoot, "03_cases"),
@@ -165,7 +187,15 @@ func writeJSON(path string, value any) error {
 }
 
 func defaultRunID(cfg config.Config, now time.Time) string {
-	repoPart := sanitizeStem(filepath.Base(cfg.LocalPath))
+	name := cfg.LocalPath
+	if strings.TrimSpace(name) == "" {
+		name = cfg.RepoURL
+		if parsed, err := url.Parse(name); err == nil && parsed.Host != "" {
+			name = parsed.Path
+		}
+	}
+	name = strings.TrimSuffix(strings.TrimRight(name, "/"), ".git")
+	repoPart := sanitizeStem(filepath.Base(name))
 	focusPart := sanitizeStem(cfg.Focus)
 	if repoPart == "" {
 		repoPart = "repo"

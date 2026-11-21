@@ -8,10 +8,10 @@
 // only have built a second database — 91 seconds and 322 MB, twice, for the
 // same revision — or reimplemented the path derivation and drifted from it.
 //
-// The database and the checkout are both explicit run artifacts, not cache
-// side effects (§23.3), and both are keyed deterministically on
-// (repository, commit) so any consumer computes the same path without
-// coordinating.
+// By default the database and checkout are explicit run artifacts keyed on
+// (repository, commit). An optional shared cache pins immutable source and
+// database masters by exact commit and CodeQL version; each run records its
+// source binding and receives a private database copy for writable analysis.
 package codedb
 
 import (
@@ -95,6 +95,7 @@ type Manager struct {
 	// extraPATH is prepended to PATH for the CodeQL subprocess. Normally
 	// unnecessary; it exists for a future build mode that needs a compiler.
 	extraPATH string
+	cacheDir  string
 }
 
 func New(eng Engine, ex executor.Executor) *Manager {
@@ -106,6 +107,17 @@ func New(eng Engine, ex executor.Executor) *Manager {
 func (m *Manager) WithExtraPATH(dir string) *Manager {
 	out := *m
 	out.extraPATH = dir
+	return &out
+}
+
+// WithCacheDir enables immutable shared source/DB masters. Every database
+// handed to query engines is still a private run-local materialization.
+func (m *Manager) WithCacheDir(dir string) *Manager {
+	out := *m
+	out.cacheDir = ""
+	if strings.TrimSpace(dir) != "" {
+		out.cacheDir = absolute(dir)
+	}
 	return &out
 }
 
@@ -174,6 +186,12 @@ func absolute(path string) string {
 // than the directory: a directory without one is the debris of an
 // interrupted build.
 func (m *Manager) State(scope Scope) string {
+	if m.cacheDir != "" {
+		var metadata databaseMetadata
+		if err := readCacheJSON(m.bindingPath(scope, "database"), &metadata); err != nil || metadata.Schema != cacheSchema {
+			return StateAbsent
+		}
+	}
 	if _, err := os.Stat(filepath.Join(m.Path(scope), dbBuiltMarker)); err == nil {
 		return StateReady
 	}
@@ -196,6 +214,11 @@ func (m *Manager) State(scope Scope) string {
 // It returns a path whether or not anything is there yet, so check
 // SourceAvailable before relying on it.
 func (m *Manager) SourceDir(scope Scope) string {
+	if m.cacheDir != "" {
+		if binding, err := m.readSourceBinding(scope); err == nil {
+			return binding.SourceRoot
+		}
+	}
 	return absolute(filepath.Join(runfs.TrustIRToolFactsDir(scope.RunDir), "src", dirName(scope.Repository, scope.Commit)))
 }
 
@@ -203,8 +226,26 @@ func (m *Manager) SourceDir(scope Scope) string {
 // marker is written only after the clone succeeds, so a directory left by an
 // interrupted clone reads as unavailable rather than as a usable tree.
 func (m *Manager) SourceAvailable(scope Scope) bool {
+	if m.cacheDir != "" {
+		_, err := m.validBoundSource(scope)
+		return err == nil
+	}
 	_, err := os.Stat(filepath.Join(m.SourceDir(scope), srcClonedMarker))
 	return err == nil
+}
+
+// ResolvedCommit reports the exact source commit pinned by EnsureSource.
+// Callers using symbolic refs can record it in their run manifest. Changing
+// Scope.Commit creates a new run binding, but reuses the same shared source.
+func (m *Manager) ResolvedCommit(scope Scope) (string, error) {
+	if m.cacheDir == "" {
+		return scope.Commit, nil
+	}
+	b, err := m.readSourceBinding(scope)
+	if err != nil {
+		return "", err
+	}
+	return b.Commit, nil
 }
 
 // EnsureSource acquires the run's source tree: repository@commit checked out
@@ -226,6 +267,9 @@ func (m *Manager) SourceAvailable(scope Scope) bool {
 // CVE revision can be arbitrarily far behind the branch tip, which is why
 // internal/repofetch's shallow clone cannot serve this purpose.
 func (m *Manager) EnsureSource(ctx context.Context, scope Scope) (string, error) {
+	if m.cacheDir != "" {
+		return m.ensureSharedSource(ctx, scope)
+	}
 	tree := m.SourceDir(scope)
 	if m.SourceAvailable(scope) {
 		return tree, nil
@@ -255,6 +299,9 @@ func (m *Manager) EnsureSource(ctx context.Context, scope Scope) (string, error)
 // CreateDatabase with BuildMode "none" (§23.3 — the only build mode the
 // spike proved works for C without a project build system).
 func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
+	if m.cacheDir != "" {
+		return m.ensureSharedDatabase(ctx, scope)
+	}
 	dbPath := m.Path(scope)
 	if m.State(scope) == StateReady {
 		return dbPath, nil
@@ -268,6 +315,13 @@ func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return "", fmt.Errorf("create db parent dir: %w", err)
 	}
+	if err = m.buildDatabase(ctx, tree, dbPath); err != nil {
+		return "", err
+	}
+	return dbPath, nil
+}
+
+func (m *Manager) buildDatabase(ctx context.Context, tree, dbPath string) error {
 	opts := codeql.CreateDBOptions{
 		Language:   "cpp",
 		SourceRoot: tree,
@@ -278,24 +332,24 @@ func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
 	}
 	if err := m.eng.CreateDatabase(ctx, opts); err != nil {
 		if ctx.Err() != nil || !isTransientBuildFailure(err) {
-			return "", fmt.Errorf("create database: %w", err)
+			return fmt.Errorf("create database: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "CodeQL database creation hit an internal JVM/TRAP failure; clearing partial database and retrying once with --threads=1: %v\n", err)
 		if cleanupErr := os.RemoveAll(dbPath); cleanupErr != nil {
-			return "", fmt.Errorf("clear partial database after transient failure (%v): %w", err, cleanupErr)
+			return fmt.Errorf("clear partial database after transient failure (%v): %w", err, cleanupErr)
 		}
 		opts.Threads = 1
 		opts.Overwrite = true
 		if retryErr := m.eng.CreateDatabase(ctx, opts); retryErr != nil {
-			return "", fmt.Errorf("create database recovery failed (initial error: %v): %w", err, retryErr)
+			return fmt.Errorf("create database recovery failed (initial error: %v): %w", err, retryErr)
 		}
 	}
 
 	marker := filepath.Join(dbPath, dbBuiltMarker)
 	if err := os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
-		return "", fmt.Errorf("write db-built marker: %w", err)
+		return fmt.Errorf("write db-built marker: %w", err)
 	}
-	return dbPath, nil
+	return nil
 }
 
 var internalExit100 = regexp.MustCompile(`\bexit status 100\b`)

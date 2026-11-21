@@ -2,11 +2,13 @@ package taint
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
 
@@ -25,7 +28,32 @@ func (s *Service) Cached(p Prepared) (artifacts.ToolFact, string, bool) {
 
 func (s *Service) cached(p Prepared) (artifacts.ToolFact, string, bool) {
 	entry, ok := s.cache[cacheKey(p)]
-	if !ok || entry.sourceHash != p.SourceHash {
+	if !ok {
+		// A resumed process has an empty in-memory map. Recover only the exact
+		// persisted query identity after independently validating all bindings.
+		path := preparedFactPath(p)
+		if path == "" {
+			return artifacts.ToolFact{}, "", false
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return artifacts.ToolFact{}, "", false
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return artifacts.ToolFact{}, "", false
+		}
+		var fact artifacts.ToolFact
+		if json.Unmarshal(body, &fact) != nil || !matchesPreparedFact(fact, p) {
+			return artifacts.ToolFact{}, "", false
+		}
+		entry = cacheEntry{copyFact(fact), path, digest(body), p.SourceHash}
+		if s.cache == nil {
+			s.cache = map[string]cacheEntry{}
+		}
+		s.cache[cacheKey(p)] = entry
+	}
+	if entry.sourceHash != p.SourceHash {
 		return artifacts.ToolFact{}, "", false
 	}
 	body, err := os.ReadFile(entry.path)
@@ -47,8 +75,11 @@ func (s *Service) Run(ctx context.Context, p Prepared) (artifacts.ToolFact, stri
 	if _, existed := s.cache[cacheKey(p)]; existed {
 		return artifacts.ToolFact{}, "", fmt.Errorf("cached ToolFact changed or became unreadable; refusing to overwrite immutable evidence")
 	}
-	if p.Key == "" || p.query == "" || p.RunDir == "" {
+	if preparedFactPath(p) == "" {
 		return artifacts.ToolFact{}, "", fmt.Errorf("trace request was not prepared")
+	}
+	if _, err := os.Lstat(preparedFactPath(p)); err == nil || !os.IsNotExist(err) {
+		return artifacts.ToolFact{}, "", fmt.Errorf("persisted ToolFact is invalid or unreadable; refusing to overwrite immutable evidence")
 	}
 	started := time.Now()
 	meta := Result{QueryVersion: QueryVersion, Parameters: p.Request.Parameters, Source: p.Source, SourceSHA256: p.SourceHash, QuerySHA256: digest([]byte(p.query)), BarriersApplied: append([]string{}, p.Request.BarrierFuncs...), PathEnumeration: "CodeQL-emitted path witnesses; not exhaustive enumeration and not a shortest-path guarantee", AnalysisPathLimit: 10}
@@ -227,4 +258,22 @@ func copyFact(f artifacts.ToolFact) artifacts.ToolFact {
 	var out artifacts.ToolFact
 	_ = json.Unmarshal(body, &out)
 	return out
+}
+
+func preparedFactPath(p Prepared) string {
+	key, err := hex.DecodeString(p.Key)
+	if err != nil || len(key) != 32 || p.query == "" || p.RunDir == "" || p.SourceHash == "" {
+		return ""
+	}
+	return runfs.TrustIRToolFactPath(p.RunDir, "taint-"+p.Key)
+}
+func matchesPreparedFact(f artifacts.ToolFact, p Prepared) bool {
+	if f.SchemaVersion != artifacts.SchemaVersionToolFactV1 || f.Status != "success" || f.Operation != Operation || f.Tool != "codeql-cpp-taint" || f.RequestID != p.Key || f.FactID != "taint-"+p.Key || f.ArgumentsSHA256 != p.Key || f.RepoCommit != p.Commit || f.Scope == nil || !reflect.DeepEqual(*f.Scope, p.Scope) || artifacts.ValidateToolFactContent(f) != nil {
+		return false
+	}
+	var result Result
+	if json.Unmarshal(f.Result, &result) != nil {
+		return false
+	}
+	return result.QueryVersion == QueryVersion && result.SourceSHA256 == p.SourceHash && result.QuerySHA256 == digest([]byte(p.query)) && reflect.DeepEqual(result.Source, p.Source) && reflect.DeepEqual(result.Parameters, p.Request.Parameters)
 }
