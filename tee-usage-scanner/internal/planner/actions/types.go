@@ -60,8 +60,6 @@ type ActionRequest struct {
 }
 
 type TracePolicy struct {
-	Investigation  bool
-	HasLead        bool
 	ObservedSymbol func(artifacts.SymbolID) bool
 	TakeQuery      func() bool
 	Timeout        time.Duration

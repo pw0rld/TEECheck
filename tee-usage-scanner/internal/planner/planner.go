@@ -275,7 +275,7 @@ loop:
 		systemPrompt := BuildSystemPrompt(
 			advertisedActions(registry), obligations, knowledge, recon.Phase())
 
-		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths)
+		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths, recon)
 		roundPrompt += reconStatusBlock(recon)
 
 		isFinalRound := cfg.Budget.IsFinalRound()
@@ -334,7 +334,7 @@ loop:
 			inRecon = false
 			registry = cfg.Registry
 			systemPrompt = BuildSystemPrompt(advertisedActions(cfg.Registry), obligations, knowledge, recon.Phase())
-			roundPrompt = BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths) + reconStatusBlock(recon)
+			roundPrompt = BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths, recon) + reconStatusBlock(recon)
 			predictedInput = requestInputUpperBound(systemPrompt, roundPrompt)
 		}
 		if !isFinalRound && cfg.Budget.OutputAllowance(predictedInput, inRecon, false) < minimumReplyTokens {
@@ -623,8 +623,6 @@ loop:
 				result = formalizeContract(cfg, state, observations, executedToolFactRefs, roundRec, act.Args)
 			case act.Name == ActionCloseLead:
 				result = closeLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
-			case act.Name == actions.TraceTaintAction && (recon.Phase() != PhaseInvestigation || len(state.AuditLeads) == 0):
-				result = actions.ActionResult{Name: act.Name, Error: "trace_taint is available only after opening an audit lead"}
 			case act.Name == "done" && !recon.AllowDone(isFinalRound):
 				result = actions.ActionResult{
 					Name: "done",
@@ -646,16 +644,9 @@ loop:
 					Round:      roundNum,
 				}
 				if act.Name == actions.TraceTaintAction {
-					hasLead := false
-					for _, lead := range state.AuditLeads {
-						if lead.RunID == cfg.RunID && lead.SampleIndex == cfg.SampleIndex && lead.State != artifacts.LeadStateClosed {
-							hasLead = true
-							break
-						}
-					}
 					timeout := cfg.Budget.TaintQueryTimeout
 					if timeout <= 0 {
-						timeout = 90 * time.Second
+						timeout = 5 * time.Minute
 					}
 					if cfg.Budget.WallClock > 0 {
 						remaining := time.Until(cfg.Budget.startedAt.Add(cfg.Budget.WallClock))
@@ -667,7 +658,7 @@ loop:
 							timeout = remaining
 						}
 					}
-					request.TracePolicy = &actions.TracePolicy{Investigation: recon.Phase() == PhaseInvestigation, HasLead: hasLead, ObservedSymbol: recon.SawSymbol, TakeQuery: cfg.Budget.ConsumeTaintQuery, Timeout: timeout}
+					request.TracePolicy = &actions.TracePolicy{ObservedSymbol: recon.SawSymbol, TakeQuery: cfg.Budget.ConsumeTaintQuery, Timeout: timeout}
 				}
 				result = registry.Run(ctx, request)
 			}

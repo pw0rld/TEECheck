@@ -51,11 +51,11 @@ type Budget struct {
 // NewDefaultBudget returns the spec-default budget:
 //   - 8 investigation rounds
 //   - 10 reconnaissance rounds on top of them
-//   - 200000 input+output tokens (60000 recon, 140000 investigation)
+//   - 240000 input+output tokens (100000 recon, 140000 investigation)
 //   - 20000 investigation tokens reserved for convergence
 //   - 30s per action timeout
 //   - 10min total wall clock
-//   - 8 uncached taint queries, with 90s per query
+//   - 8 uncached taint queries, with 5min per query
 //
 // The indexed gate needs eleven successful actions (one repository card,
 // three module listings, six function cards and one relation query). The
@@ -64,14 +64,14 @@ func NewDefaultBudget() Budget {
 	return Budget{
 		MaxRounds:                8,
 		MaxReconRounds:           10,
-		MaxTokens:                200000,
-		MaxReconTokens:           60000,
+		MaxTokens:                240000,
+		MaxReconTokens:           100000,
 		MaxInvestigationTokens:   140000,
 		ConvergenceReserveTokens: 20000,
 		PerActionTimeout:         30 * time.Second,
 		WallClock:                10 * time.Minute,
 		MaxTaintQueries:          8,
-		TaintQueryTimeout:        90 * time.Second,
+		TaintQueryTimeout:        5 * time.Minute,
 	}
 }
 

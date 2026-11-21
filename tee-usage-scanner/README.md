@@ -79,7 +79,7 @@ from this completion gate. Budget exhaustion still permits exit but records
 unmet coverage; it does not turn an incomplete zero-lead result into safety.
 
 Default budgets distinguish reconnaissance, investigation, and finalization:
-60,000 reconnaissance tokens, 140,000 investigation tokens, a 200,000 aggregate
+100,000 reconnaissance tokens, 140,000 investigation tokens, a 240,000 aggregate
 ceiling, and a 20,000-token finalization reserve within that ceiling. The
 planner also limits rounds and elapsed time. `--samples N` repeats planner
 passes with an avoid-list, then reviews the merged candidates once.
@@ -95,9 +95,11 @@ The coverage ledger and report record entry windows and module spread per
 sample. Offline validation marks a zero-lead run with missing entry coverage
 or a degraded entry index as incomplete coverage, rather than a clean result.
 
-After opening a lead, `trace_taint` can inspect parameter-to-sink flow using a
+During reconnaissance or investigation, `trace_taint` can inspect parameter-to-sink flow using a
 fixed C/C++ CodeQL template and the run's existing database. It requires an
-observed source or sink definition from that planner pass. `source_path`
+observed source or sink definition from that planner pass, without requiring
+an existing lead. Its facts can supply the evidence for `open_audit_lead`.
+`source_path`
 disambiguates same-named source definitions; omitted `source_param_index`
 means all parameters. Sources include parameter values and one-level pointer
 contents. This does not model every alias or indirection.
@@ -109,10 +111,17 @@ Barrier functions only filter call-result nodes: they do not prove that the
 program checked a return value or enforced a guard.
 
 `--max-taint-queries` defaults to 8 uncached attempts per planner pass; `0`
-removes that separate cap. `--taint-query-timeout` defaults to `90s` and is
+removes that separate cap. `--taint-query-timeout` defaults to `5m` and is
 bounded by the remaining planner wall clock. Matching queries reuse a
 run-local, content-checked artifact without spending another attempt. The
 cache assumes the pinned source tree remains unchanged during a run.
+
+`TEECHECK_CODEQL_ANALYZE_THREADS` overrides the general
+`TEECHECK_CODEQL_THREADS` only for analysis. For example, set the general value
+to `1` for database creation and the analysis value to `2` for query evaluation.
+An explicit nonzero `AnalyzeOptions.Threads` takes precedence; an analysis
+value of `0` falls back to the general setting. More query threads can increase
+memory use, so compare stability and timings on the target environment.
 
 Every CodeQL-emitted path witness is retained in a scope- and hash-bound
 `02_tool_facts/trustir/taint-*.json` ToolFact. The 32 KiB observation returns up

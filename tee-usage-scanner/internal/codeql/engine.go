@@ -220,7 +220,7 @@ func (e *Engine) Analyze(ctx context.Context, opts AnalyzeOptions) ([]Result, er
 	if opts.MaxPaths < 0 {
 		return nil, fmt.Errorf("codeql analyze: max paths must not be negative")
 	}
-	resources, err := resourceArgs(opts.RAM, opts.Threads)
+	resources, err := analyzeResourceArgs(opts.RAM, opts.Threads)
 	if err != nil {
 		return nil, fmt.Errorf("codeql analyze: %w", err)
 	}

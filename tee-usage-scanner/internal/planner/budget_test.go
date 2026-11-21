@@ -12,8 +12,8 @@ func TestBudget_DefaultsMatchSpec(t *testing.T) {
 	if b.MaxRounds != 8 {
 		t.Errorf("MaxRounds = %d, want 8", b.MaxRounds)
 	}
-	if b.MaxTokens != 200000 {
-		t.Errorf("MaxTokens = %d, want 200000", b.MaxTokens)
+	if b.MaxTokens != 240000 {
+		t.Errorf("MaxTokens = %d, want 240000", b.MaxTokens)
 	}
 	if b.PerActionTimeout != 30*time.Second {
 		t.Errorf("PerActionTimeout = %v, want 30s", b.PerActionTimeout)
@@ -21,8 +21,8 @@ func TestBudget_DefaultsMatchSpec(t *testing.T) {
 	if b.WallClock != 10*time.Minute {
 		t.Errorf("WallClock = %v, want 10m", b.WallClock)
 	}
-	if b.MaxTaintQueries != 8 || b.TaintQueryTimeout != 90*time.Second {
-		t.Errorf("taint controls = %d / %v, want 8 / 90s", b.MaxTaintQueries, b.TaintQueryTimeout)
+	if b.MaxTaintQueries != 8 || b.TaintQueryTimeout != 5*time.Minute {
+		t.Errorf("taint controls = %d / %v, want 8 / 5m", b.MaxTaintQueries, b.TaintQueryTimeout)
 	}
 }
 

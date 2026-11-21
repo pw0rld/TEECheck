@@ -30,8 +30,8 @@ func (h *TraceTaintHandler) Run(ctx context.Context, req ActionRequest) ActionRe
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	policy := req.TracePolicy
-	if policy == nil || !policy.Investigation || !policy.HasLead || policy.ObservedSymbol == nil || policy.TakeQuery == nil {
-		return fail(TraceTaintAction, "trace_taint requires an audit lead and the live investigation's observation and budget policy")
+	if policy == nil || policy.ObservedSymbol == nil || policy.TakeQuery == nil {
+		return fail(TraceTaintAction, "trace_taint requires the current planner sample's observation and budget policy")
 	}
 	if h.Service == nil {
 		return fail(TraceTaintAction, "taint service unavailable")
@@ -75,7 +75,7 @@ func (h *TraceTaintHandler) Run(ctx context.Context, req ActionRequest) ActionRe
 		}
 		timeout := policy.Timeout
 		if timeout <= 0 {
-			timeout = 90 * time.Second
+			timeout = 5 * time.Minute
 		}
 		queryCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()

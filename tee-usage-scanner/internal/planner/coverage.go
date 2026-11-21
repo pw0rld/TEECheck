@@ -13,15 +13,16 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
-// passBOnlyActions apply TWE prior knowledge or run lead-directed analysis,
-// and are withheld until the Planner has a lead of its own.
+// passBOnlyActions apply TWE prior knowledge and are withheld until the
+// Planner has a lead of its own. Structural tracing remains available in
+// reconnaissance so it can supply evidence for opening that first lead.
 //
-// TWE detail and taint exploration require an investigation lead. The
-// fact_layer_query action is not restricted: it answers a
+// TWE detail requires an investigation lead. The fact_layer_query and
+// trace_taint actions are not restricted: they answer a
 // structural question the Planner chose to ask, which is what
 // reconnaissance is for. The distinction is what the action primes, not
 // whether it is expensive.
-var passBOnlyActions = []string{"twe_playbook_detail", actions.TraceTaintAction}
+var passBOnlyActions = []string{"twe_playbook_detail"}
 
 // advertisedActions is the registry's actions plus the control actions the
 // planner core dispatches itself. From the model's side there is no

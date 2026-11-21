@@ -55,14 +55,19 @@ func (e *traceIntegrationEngine) Analyze(_ context.Context, options codeql.Analy
 }
 
 type traceIntegrationClient struct {
-	t       *testing.T
-	calls   int
-	factRef string
+	t          *testing.T
+	calls      int
+	factRef    string
+	beforeLead bool
+	readRef    string
 }
 
 func (c *traceIntegrationClient) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
 	c.t.Helper()
 	c.calls++
+	if c.beforeLead {
+		return c.generateBeforeLead(req)
+	}
 	action := func(name string, args any) map[string]any { return map[string]any{"name": name, "args": args} }
 	var selected []any
 	switch c.calls {
@@ -118,7 +123,67 @@ func (c *traceIntegrationClient) Generate(_ context.Context, req llm.GenerateReq
 	return llm.GenerateResponse{Text: string(body), Usage: llm.Usage{PromptTokens: 100, CompletionTokens: 100, TotalTokens: 200}}, nil
 }
 
+// The first request is deliberately blind and must fail. Once the source
+// result is observed in Pass A, taint evidence may be collected before a lead
+// exists and retained after that evidence motivates opening one.
+func (c *traceIntegrationClient) generateBeforeLead(req llm.GenerateRequest) (llm.GenerateResponse, error) {
+	action := func(name string, args any) map[string]any { return map[string]any{"name": name, "args": args} }
+	traceArgs := map[string]any{"source_func": "entry", "source_param_index": 0, "sink_func": "consume"}
+	var selected []any
+	switch c.calls {
+	case 1:
+		if !strings.Contains(req.SystemPrompt, "trace_taint") || strings.Contains(req.SystemPrompt, "Investigator") {
+			c.t.Fatalf("Pass A must advertise trace_taint: %s", req.SystemPrompt)
+		}
+		selected = []any{action("trace_taint", traceArgs)}
+	case 2:
+		if !strings.Contains(req.Messages[0].Content, "must identify a definition observed") {
+			c.t.Fatalf("blind query was not refused: %s", req.Messages[0].Content)
+		}
+		selected = []any{action("get_repository_card", map[string]any{}), action("list_dir", map[string]any{"path": "."}), action("read_file", map[string]any{"path": "entry.c", "start": 1, "end": 2})}
+	case 3:
+		match := regexp.MustCompile(`\[read_file\] OK\s+ref=(\S+)`).FindStringSubmatch(req.Messages[0].Content)
+		if len(match) != 2 {
+			c.t.Fatalf("source reference missing: %s", req.Messages[0].Content)
+		}
+		c.readRef = match[1]
+		selected = []any{action("trace_taint", traceArgs), action("trace_taint", traceArgs)}
+	case 4:
+		prompt := req.Messages[0].Content
+		if strings.Contains(req.SystemPrompt, "Investigator") {
+			c.t.Fatal("taint querying opened an implicit lead")
+		}
+		if !strings.Contains(prompt, "uncached taint query attempts: 1/1") || !regexp.MustCompile(`"cache_hit"\s*:\s*true`).MatchString(prompt) {
+			c.t.Fatalf("Pass A cache query spent extra quota: %s", prompt)
+		}
+		match := regexp.MustCompile(`"fact_ref"\s*:\s*"([^"]+)"`).FindStringSubmatch(prompt)
+		if len(match) != 2 {
+			c.t.Fatalf("Pass A taint fact missing: %s", prompt)
+		}
+		c.factRef = match[1]
+		selected = []any{action("open_audit_lead", map[string]any{"security_question": "Does the observed entry validate its input?", "target_symbol_ids": []string{"cpp:entry.c:2:entry(int)"}, "reason": []string{"Observed input forwarding and a may-flow witness."}, "reason_fact_refs": []string{c.readRef}})}
+	case 5:
+		contract := artifacts.CaseInvariantV2{Subjects: []artifacts.ContractSubject{{Path: "entry.c", Symbol: "entry"}}, Preconditions: []string{"entry receives input requiring validation"}, RequiredProperty: artifacts.ContractProperty{Kind: "input_guard", Statement: "entry validates input before forwarding"}, SecurityEffect: "consumer receives validated input", VerificationQueries: []artifacts.ContractQuery{}}
+		selected = []any{action("update_lead", map[string]any{"lead_id": "lead-s0-001", "add_taint_fact_refs": []string{c.factRef}}), action("formalize_contract", map[string]any{"lead_id": "lead-s0-001", "contract": contract})}
+	case 6:
+		selected = []any{action("done", map[string]any{"summary": "Recorded an obligation from reconnaissance evidence.", "candidates": []any{}})}
+	default:
+		c.t.Fatalf("unexpected Pass A model call %d", c.calls)
+	}
+	body, err := json.Marshal(map[string]any{"actions": selected})
+	return llm.GenerateResponse{Text: string(body), Usage: llm.Usage{PromptTokens: 100, CompletionTokens: 100, TotalTokens: 200}}, err
+}
+
 func TestPlannerRunTraceTaintLeadContractChainUsesSharedDB(t *testing.T) {
+	runTraceIntegration(t, false)
+}
+
+func TestPlannerRunTraceTaintInReconnaissanceBeforeLead(t *testing.T) {
+	runTraceIntegration(t, true)
+}
+
+func runTraceIntegration(t *testing.T, beforeLead bool) {
+	t.Helper()
 	root, run := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "entry.c"), []byte("int consume(int value) { return value; }\nint entry(int value) { return consume(value); }\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -134,15 +199,21 @@ func TestPlannerRunTraceTaintLeadContractChainUsesSharedDB(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	mapCapability := artifacts.CapabilityAvailable
+	if beforeLead {
+		mapCapability = artifacts.CapabilityUnavailable
+	}
 	if err := runfs.WriteJSON(runfs.ProjectMapPath(run), artifacts.ProjectMap{
-		RunID: manifest.RunID, Scope: scope, Repository: artifacts.RepositoryCard{FileCount: 1}, Capabilities: artifacts.IndexCapabilities{Symbols: artifacts.CapabilityAvailable},
+		RunID: manifest.RunID, Scope: scope, Repository: artifacts.RepositoryCard{FileCount: 1}, Capabilities: artifacts.IndexCapabilities{Symbols: mapCapability},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	db, engine := &traceIntegrationDB{}, &traceIntegrationEngine{}
-	client := &traceIntegrationClient{t: t}
+	client := &traceIntegrationClient{t: t, beforeLead: beforeLead}
 	budget := NewDefaultBudget()
-	budget.MaxReconRounds = 0
+	if !beforeLead {
+		budget.MaxReconRounds = 0
+	}
 	budget.MaxTaintQueries = 1
 	result := Run(context.Background(), RunConfig{
 		RunID: manifest.RunID, RepoRoot: root, RunDir: run, Profile: PromptProfile{RepoURL: manifest.RepoURL, Commit: manifest.Commit},
@@ -151,7 +222,11 @@ func TestPlannerRunTraceTaintLeadContractChainUsesSharedDB(t *testing.T) {
 	if result.Err != nil || result.Bundle.PlannerMeta.TerminationReason != "llm_done" {
 		t.Fatalf("run failed: %v %+v", result.Err, result.Bundle)
 	}
-	if client.calls != 5 || engine.analyzeCalls != 1 || engine.createCalls != 0 || db.calls != 1 {
+	wantCalls := 5
+	if beforeLead {
+		wantCalls = 6
+	}
+	if client.calls != wantCalls || engine.analyzeCalls != 1 || engine.createCalls != 0 || db.calls != 1 {
 		t.Fatalf("unexpected LLM/analyze/create/ensure calls: %d/%d/%d/%d", client.calls, engine.analyzeCalls, engine.createCalls, db.calls)
 	}
 	if db.scope.Repository != manifest.RepoURL || db.scope.Commit != manifest.Commit || db.scope.RunDir != run {
@@ -180,6 +255,20 @@ func TestPlannerRunTraceTaintLeadContractChainUsesSharedDB(t *testing.T) {
 	}
 	if err := artifacts.ValidateToolFactContent(fact); err != nil {
 		t.Fatal(err)
+	}
+	if beforeLead {
+		rows := closingRounds(t, run)
+		if len(rows) < 3 || len(rows[0].Observations) != 1 || rows[0].Observations[0].OK {
+			t.Fatalf("blind query did not fail: %+v", rows)
+		}
+		for _, observation := range rows[2].Observations {
+			if observation.Name == actions.TraceTaintAction && (!observation.OK || observation.Phase != PhaseReconnaissance) {
+				t.Fatalf("taint did not run in Pass A: %+v", observation)
+			}
+		}
+		if result.Bundle.PlannerMeta.TaintQueriesUsed != 1 {
+			t.Fatalf("blind or cached query spent budget: %+v", result.Bundle.PlannerMeta)
+		}
 	}
 	leads, err := contractLeads(RunConfig{RunID: manifest.RunID, RunDir: run})
 	if err != nil || len(leads["lead-s0-001"].TaintFactRefs) != 1 {

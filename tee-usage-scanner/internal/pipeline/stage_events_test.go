@@ -78,10 +78,10 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 		t.Fatal("completed pipeline did not record planner limits")
 	}
 	limits := manifest.Configuration.Planner
-	if limits.MaxInvestigationRounds != 8 || limits.MaxReconRounds != 10 || limits.MaxAggregateTokens != 200000 {
+	if limits.MaxInvestigationRounds != 8 || limits.MaxReconRounds != 10 || limits.MaxAggregateTokens != 240000 {
 		t.Fatalf("planner limits = %+v", limits)
 	}
-	if limits.ReconMaxTokens != 60000 || limits.InvestigationMaxTokens != 140000 || limits.ReserveTokensForDone != 20000 {
+	if limits.ReconMaxTokens != 100000 || limits.InvestigationMaxTokens != 140000 || limits.ReserveTokensForDone != 20000 {
 		t.Fatalf("phase/finalization limits were not recorded: %+v", limits)
 	}
 	if !manifest.Configuration.EnableLegacyPrior {

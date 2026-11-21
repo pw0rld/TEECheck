@@ -15,7 +15,7 @@ func TestParseTaintBudgetDefaultsAndOverrides(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.MaxTaintQueries != 8 || cfg.MaxTaintQueriesExplicit || cfg.TaintQueryTimeout != 90*time.Second {
+			if cfg.MaxTaintQueries != 8 || cfg.MaxTaintQueriesExplicit || cfg.TaintQueryTimeout != 5*time.Minute {
 				t.Fatalf("wrong taint defaults: quota=%d explicit=%t timeout=%v", cfg.MaxTaintQueries, cfg.MaxTaintQueriesExplicit, cfg.TaintQueryTimeout)
 			}
 			cfg, err = Parse([]string{command, ".", "--max-taint-queries", "0", "--taint-query-timeout", "2m"})

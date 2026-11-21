@@ -16,7 +16,7 @@ import (
 
 func TestReliability_DefaultTokenPartitions(t *testing.T) {
 	b := NewDefaultBudget()
-	if b.MaxTokens != 200000 || b.MaxReconTokens != 60000 || b.MaxInvestigationTokens != 140000 || b.ConvergenceReserveTokens != 20000 {
+	if b.MaxTokens != 240000 || b.MaxReconTokens != 100000 || b.MaxInvestigationTokens != 140000 || b.ConvergenceReserveTokens != 20000 {
 		t.Fatalf("wrong token partitions: %+v", b)
 	}
 }
@@ -102,7 +102,7 @@ func TestReliability_ReconTokensReleaseGate(t *testing.T) {
 	if err := runfs.WriteJSON(runfs.ProjectMapPath(run), m); err != nil {
 		t.Fatal(err)
 	}
-	c := &reliabilityClient{firstUsage: 60000, firstText: `{"actions":[{"name":"read_file","args":{"path":"a.c"}}]}`}
+	c := &reliabilityClient{firstUsage: NewDefaultBudget().MaxReconTokens, firstText: `{"actions":[{"name":"read_file","args":{"path":"a.c"}}]}`}
 	got := Run(context.Background(), RunConfig{RunID: "reliable", RepoRoot: root, RunDir: run, Client: c, Registry: actions.NewDefaultRegistryWithNav(), Budget: NewDefaultBudget()})
 	if got.Err != nil {
 		t.Fatal(got.Err)
@@ -138,12 +138,12 @@ func TestReliability_ObservationRefsAreNotToolFactFiles(t *testing.T) {
 
 func TestReliability_IsFinalRoundIncludesTokenReserve(t *testing.T) {
 	b := NewDefaultBudget()
-	b.TokensUsed = 179999
+	b.TokensUsed = b.MaxTokens - b.ConvergenceReserveTokens - 1
 	b.InvestigationTokensUsed = 119999
 	if b.IsFinalRound() {
 		t.Fatal("premature final before reserve")
 	}
-	b.TokensUsed = 180000
+	b.TokensUsed = b.MaxTokens - b.ConvergenceReserveTokens
 	if !b.IsFinalRound() {
 		t.Fatal("total reserve must trigger final")
 	}
@@ -175,7 +175,7 @@ func (c *phaseSwitchClient) Generate(_ context.Context, r llm.GenerateRequest) (
 	c.calls++
 	switch c.calls {
 	case 1:
-		return llm.GenerateResponse{Text: `{"actions":[{"name":"read_file","args":{"path":"a.c"}}]}`, Usage: llm.Usage{PromptTokens: 59000}}, nil
+		return llm.GenerateResponse{Text: `{"actions":[{"name":"read_file","args":{"path":"a.c"}}]}`, Usage: llm.Usage{PromptTokens: NewDefaultBudget().MaxReconTokens - 1000}}, nil
 	case 2:
 		return llm.GenerateResponse{Text: `{"actions":[{"name":"twe_playbook_detail","args":{"twe_id":"TWE-STATE-001"}}]}`, Usage: llm.Usage{PromptTokens: 100}}, nil
 	default:

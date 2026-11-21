@@ -37,6 +37,20 @@ func resourceArgs(ram, threads int) ([]string, error) {
 	return args, nil
 }
 
+// Analysis may use more threads than database creation without changing its
+// import settings. Explicit fields still win; a zero analysis override falls
+// back to the shared thread default, just like an unset override.
+func analyzeResourceArgs(ram, threads int) ([]string, error) {
+	if threads == 0 {
+		var err error
+		threads, err = resourceEnvInt("TEECHECK_CODEQL_ANALYZE_THREADS")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return resourceArgs(ram, threads)
+}
+
 func resourceEnvInt(name string) (int, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {

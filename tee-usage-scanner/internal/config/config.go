@@ -519,7 +519,7 @@ func parseRun(args []string) (Config, error) {
 		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:            1,
 		MaxTaintQueries:    8,
-		TaintQueryTimeout:  90 * time.Second,
+		TaintQueryTimeout:  5 * time.Minute,
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")

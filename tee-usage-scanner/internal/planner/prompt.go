@@ -55,7 +55,7 @@ type PriorKnowledge struct {
 // Keep entries terse (one line each). When a new action is added
 // to the registry, add a matching entry here.
 var actionArgSchemas = map[string]string{
-	"trace_taint":           `{"source_func": string, "source_path": string (optional, disambiguates duplicate definitions), "source_param_index": int (default -1 = all parameters), "sink_func": string (optional), "sink_kind": "memory_copy"|"array_index"|"pointer_deref"|"function_call" (optional), "barrier_funcs": [string] (optional, at most 8), "max_paths": int (default 5, at most 10), "max_hops": int (default 12, at most 20)} — inspect fixed-template CodeQL may-flow witnesses after opening a lead. Source or sink definition must be observed in this sample. Supply sink_func or sink_kind; sink_func only combines with memory_copy/function_call. Barriers are syntactic filters, not verified guards. Zero paths is inconclusive. Cache hits do not spend query quota; no raw QL is accepted`,
+	"trace_taint":           `{"source_func": string, "source_path": string (optional, disambiguates duplicate definitions), "source_param_index": int (default -1 = all parameters), "sink_func": string (optional), "sink_kind": "memory_copy"|"array_index"|"pointer_deref"|"function_call" (optional), "barrier_funcs": [string] (optional, at most 8), "max_paths": int (default 5, at most 10), "max_hops": int (default 12, at most 20)} — inspect fixed-template CodeQL may-flow witnesses during reconnaissance or investigation. Source or sink definition must already be observed in this sample; no lead is required. Supply sink_func or sink_kind; sink_func only combines with memory_copy/function_call. Barriers are syntactic filters, not verified guards. Zero paths is inconclusive. Cache hits do not spend query quota; no raw QL is accepted`,
 	"list_entry_surfaces":   `{"page": int (0-based, optional), "module": string (optional), "signal": string (optional)} — page through neutral entry candidates and their source evidence. Signals describe structure, not external reachability or vulnerabilities. Use read_file on distinct entry definitions to inspect actual code`,
 	"get_repository_card":   `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
 	"list_modules":          `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
@@ -136,7 +136,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 
 	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {
-		if phase != PhaseInvestigation && (name == ActionUpdateLead || name == ActionFormalizeContract || name == ActionCloseLead || name == "trace_taint") {
+		if phase != PhaseInvestigation && (name == ActionUpdateLead || name == ActionFormalizeContract || name == ActionCloseLead) {
 			continue
 		}
 		schema, ok := actionArgSchemas[name]
@@ -164,6 +164,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, and what the index can and cannot answer.\n")
 		b.WriteString("  2. list_modules — the parts, with their sizes. Sizes are how you tell the project's own code from vendored dependencies.\n")
 		b.WriteString("     list_entry_surfaces — inspect structural entry candidates across modules, then read_file their source definitions. Cards and repeated reads do not satisfy source coverage.\n")
+		b.WriteString("     Once a source or sink definition has been observed, trace_taint can follow its cross-function flow before a lead exists. Use the resulting facts to decide whether to open_audit_lead; do not keep rereading unrelated files or invent a lead when evidence is insufficient.\n")
 		b.WriteString("  3. list_functions on several modules, and get_function_card on the definitions that look load-bearing. Cover more than one part of the project: what you never open, you cannot have an opinion about.\n")
 		b.WriteString("  4. get_callers to ask how something is reached. find_symbols resolves a name to candidate ids when more than one definition shares it — pick by id, never by name.\n")
 		b.WriteString("  5. read_file and ripgrep when the index cannot answer, or to see the code behind a card.\n")
@@ -204,7 +205,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 // from, how much was dropped, and how to get it back.
 const scrollbackBytes = 1500
 
-func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget, avoidPaths []string) string {
+func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget, avoidPaths []string, reconnaissance ...*ReconState) string {
 	var b strings.Builder
 
 	if len(avoidPaths) > 0 {
@@ -255,6 +256,14 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	}
 	fmt.Fprintf(&b, "uncached taint query attempts: %d/%s; per-query timeout: %s\n", budget.TaintQueriesUsed, taintLimit, budget.TaintQueryTimeout)
 	b.WriteString("\n")
+	if len(reconnaissance) > 0 && reconnaissance[0] != nil && reconnaissance[0].Phase() == PhaseReconnaissance && len(state.AuditLeads) == 0 {
+		recon := reconnaissance[0]
+		halfRounds := budget.MaxReconRounds > 0 && budget.ReconRoundsUsed >= (budget.MaxReconRounds+1)/2
+		halfTokens := budget.MaxReconTokens > 0 && budget.ReconTokensUsed >= (budget.MaxReconTokens+1)/2
+		if recon.Satisfied() || halfRounds || halfTokens {
+			b.WriteString("RECON CHECKPOINT: Basic observations are sufficient or at least half of the reconnaissance allowance is spent. Focus on a concrete question about an observed entry: use trace_taint for cross-function evidence, or open_audit_lead when the observations justify it. Avoid spending the remaining allowance on repeated broad read_file calls. Do not invent a lead; an adequately covered zero-lead conclusion remains valid.\n\n")
+		}
+	}
 
 	if len(state.Candidates) > 0 {
 		b.WriteString("=== CANDIDATES SO FAR ===\n")

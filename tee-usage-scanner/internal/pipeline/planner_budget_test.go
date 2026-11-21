@@ -14,9 +14,9 @@ func TestConfiguredPlannerBudgetTaintControls(t *testing.T) {
 		queries int
 		timeout time.Duration
 	}{
-		{"old programmatic config", config.Config{}, 8, 90 * time.Second},
+		{"old programmatic config", config.Config{}, 8, 5 * time.Minute},
 		{"positive override", config.Config{MaxTaintQueries: 3, TaintQueryTimeout: 2 * time.Minute}, 3, 2 * time.Minute},
-		{"explicit unlimited", config.Config{MaxTaintQueries: 0, MaxTaintQueriesExplicit: true}, 0, 90 * time.Second},
+		{"explicit unlimited", config.Config{MaxTaintQueries: 0, MaxTaintQueriesExplicit: true}, 0, 5 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			budget := configuredPlannerBudget(tc.cfg)

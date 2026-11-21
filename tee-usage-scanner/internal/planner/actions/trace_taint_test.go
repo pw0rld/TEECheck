@@ -86,7 +86,7 @@ func traceActionFixture(t *testing.T) (*TraceTaintHandler, ActionRequest, *trace
 	engine := &traceActionEngine{results: []codeql.Result{{Paths: [][]codeql.PathStep{{{Path: "entry.c", StartLine: 1, Function: "entry", Expression: "value"}, {Path: "entry.c", StartLine: 2, Function: "consume", Expression: "consume(value)"}}}}}}
 	db := &traceActionDB{}
 	taken := 0
-	request := ActionRequest{Name: TraceTaintAction, RunDir: run, RepoRoot: root, Repository: m.RepoURL, Commit: m.Commit, Args: json.RawMessage(`{"source_func":"entry","sink_func":"consume"}`), TracePolicy: &TracePolicy{Investigation: true, HasLead: true, ObservedSymbol: func(id artifacts.SymbolID) bool { return id == facts.Symbols[0].SymbolID }, TakeQuery: func() bool { taken++; return true }}}
+	request := ActionRequest{Name: TraceTaintAction, RunDir: run, RepoRoot: root, Repository: m.RepoURL, Commit: m.Commit, Args: json.RawMessage(`{"source_func":"entry","sink_func":"consume"}`), TracePolicy: &TracePolicy{ObservedSymbol: func(id artifacts.SymbolID) bool { return id == facts.Symbols[0].SymbolID }, TakeQuery: func() bool { taken++; return true }}}
 	return &TraceTaintHandler{Service: taint.NewService(engine, db)}, request, engine, db, &taken
 }
 
@@ -111,17 +111,13 @@ func TestTraceTaintRejectsUntrustedArgumentsBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestTraceTaintRequiresCurrentInvestigationAndObservedDefinition(t *testing.T) {
-	for _, mode := range []string{"no policy", "reconnaissance", "no lead", "unobserved", "no observation callback", "no quota callback"} {
+func TestTraceTaintRequiresLivePolicyAndObservedDefinition(t *testing.T) {
+	for _, mode := range []string{"no policy", "unobserved", "no observation callback", "no quota callback"} {
 		t.Run(mode, func(t *testing.T) {
 			h, req, engine, db, taken := traceActionFixture(t)
 			switch mode {
 			case "no policy":
 				req.TracePolicy = nil
-			case "reconnaissance":
-				req.TracePolicy.Investigation = false
-			case "no lead":
-				req.TracePolicy.HasLead = false
 			case "unobserved":
 				req.TracePolicy.ObservedSymbol = func(artifacts.SymbolID) bool { return false }
 			case "no observation callback":
@@ -135,9 +131,14 @@ func TestTraceTaintRequiresCurrentInvestigationAndObservedDefinition(t *testing.
 			}
 		})
 	}
+	// No phase or Lead gate remains: a live policy and observed definition suffice.
+	h, req, engine, _, taken := traceActionFixture(t)
+	if result := h.Run(context.Background(), req); !result.OK || engine.calls != 1 || *taken != 1 {
+		t.Fatalf("observed source rejected without a Lead: %+v", result)
+	}
 	// The specified sink is sufficient when it is an indexed definition
 	// actually observed by this pass; the source remains uniquely bound.
-	h, req, engine, _, _ := traceActionFixture(t)
+	h, req, engine, _, _ = traceActionFixture(t)
 	req.TracePolicy.ObservedSymbol = func(id artifacts.SymbolID) bool { return id == "cpp:entry.c:2:consume(int)" }
 	if result := h.Run(context.Background(), req); !result.OK || engine.calls != 1 {
 		t.Fatalf("observed sink rejected: %+v", result)
