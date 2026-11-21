@@ -212,6 +212,10 @@ type ToolFact struct {
 	Operation       string `json:"operation"`
 	RepoCommit      string `json:"repo_commit"`
 	ArgumentsSHA256 string `json:"arguments_sha256,omitempty"`
+	// Optional self-check over the canonical fact (excluding this field).
+	// Persisted evidence references separately bind the exact file bytes.
+	ContentSHA256 string        `json:"content_sha256,omitempty"`
+	Scope         *ScannedScope `json:"scope,omitempty"`
 	// FactSource records where the fact table driving this fact came from:
 	// "shipped_fixture" (knownFactTables) or "llm_annotated" (SetFactTable).
 	// Structural provenance for the blind-discovery vs fixture-regression

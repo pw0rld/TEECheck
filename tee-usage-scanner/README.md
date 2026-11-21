@@ -95,6 +95,38 @@ The coverage ledger and report record entry windows and module spread per
 sample. Offline validation marks a zero-lead run with missing entry coverage
 or a degraded entry index as incomplete coverage, rather than a clean result.
 
+After opening a lead, `trace_taint` can inspect parameter-to-sink flow using a
+fixed C/C++ CodeQL template and the run's existing database. It requires an
+observed source or sink definition from that planner pass. `source_path`
+disambiguates same-named source definitions; omitted `source_param_index`
+means all parameters. Sources include parameter values and one-level pointer
+contents. This does not model every alias or indirection.
+
+The action accepts identifier-only function names, supported sink kinds and
+at most eight barrier functions, never QL code. `sink_func` refines a call sink;
+use `array_index` or `pointer_deref` without `sink_func` for expression sinks.
+Barrier functions only filter call-result nodes: they do not prove that the
+program checked a return value or enforced a guard.
+
+`--max-taint-queries` defaults to 8 uncached attempts per planner pass; `0`
+removes that separate cap. `--taint-query-timeout` defaults to `90s` and is
+bounded by the remaining planner wall clock. Matching queries reuse a
+run-local, content-checked artifact without spending another attempt. The
+cache assumes the pinned source tree remains unchanged during a run.
+
+Every CodeQL-emitted path witness is retained in a scope- and hash-bound
+`02_tool_facts/trustir/taint-*.json` ToolFact. The 32 KiB observation returns up
+to five witnesses by default (maximum ten), ordered by the length of the
+returned witnesses; displayed hops default to twelve (maximum twenty).
+Counts are not exhaustive path enumeration or a global shortest-path claim.
+Missing locations and display truncation are explicitly recorded. Zero paths,
+failed analysis and paths removed by barriers never imply safety.
+
+Use `update_lead.add_taint_fact_refs` with the returned `fact_ref` to preserve
+the trace. `formalize_contract` automatically carries the lead's validated
+trace references forward; Expert, Challenger and Verifier receive the same
+bounded immutable evidence and independently check the relevant source.
+
 `tree_sitter_outline` is a compatibility action name: its implementation now
 uses text heuristics. Parsed program relationships come from CodeQL. The index
 explicitly reports unavailable/partial capabilities, including an empty symbol
@@ -171,8 +203,9 @@ The lead controls support an incremental workflow:
   It does not assert safety or remove accepted contracts. Lead revisions are
   appended to `audit_leads.jsonl`; the last revision for each lead is current.
 
-These controls do not enable cross-process resume or introduce a new taint
-analysis query. Those require separate source-freshness and query validation.
+Cross-process resume still requires separate source-freshness validation.
+The taint action supplies review evidence; it does not add an automatic
+`satisfied` or `violated` contract query.
 
 Expert and Challenger independently review each contract. Verifier produces one
 `InvariantAssessment` per contract, separating `satisfied`, `violated`, and

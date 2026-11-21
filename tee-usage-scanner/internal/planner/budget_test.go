@@ -21,6 +21,44 @@ func TestBudget_DefaultsMatchSpec(t *testing.T) {
 	if b.WallClock != 10*time.Minute {
 		t.Errorf("WallClock = %v, want 10m", b.WallClock)
 	}
+	if b.MaxTaintQueries != 8 || b.TaintQueryTimeout != 90*time.Second {
+		t.Errorf("taint controls = %d / %v, want 8 / 90s", b.MaxTaintQueries, b.TaintQueryTimeout)
+	}
+}
+
+func TestBudget_TaintQuotaCountsOnlyDispatchedQueries(t *testing.T) {
+	b := planner.NewDefaultBudget()
+	b.MaxTaintQueries = 2
+	for i := 0; i < 5; i++ {
+		if !b.CanRunTaintQuery() {
+			t.Fatal("checking an available cache path consumed the quota")
+		}
+	}
+	if b.TaintQueriesUsed != 0 {
+		t.Fatal("cache lookup changed usage")
+	}
+	if !b.ConsumeTaintQuery() || !b.ConsumeTaintQuery() {
+		t.Fatal("allowed query was refused")
+	}
+	if b.CanRunTaintQuery() || b.ConsumeTaintQuery() || b.TaintQueriesUsed != 2 {
+		t.Fatalf("quota exceeded or usage changed: %+v", b)
+	}
+	if b.Exhausted() {
+		t.Fatal("a spent taint quota must not stop browsing or finalization")
+	}
+}
+
+func TestBudget_ZeroTaintQuotaIsUnlimited(t *testing.T) {
+	b := planner.NewDefaultBudget()
+	b.MaxTaintQueries = 0
+	for i := 0; i < 100; i++ {
+		if !b.CanRunTaintQuery() || !b.ConsumeTaintQuery() {
+			t.Fatalf("unlimited quota refused query %d", i)
+		}
+	}
+	if b.TaintQueriesUsed != 100 {
+		t.Fatalf("unlimited queries must still be accounted: %d", b.TaintQueriesUsed)
+	}
 }
 
 func TestBudget_ConsumeRound(t *testing.T) {

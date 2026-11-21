@@ -55,6 +55,7 @@ type PriorKnowledge struct {
 // Keep entries terse (one line each). When a new action is added
 // to the registry, add a matching entry here.
 var actionArgSchemas = map[string]string{
+	"trace_taint":           `{"source_func": string, "source_path": string (optional, disambiguates duplicate definitions), "source_param_index": int (default -1 = all parameters), "sink_func": string (optional), "sink_kind": "memory_copy"|"array_index"|"pointer_deref"|"function_call" (optional), "barrier_funcs": [string] (optional, at most 8), "max_paths": int (default 5, at most 10), "max_hops": int (default 12, at most 20)} — inspect fixed-template CodeQL may-flow witnesses after opening a lead. Source or sink definition must be observed in this sample. Supply sink_func or sink_kind; sink_func only combines with memory_copy/function_call. Barriers are syntactic filters, not verified guards. Zero paths is inconclusive. Cache hits do not spend query quota; no raw QL is accepted`,
 	"list_entry_surfaces":   `{"page": int (0-based, optional), "module": string (optional), "signal": string (optional)} — page through neutral entry candidates and their source evidence. Signals describe structure, not external reachability or vulnerabilities. Use read_file on distinct entry definitions to inspect actual code`,
 	"get_repository_card":   `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
 	"list_modules":          `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
@@ -69,7 +70,7 @@ var actionArgSchemas = map[string]string{
 	"reverse_trace":         `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"repomix_summarize":     `{"path": string (repo-relative), "compress": bool (optional)}`,
 	"open_audit_lead":       `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
-	ActionUpdateLead:        `{"lead_id": string, "add_notes": [{"fact_ref": string, "summary": string (at most 240 UTF-8 bytes)}], "add_ruled_out": [string]} — retain important evidence across rounds; refs must be successful observations or executed ToolFacts from this sample. Summaries and ruled-out hypotheses remain your interpretations, not verified verdicts`,
+	ActionUpdateLead:        `{"lead_id": string, "add_notes": [{"fact_ref": string, "summary": string (at most 240 UTF-8 bytes)}], "add_taint_fact_refs": [string (optional, successful cpp.taint.trace fact_ref from this sample)], "add_ruled_out": [string]} — retain important evidence across rounds; refs must be successful observations or executed ToolFacts from this sample. Summaries and ruled-out hypotheses remain your interpretations, not verified verdicts`,
 	ActionFormalizeContract: `{"lead_id": string, "contract": CaseInvariantV2 (see CASE CONTRACTS)} — bind a precise obligation to source you have read now. Correct any returned validation errors in a later round. Accepted contracts persist without being repeated in done`,
 	ActionCloseLead:         `{"lead_id": string, "reason": string, "fact_refs": [string]} — archive a question with at least one current-sample evidence reference. Closing is an investigation decision, not proof of safety and does not discard accepted contracts`,
 	"twe_playbook_detail":   `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
@@ -135,7 +136,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 
 	b.WriteString("AVAILABLE ACTIONS (use the EXACT arg names shown — wrong names are silently ignored):\n")
 	for _, name := range availableActions {
-		if phase != PhaseInvestigation && (name == ActionUpdateLead || name == ActionFormalizeContract || name == ActionCloseLead) {
+		if phase != PhaseInvestigation && (name == ActionUpdateLead || name == ActionFormalizeContract || name == ActionCloseLead || name == "trace_taint") {
 			continue
 		}
 		schema, ok := actionArgSchemas[name]
@@ -155,6 +156,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 		b.WriteString("  1. Expand the lead you opened: read the bodies of its target definitions, and follow the relations the question depends on.\n")
 		b.WriteString("  2. Look for the evidence that would settle it EITHER way. A lead you close because the contract holds is as complete an answer as one you confirm.\n")
 		b.WriteString("  3. Use fact_layer_query when a structural question needs a real answer rather than a reading.\n")
+		b.WriteString("     After observing a source or sink definition, use trace_taint for cross-function may-flow evidence. Read the important path steps in source, then preserve the returned fact_ref with update_lead.add_taint_fact_refs before formalize_contract. A path is not itself a vulnerability; no path or a barrier hit is not a safety proof.\n")
 		b.WriteString("  4. Check the TWE catalog above against what you found: does a known threat need a role or a lifecycle stage your reading did not cover? If so, that is a new question to investigate — not a finding.\n")
 		b.WriteString("  5. Call update_lead to keep short cited evidence notes and ruled-out hypotheses available across rounds. Use formalize_contract as soon as a precise obligation has source anchors; correct validation errors while investigation time remains.\n")
 		b.WriteString("  6. Close answered leads with cited reasons, then call done. Accepted contracts already persist; include any remaining candidates or investigations and explain missing evidence.\n\n")
@@ -247,6 +249,11 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 	b.WriteString("=== BUDGET ===\n")
 	fmt.Fprintf(&b, "rounds: %d/%d\n", budget.RoundsUsed, budget.TotalRounds())
 	fmt.Fprintf(&b, "tokens: %d/%d\n", budget.TokensUsed, budget.MaxTokens)
+	taintLimit := fmt.Sprint(budget.MaxTaintQueries)
+	if budget.MaxTaintQueries == 0 {
+		taintLimit = "unlimited"
+	}
+	fmt.Fprintf(&b, "uncached taint query attempts: %d/%s; per-query timeout: %s\n", budget.TaintQueriesUsed, taintLimit, budget.TaintQueryTimeout)
 	b.WriteString("\n")
 
 	if len(state.Candidates) > 0 {

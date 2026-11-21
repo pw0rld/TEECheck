@@ -29,6 +29,9 @@ type ToolFinding struct {
 // formatter, which is how the message stayed dropped in every one of them at
 // once.
 func FormatToolFact(f ToolFact) string {
+	if f.Operation == TaintTraceOperation {
+		return formatTaintFact(f)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s] %s/%s status=%s", f.FactID, f.Tool, f.Operation, f.Status)
 	if f.Error != "" {

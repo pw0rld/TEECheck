@@ -25,6 +25,26 @@ func Review(ctx context.Context, client llm.Client, role string, binding contrac
 	if err := contracts.Validate(c, binding); err != nil {
 		return unresolved(c.InvariantID, "contract binding failed: "+err.Error()), nil
 	}
+	// Contracts reference the immutable trace artifact; never rely on a model
+	// copying a path summary into its own conclusions. The same source facts
+	// are available independently to Expert, Challenger and Verifier.
+	seenFacts := map[string]bool{}
+	for _, fact := range facts {
+		seenFacts[fact.FactID] = true
+	}
+	for _, ref := range c.EvidenceRefs {
+		if ref.Kind != "tool_fact" {
+			continue
+		}
+		fact, err := contracts.LoadToolFact(ref.Ref, binding)
+		if err != nil {
+			return unresolved(c.InvariantID, "contract tool evidence failed: "+err.Error()), nil
+		}
+		if !seenFacts[fact.FactID] {
+			facts = append(facts, fact)
+			seenFacts[fact.FactID] = true
+		}
+	}
 	if client == nil {
 		return unresolved(c.InvariantID, "review client unavailable"), nil
 	}
@@ -40,12 +60,34 @@ Return one JSON object with fields: invariant_id, position (supported|contradict
 Set preconditions_satisfied only when every necessary precondition has source support. Set attack_chain_complete only when the relevant input, property violation and security effect are connected by evidence; do not infer completeness from missing objections. Identify each unresolved relation explicitly. A witness must cite actual lines within this contract's supplied source anchors. Do not use a conclusion about another contract as evidence.`
 	system += "\nThe query parameters identify the local property target; the other subjects provide consumer/caller context for preconditions and effects. Judge the property separately from missing runtime context. A successful registered local query is not invalidated merely because cross-function preconditions are unproved; record those gaps honestly."
 	user := fmt.Sprintf("Role: %s\nContract:\n%s\nSource anchors:\n%s", role, definition, source)
+	factsOmitted := false
 	if len(peers) > 0 {
 		user += "\nIndependent per-contract review opinions (check against the code):\n" + string(peerJSON)
 	}
 	if len(facts) > 0 {
-		data, _ := json.Marshal(facts)
-		user += "\nRegistered executor results (immutable; do not claim other tools ran):\n" + string(data)
+		var evidence strings.Builder
+		omitted := 0
+		for _, fact := range facts {
+			var rendered string
+			if fact.Operation == artifacts.TaintTraceOperation {
+				rendered = artifacts.FormatToolFact(fact)
+			} else {
+				data, _ := json.Marshal(fact)
+				rendered = string(data)
+			}
+			if evidence.Len()+len(rendered) > 32*1024 {
+				omitted++
+				continue
+			}
+			evidence.WriteString(rendered)
+			evidence.WriteByte('\n')
+		}
+		if omitted > 0 {
+			factsOmitted = true
+			fmt.Fprintf(&evidence, "%d additional immutable fact(s) omitted from this prompt; references remain in the contract. Do not infer their contents.\n", omitted)
+		}
+		user += "\nExecutor observations (immutable; not verdicts; do not claim other tools ran):\n" + evidence.String()
+		user += "\nTaint paths describe possible flow in the configured static model. No paths or configured barrier filters do not establish safety. Confirm the actual guards and data relationships in source."
 	}
 	var review artifacts.ContractReview
 	_, err = llm.GenerateJSON(ctx, client, role, llm.GenerateRequest{
@@ -54,6 +96,11 @@ Set preconditions_satisfied only when every necessary precondition has source su
 	}, &review)
 	if err != nil {
 		return artifacts.ContractReview{}, err
+	}
+	if factsOmitted {
+		review.Position = "unresolved"
+		review.AttackChainComplete = false
+		review.Reason += " Some referenced tool evidence exceeded the review prompt budget."
 	}
 	return ValidateReview(review, c, binding), nil
 }

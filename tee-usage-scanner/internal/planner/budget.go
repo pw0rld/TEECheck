@@ -20,6 +20,11 @@ type Budget struct {
 	ConvergenceReserveTokens int           // reserved inside total/investigation limits for final done
 	PerActionTimeout         time.Duration // single-action runaway guard
 	WallClock                time.Duration // end-to-end hard stop
+	// Taint queries use their own timeout and quota because a global query
+	// can legitimately take longer than a source browsing action. Zero quota
+	// means no separate cap; ordinary run budgets still apply.
+	MaxTaintQueries   int
+	TaintQueryTimeout time.Duration
 
 	// MaxReconRounds is the reconnaissance allowance, granted on top of
 	// MaxRounds rather than out of it.
@@ -40,6 +45,7 @@ type Budget struct {
 	TokensUsed              int
 	ReconTokensUsed         int
 	InvestigationTokensUsed int
+	TaintQueriesUsed        int
 }
 
 // NewDefaultBudget returns the spec-default budget:
@@ -49,6 +55,7 @@ type Budget struct {
 //   - 20000 investigation tokens reserved for convergence
 //   - 30s per action timeout
 //   - 10min total wall clock
+//   - 8 uncached taint queries, with 90s per query
 //
 // The indexed gate needs eleven successful actions (one repository card,
 // three module listings, six function cards and one relation query). The
@@ -63,7 +70,26 @@ func NewDefaultBudget() Budget {
 		ConvergenceReserveTokens: 20000,
 		PerActionTimeout:         30 * time.Second,
 		WallClock:                10 * time.Minute,
+		MaxTaintQueries:          8,
+		TaintQueryTimeout:        90 * time.Second,
 	}
+}
+
+// CanRunTaintQuery checks only the separate query allowance. Exhausting this
+// quota leaves source browsing and finalization available. Cache hits do not
+// call ConsumeTaintQuery and remain usable after the quota has been spent.
+func (b Budget) CanRunTaintQuery() bool {
+	return b.MaxTaintQueries == 0 || (b.MaxTaintQueries > 0 && b.TaintQueriesUsed < b.MaxTaintQueries)
+}
+
+// ConsumeTaintQuery charges one dispatched, uncached query. Failed dispatches
+// still count as work; merely validating arguments or reading a cache does not.
+func (b *Budget) ConsumeTaintQuery() bool {
+	if !b.CanRunTaintQuery() {
+		return false
+	}
+	b.TaintQueriesUsed++
+	return true
 }
 
 // Start records the planner start time. Wall clock checks run

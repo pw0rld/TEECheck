@@ -192,6 +192,33 @@
           "items": {
             "$ref": "#/$defs/finding"
           }
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of the canonical ToolFact with content_sha256 omitted. Persisted evidence references additionally bind exact file bytes."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "repo_url": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hash": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

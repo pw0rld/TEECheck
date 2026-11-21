@@ -623,6 +623,8 @@ loop:
 				result = formalizeContract(cfg, state, observations, executedToolFactRefs, roundRec, act.Args)
 			case act.Name == ActionCloseLead:
 				result = closeLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
+			case act.Name == actions.TraceTaintAction && (recon.Phase() != PhaseInvestigation || len(state.AuditLeads) == 0):
+				result = actions.ActionResult{Name: act.Name, Error: "trace_taint is available only after opening an audit lead"}
 			case act.Name == "done" && !recon.AllowDone(isFinalRound):
 				result = actions.ActionResult{
 					Name: "done",
@@ -631,7 +633,7 @@ loop:
 						"conclude anything about it. Still needed:\n" + recon.DoneUnmet(),
 				}
 			default:
-				result = registry.Run(ctx, actions.ActionRequest{
+				request := actions.ActionRequest{
 					Name:       act.Name,
 					Args:       act.Args,
 					RepoRoot:   cfg.RepoRoot,
@@ -642,7 +644,32 @@ loop:
 					RunID:      cfg.RunID,
 					Agent:      cfg.AgentID,
 					Round:      roundNum,
-				})
+				}
+				if act.Name == actions.TraceTaintAction {
+					hasLead := false
+					for _, lead := range state.AuditLeads {
+						if lead.RunID == cfg.RunID && lead.SampleIndex == cfg.SampleIndex && lead.State != artifacts.LeadStateClosed {
+							hasLead = true
+							break
+						}
+					}
+					timeout := cfg.Budget.TaintQueryTimeout
+					if timeout <= 0 {
+						timeout = 90 * time.Second
+					}
+					if cfg.Budget.WallClock > 0 {
+						remaining := time.Until(cfg.Budget.startedAt.Add(cfg.Budget.WallClock))
+						if remaining <= 0 {
+							result = actions.ActionResult{Name: act.Name, Error: "planner wall-clock budget exhausted"}
+							break
+						}
+						if remaining < timeout {
+							timeout = remaining
+						}
+					}
+					request.TracePolicy = &actions.TracePolicy{Investigation: recon.Phase() == PhaseInvestigation, HasLead: hasLead, ObservedSymbol: recon.SawSymbol, TakeQuery: cfg.Budget.ConsumeTaintQuery, Timeout: timeout}
+				}
+				result = registry.Run(ctx, request)
 			}
 			loopDet.Record(act.Name, argsStr)
 			// Source coverage comes from the actual bounded response below,
@@ -712,7 +739,7 @@ loop:
 			// comment on PlannerState). Recording it here means the sticky
 			// "TWE PLAYBOOK DETAIL" section renders it in full every round
 			// from here on.
-			if result.Name == "fact_layer_query" && result.OK {
+			if (result.Name == "fact_layer_query" || result.Name == actions.TraceTaintAction) && result.OK {
 				if ref := toolFactRefFrom(result.Output); ref != "" {
 					executedToolFactRefs = append(executedToolFactRefs, ref)
 				}
@@ -820,6 +847,7 @@ loop:
 			Focus:  cfg.Profile.Focus,
 		},
 		PlannerMeta: artifacts.PlannerMeta{
+			TaintQueriesUsed:  cfg.Budget.TaintQueriesUsed,
 			RoundsUsed:        cfg.Budget.RoundsUsed,
 			RoundsBudget:      cfg.Budget.TotalRounds(),
 			TokensUsed:        cfg.Budget.TokensUsed,

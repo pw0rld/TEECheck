@@ -12,5 +12,11 @@ func configuredPlannerBudget(cfg config.Config) planner.Budget {
 	if cfg.PlannerWallClock > 0 {
 		b.WallClock = cfg.PlannerWallClock
 	}
+	if cfg.MaxTaintQueriesExplicit || cfg.MaxTaintQueries > 0 {
+		b.MaxTaintQueries = cfg.MaxTaintQueries
+	}
+	if cfg.TaintQueryTimeout > 0 {
+		b.TaintQueryTimeout = cfg.TaintQueryTimeout
+	}
 	return b
 }

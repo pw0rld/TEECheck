@@ -51,6 +51,7 @@ func bindPlannerContracts(raw []artifacts.CaseInvariantV2, cfg RunConfig) ([]art
 			problem(c.InvariantID, fmt.Errorf("contract subjects do not include the referenced lead's target"))
 			continue
 		}
+		c.EvidenceRefs = includeLeadTaintRefs(c.EvidenceRefs, lead)
 		bound, diagnostics, err := contracts.Bind(c, binding)
 		if err != nil {
 			problem(c.InvariantID, err)
@@ -84,6 +85,23 @@ func bindPlannerContracts(raw []artifacts.CaseInvariantV2, cfg RunConfig) ([]art
 		out = append(out, bound)
 	}
 	return contracts.MergeAll(nil, out), problems
+}
+
+func includeLeadTaintRefs(refs []artifacts.ContractEvidenceRef, lead artifacts.AuditLead) []artifacts.ContractEvidenceRef {
+	out := append([]artifacts.ContractEvidenceRef(nil), refs...)
+	for _, path := range lead.TaintFactRefs {
+		found := false
+		for _, ref := range out {
+			if ref.Kind == "tool_fact" && ref.Ref == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, artifacts.ContractEvidenceRef{Kind: "tool_fact", Ref: path})
+		}
+	}
+	return out
 }
 
 func plannerContractPacks(raw []artifacts.CaseInvariantV2, cfg RunConfig) ([]artifacts.CasePack, []artifacts.RoundError) {

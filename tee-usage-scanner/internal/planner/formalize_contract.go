@@ -34,6 +34,7 @@ func formalizeContract(cfg RunConfig, state *PlannerState, observed ObservationS
 		return fail(fmt.Errorf("contract lead_ref differs from lead_id"))
 	}
 	c.LeadRef, c.Origin = payload.LeadID, "planner"
+	c.EvidenceRefs = includeLeadTaintRefs(c.EvidenceRefs, state.AuditLeads[index])
 	c.InvariantID = "case-inv-" + contracts.DefinitionHash(c)
 
 	// ToolFact references must have been returned by a successful tool action

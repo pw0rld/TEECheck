@@ -61,6 +61,11 @@ type Config struct {
 	Samples int
 	// Zero uses the Planner's default wall-clock allowance for each pass.
 	PlannerWallClock time.Duration
+	// Programmatic zero leaves the default quota intact unless explicitly
+	// requested. This distinguishes old Config literals from unlimited mode.
+	MaxTaintQueries         int
+	MaxTaintQueriesExplicit bool
+	TaintQueryTimeout       time.Duration
 }
 
 func Parse(args []string) (Config, error) {
@@ -513,9 +518,13 @@ func parseRun(args []string) (Config, error) {
 		LLMMaxTokens:       envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:            1,
+		MaxTaintQueries:    8,
+		TaintQueryTimeout:  90 * time.Second,
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")
+	fs.IntVar(&cfg.MaxTaintQueries, "max-taint-queries", cfg.MaxTaintQueries, "Maximum uncached taint queries per planner pass; 0 disables the separate query cap")
+	fs.DurationVar(&cfg.TaintQueryTimeout, "taint-query-timeout", cfg.TaintQueryTimeout, "Timeout for each uncached taint query")
 	fs.StringVar(&cfg.RoleConfigFile, "role-config", os.Getenv("TEECHECK_ROLE_CONFIG"), "JSON file with startup-only per-role LLM overrides; credentials use api_key_env references")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
@@ -564,7 +573,16 @@ func parseRun(args []string) (Config, error) {
 		if f.Name == "llm-timeout-seconds" {
 			cfg.LLMTimeoutExplicit = true
 		}
+		if f.Name == "max-taint-queries" {
+			cfg.MaxTaintQueriesExplicit = true
+		}
 	})
+	if cfg.MaxTaintQueries < 0 {
+		return Config{}, fmt.Errorf("--max-taint-queries must be zero or positive")
+	}
+	if cfg.TaintQueryTimeout <= 0 {
+		return Config{}, fmt.Errorf("--taint-query-timeout must be positive")
+	}
 	if cfg.PlannerWallClock < 0 {
 		return Config{}, fmt.Errorf("--planner-wall-clock must be positive")
 	}

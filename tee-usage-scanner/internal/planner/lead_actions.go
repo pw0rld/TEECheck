@@ -50,8 +50,15 @@ func updateLead(cfg RunConfig, state *PlannerState, observed ObservationSet, exe
 		return leadActionFailure(ActionUpdateLead, fmt.Errorf("provide at least one evidence note, taint fact, or ruled-out hypothesis"))
 	}
 	lead := cloneLead(state.AuditLeads[index])
-	if len(payload.AddTaintFactRefs) > 0 {
-		return leadActionFailure(ActionUpdateLead, fmt.Errorf("unsupported taint evidence operation: no trace_taint operation is registered"))
+	for _, ref := range payload.AddTaintFactRefs {
+		fact, path, err := resolveLeadFactRef(cfg, observed, executedToolFactRefs, ref)
+		if err != nil {
+			return leadActionFailure(ActionUpdateLead, err)
+		}
+		if fact == nil || fact.Operation != artifacts.TaintTraceOperation {
+			return leadActionFailure(ActionUpdateLead, fmt.Errorf("taint reference must name a successful cpp.taint.trace ToolFact from this sample"))
+		}
+		lead.TaintFactRefs = unionStrings(lead.TaintFactRefs, []string{path})
 	}
 	for _, note := range payload.AddNotes {
 		note.Summary = strings.TrimSpace(note.Summary)

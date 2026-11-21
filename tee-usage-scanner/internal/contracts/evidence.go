@@ -114,10 +114,24 @@ func readToolFact(ref string, ctx BindingContext) (artifacts.ToolFact, error) {
 	if err = schema.Validate(schema.TrustIRToolV1, body); err != nil {
 		return fact, err
 	}
+	if err = artifacts.ValidateToolFactContent(fact); err != nil {
+		return fact, err
+	}
+	if fact.Scope != nil {
+		if err = sameScope(*fact.Scope, ctx.Scope); err != nil {
+			return fact, err
+		}
+	}
 	if ctx.Scope.Commit != "" && fact.RepoCommit != ctx.Scope.Commit {
 		return fact, fmt.Errorf("ToolFact commit mismatch")
 	}
 	return fact, nil
+}
+
+// LoadToolFact reads only a schema-valid, scope-consistent immutable fact from
+// this run. Reviews can include its evidence without trusting model text.
+func LoadToolFact(ref string, ctx BindingContext) (artifacts.ToolFact, error) {
+	return readToolFact(ref, ctx)
 }
 
 // ValidateAssessment checks the one-contract identity and source witnesses.

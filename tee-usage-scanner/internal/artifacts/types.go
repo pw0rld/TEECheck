@@ -84,6 +84,8 @@ type PlannerLimits struct {
 	ReserveTokensForDone   int   `json:"reserve_tokens_for_done"`
 	PerActionTimeoutMs     int64 `json:"per_action_timeout_ms"`
 	WallClockTimeoutMs     int64 `json:"wall_clock_timeout_ms"`
+	MaxTaintQueries        int   `json:"max_taint_queries"`
+	TaintQueryTimeoutMs    int64 `json:"taint_query_timeout_ms,omitempty"`
 }
 
 // ScannedScope identifies the source tree a run actually read.
@@ -551,6 +553,7 @@ type EvidenceBundle struct {
 }
 
 type PlannerMeta struct {
+	TaintQueriesUsed  int               `json:"taint_queries_used,omitempty"`
 	RoundsUsed        int               `json:"rounds_used"`
 	RoundsBudget      int               `json:"rounds_budget"`
 	TokensUsed        int               `json:"tokens_used"`
@@ -564,6 +567,7 @@ type PlannerMeta struct {
 // PlannerPassMeta preserves each independent sample's accounting when the
 // canonical evidence bundle contains their merged candidate union.
 type PlannerPassMeta struct {
+	TaintQueriesUsed  int    `json:"taint_queries_used,omitempty"`
 	SampleIndex       int    `json:"sample_index"`
 	RoundsUsed        int    `json:"rounds_used"`
 	RoundsBudget      int    `json:"rounds_budget"`

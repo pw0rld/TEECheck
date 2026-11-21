@@ -30,9 +30,11 @@ func MergeEvidenceBundles(bundles []*artifacts.EvidenceBundle) artifacts.Evidenc
 		merged.PlannerMeta.RoundsUsed += meta.RoundsUsed
 		merged.PlannerMeta.RoundsBudget += meta.RoundsBudget
 		merged.PlannerMeta.TokensUsed += meta.TokensUsed
+		merged.PlannerMeta.TaintQueriesUsed += meta.TaintQueriesUsed
 		merged.PlannerMeta.WallClockMs += meta.WallClockMs
 		merged.PlannerMeta.Truncated = merged.PlannerMeta.Truncated || meta.Truncated
 		merged.PlannerMeta.Passes = append(merged.PlannerMeta.Passes, artifacts.PlannerPassMeta{
+			TaintQueriesUsed:  meta.TaintQueriesUsed,
 			SampleIndex:       index,
 			RoundsUsed:        meta.RoundsUsed,
 			RoundsBudget:      meta.RoundsBudget,

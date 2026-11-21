@@ -112,6 +112,12 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	if cfg.PlannerWallClock < 0 {
 		return "", fmt.Errorf("planner wall-clock allowance must not be negative")
 	}
+	if cfg.MaxTaintQueries < 0 {
+		return "", fmt.Errorf("maximum taint queries must not be negative")
+	}
+	if cfg.TaintQueryTimeout < 0 {
+		return "", fmt.Errorf("taint query timeout must not be negative")
+	}
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -148,6 +154,8 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 		ReserveTokensForDone:   plannerBudget.ConvergenceReserveTokens,
 		PerActionTimeoutMs:     plannerBudget.PerActionTimeout.Milliseconds(),
 		WallClockTimeoutMs:     plannerBudget.WallClock.Milliseconds(),
+		MaxTaintQueries:        plannerBudget.MaxTaintQueries,
+		TaintQueryTimeoutMs:    plannerBudget.TaintQueryTimeout.Milliseconds(),
 	}); err != nil {
 		return runDir, fmt.Errorf("record planner limits: %w", err)
 	}

@@ -203,6 +203,9 @@ type AnalyzeOptions struct {
 	ExtraPATH       string
 	RAM             int
 	Threads         int
+	// MaxPaths bounds the path witnesses emitted per alert. Zero preserves
+	// the CLI default; it does not request enumeration of all possible paths.
+	MaxPaths int
 }
 
 // Analyze runs `codeql database analyze` to a temporary SARIF file, parses it,
@@ -213,6 +216,9 @@ func (e *Engine) Analyze(ctx context.Context, opts AnalyzeOptions) ([]Result, er
 	}
 	if opts.DBPath == "" || len(opts.Queries) == 0 {
 		return nil, fmt.Errorf("codeql analyze: db path and at least one query are required")
+	}
+	if opts.MaxPaths < 0 {
+		return nil, fmt.Errorf("codeql analyze: max paths must not be negative")
 	}
 	resources, err := resourceArgs(opts.RAM, opts.Threads)
 	if err != nil {
@@ -234,6 +240,9 @@ func (e *Engine) Analyze(ctx context.Context, opts AnalyzeOptions) ([]Result, er
 	}
 	if len(opts.AdditionalPacks) > 0 {
 		args = append(args, "--additional-packs="+strings.Join(opts.AdditionalPacks, string(os.PathListSeparator)))
+	}
+	if opts.MaxPaths > 0 {
+		args = append(args, fmt.Sprintf("--max-paths=%d", opts.MaxPaths))
 	}
 	args = append(args, resources...)
 	args = append(args, opts.Queries...)

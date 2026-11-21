@@ -9,7 +9,9 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"time"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
@@ -52,6 +54,17 @@ type ActionRequest struct {
 	RunID string `json:"-"`
 	Agent string `json:"-"`
 	Round int    `json:"-"`
+	// TracePolicy is populated by the live planner, never decoded from tool
+	// arguments. It enforces sample-local observation and query budgets.
+	TracePolicy *TracePolicy `json:"-"`
+}
+
+type TracePolicy struct {
+	Investigation  bool
+	HasLead        bool
+	ObservedSymbol func(artifacts.SymbolID) bool
+	TakeQuery      func() bool
+	Timeout        time.Duration
 }
 
 // ActionResult is what a handler returns. It is the single observation
