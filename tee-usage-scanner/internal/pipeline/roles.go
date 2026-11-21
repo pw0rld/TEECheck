@@ -70,16 +70,5 @@ func RunWithClients(cfg config.Config, clients RoleClients) (string, error) {
 }
 
 func withRoleSettings(base, role config.Config) config.Config {
-	base.LLMProvider = role.LLMProvider
-	base.LLMBaseURL = role.LLMBaseURL
-	base.LLMAPIKey = role.LLMAPIKey
-	base.LLMAPIKeyEnv = role.LLMAPIKeyEnv
-	base.LLMModel = role.LLMModel
-	base.LLMTransport = role.LLMTransport
-	base.LLMReasoningEffort = role.LLMReasoningEffort
-	base.LLMTimeoutSec = role.LLMTimeoutSec
-	base.LLMTimeoutExplicit = role.LLMTimeoutExplicit
-	base.LLMMaxTokens = role.LLMMaxTokens
-	base.LLMTemp = role.LLMTemp
-	return base
+	return base.WithLLMSettingsFrom(role)
 }

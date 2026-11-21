@@ -11,6 +11,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codedb"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/trustirfacts"
 )
@@ -68,8 +69,119 @@ func TestAssessContract_ExpertCounterevidenceCannotDisappear(t *testing.T) {
 	e := r
 	e.Position, e.CounterEvidence = "contradicted", []string{"another source path establishes the property"}
 	a := AssessContract(c, b, []artifacts.ContractReview{e}, []artifacts.ContractReview{r}, r, outcome(t, b, c, "violated"))
-	if a.Assessment != "unresolved" || a.ReasonCode != "counterevidence" || len(a.Contradictions) == 0 {
+	if a.Assessment != "violated" || a.ReasonCode != "query_violated" || len(a.Contradictions) == 0 || len(a.MissingEvidence) == 0 || a.AttackChainComplete {
 		t.Fatalf("expert counterevidence lost: %+v", a)
+	}
+}
+
+func TestAssessContract_RegisteredResultSurvivesUnprovenPreconditions(t *testing.T) {
+	for _, status := range []string{"satisfied", "violated"} {
+		t.Run(status, func(t *testing.T) {
+			b, c, r := contractFixture(t)
+			r.PreconditionsSatisfied = false
+			r.Position = "unresolved"
+			r.Reason = "consumer definition is outside the source window"
+			r.Witness = nil
+			a := AssessContract(c, b, nil, nil, r, outcome(t, b, c, status))
+			if a.Assessment != status || a.PreconditionsSatisfied || a.AttackChainComplete || len(a.MissingEvidence) == 0 || len(a.Witness) == 0 {
+				t.Fatalf("registered result lost: %+v", a)
+			}
+			if err := contracts.ValidateAssessment(a, c, b); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAssessContract_SatisfiedKeepsMaterialCounterEvidence(t *testing.T) {
+	b, c, r := contractFixture(t)
+	r.Position = "supported"
+	r.CounterEvidence = []string{"assignment is only in a test build"}
+	a := AssessContract(c, b, nil, nil, r, outcome(t, b, c, "satisfied"))
+	if a.Assessment != "satisfied" || len(a.Contradictions) == 0 || len(a.MissingEvidence) == 0 || a.AttackChainComplete {
+		t.Fatalf("counter evidence dropped: %+v", a)
+	}
+	if err := contracts.ValidateAssessment(a, c, b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAssessContract_SatisfiedKeepsEvidenceForTheFix(t *testing.T) {
+	b, c, r := contractFixture(t)
+	r.Position = "contradicted"
+	r.CounterEvidence = []string{"the required assignment is present"}
+	a := AssessContract(c, b, nil, nil, r, outcome(t, b, c, "satisfied"))
+	if a.Assessment != "satisfied" || len(a.Contradictions) > 0 || !strings.Contains(a.Reason, r.CounterEvidence[0]) {
+		t.Fatalf("repair evidence misclassified: %+v", a)
+	}
+}
+
+type savedContractQuery struct{ result ContractQueryResult }
+
+func (s savedContractQuery) Run(context.Context, artifacts.CaseInvariantV2, artifacts.ContractQuery) (ContractQueryResult, error) {
+	return s.result, nil
+}
+
+func TestReverify_PreservesRegisteredResultWithoutModelContext(t *testing.T) {
+	for _, status := range []string{"satisfied", "violated"} {
+		t.Run(status, func(t *testing.T) {
+			b, c, _ := contractFixture(t)
+			a, err := ReverifyWithClient(context.Background(), config.Config{}, nil, c, b, savedContractQuery{outcome(t, b, c, status)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.Assessment != status || a.PreconditionsSatisfied || a.AttackChainComplete || len(a.MissingEvidence) == 0 {
+				t.Fatalf("context-free query verdict: %+v", a)
+			}
+		})
+	}
+}
+
+func TestAssessContract_NoQuerySourceContradictedIsExplicit(t *testing.T) {
+	b, c, r := contractFixture(t)
+	c.RequiredProperty.Kind = "value_propagation"
+	c.VerificationQueries = nil
+	c.DefinitionHash = contracts.DefinitionHash(c)
+	r.Position = "contradicted"
+	r.PreconditionsSatisfied = false
+	r.Reason = "the current source includes the required validation"
+	a := AssessContract(c, b, nil, nil, r, ContractQueryResult{Assessment: "unresolved", ReasonCode: "no_registered_query", Reason: "not implemented"})
+	if a.Assessment != "unresolved" || a.ReasonCode != "source_contradicted" {
+		t.Fatalf("source correction not distinguished: %+v", a)
+	}
+	failed := AssessContract(c, b, nil, nil, r, ContractQueryResult{Assessment: "unresolved", ReasonCode: "tool_error", Reason: "database failure"})
+	if failed.ReasonCode != "tool_error" {
+		t.Fatalf("source review hid tool error: %+v", failed)
+	}
+}
+
+func TestRegisteredContractQuery_ExplicitTargetSurvivesSubjectReordering(t *testing.T) {
+	b, c, _ := contractFixture(t)
+	if err := os.WriteFile(filepath.Join(b.RepoRoot, "consumer.c"), []byte("int check_version(int v) { return v > 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := contracts.BindSubject(artifacts.ContractSubject{Path: "consumer.c", Symbol: "check_version"}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Subjects = append(c.Subjects, consumer)
+	q := c.VerificationQueries[0]
+	if _, err := fieldWriteQuery(c, q); err == nil {
+		t.Fatal("ambiguous query target accepted")
+	}
+	q.Parameters["subject"] = "state.c::load"
+	c.DefinitionHash = contracts.DefinitionHash(c)
+	before, err := fieldWriteQuery(c, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Subjects[0], c.Subjects[1] = c.Subjects[1], c.Subjects[0]
+	if c.DefinitionHash != contracts.DefinitionHash(c) {
+		t.Fatal("context subject order changed definition")
+	}
+	after, err := fieldWriteQuery(c, q)
+	if err != nil || before != after {
+		t.Fatalf("query target changed after reorder: %v", err)
 	}
 }
 

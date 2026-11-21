@@ -35,7 +35,9 @@ func arbitrateContracts(runDir string, manifest artifacts.Manifest, pack artifac
 			item.Evidence = append(item.Evidence, a.Reason)
 			switch a.Assessment {
 			case "satisfied":
-				item.Status, item.Confidence = "no_issue_observed", "high"
+				if len(a.Contradictions) == 0 {
+					item.Status, item.Confidence = "no_issue_observed", "high"
+				}
 			case "violated":
 				if consistentReviews(c, a, h.ContractReviews, challenge.ContractReviews, binding) {
 					item.Status, item.Confidence = "likely_issue", "medium"
@@ -79,37 +81,15 @@ func uniqueAssessment(all []artifacts.InvariantAssessment, id string) (artifacts
 }
 
 func consistentReviews(c artifacts.CaseInvariantV2, a artifacts.InvariantAssessment, experts, challengers []artifacts.ContractReview, binding contracts.BindingContext) bool {
-	if !a.SourceCorroborated || !a.PreconditionsSatisfied || len(a.Witness) == 0 || len(a.Contradictions) > 0 || len(a.MissingEvidence) > 0 {
-		return false
-	}
-	for _, all := range [][]artifacts.ContractReview{experts, challengers} {
-		r, ok := contractreview.Find(all, c.InvariantID)
-		if !ok {
-			return false
-		}
-		r = contractreview.ValidateReview(r, c, binding)
-		if r.Position != "supported" || !r.PreconditionsSatisfied || len(r.Witness) == 0 || len(r.CounterEvidence) > 0 {
-			return false
-		}
-	}
-	return true
+	return contractreview.ConsistentReviews(c, a, experts, challengers, binding)
 }
 
 func contractChainComplete(c artifacts.CaseInvariantV2, a artifacts.InvariantAssessment, experts, challengers []artifacts.ContractReview, binding contracts.BindingContext) bool {
-	if a.Assessment != "violated" || !a.AttackChainComplete || !consistentReviews(c, a, experts, challengers, binding) {
-		return false
-	}
-	for _, all := range [][]artifacts.ContractReview{experts, challengers} {
-		r, _ := contractreview.Find(all, c.InvariantID)
-		if !r.AttackChainComplete {
-			return false
-		}
-	}
-	return true
+	return contractreview.ChainComplete(c, a, experts, challengers, binding)
 }
 
 func sourceOnlyLikely(c artifacts.CaseInvariantV2, a artifacts.InvariantAssessment, experts, challengers []artifacts.ContractReview, binding contracts.BindingContext) bool {
-	return c.RequiredProperty.Kind != "direct_struct_field_assignment" && a.Assessment == "unresolved" && a.ReasonCode == "no_registered_query" && a.VerificationBasis == "source_corroborated_no_query" && consistentReviews(c, a, experts, challengers, binding)
+	return contractreview.SourceOnlyLikely(c, a, experts, challengers, binding)
 }
 
 func appendUniqueString(all []string, s string) []string {

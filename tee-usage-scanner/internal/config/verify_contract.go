@@ -8,7 +8,7 @@ import (
 
 func parseVerifyContract(args []string) (Config, error) {
 	fs := flag.NewFlagSet("verify-contract", flag.ContinueOnError)
-	cfg := Config{Command: "verify-contract", OutputDir: "contract-rechecks", Focus: "tee", Mode: "llm", LLMProvider: firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"), LLMBaseURL: firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"), LLMAPIKey: firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"), LLMModel: firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"), LLMTransport: os.Getenv("TEECHECK_LLM_TRANSPORT"), LLMTimeoutSec: 60, LLMMaxTokens: DefaultLLMMaxTokens, LLMTemp: 0.2}
+	cfg := Config{Command: "verify-contract", OutputDir: "contract-rechecks", Focus: "tee", Mode: "llm", LLMProvider: firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"), LLMBaseURL: firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"), LLMAPIKey: firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"), LLMModel: firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"), LLMTransport: os.Getenv("TEECHECK_LLM_TRANSPORT"), LLMTimeoutSec: 60, LLMMaxTokens: envInt(0, "TEECHECK_LLM_MAX_TOKENS"), LLMTemp: 0.2}
 	fs.StringVar(&cfg.ContractPath, "contract", "", "Standalone CaseInvariantV2 JSON file")
 	fs.StringVar(&cfg.LocalPath, "repo-root", "", "Local fixed-revision source directory")
 	fs.StringVar(&cfg.RepoURL, "repo-url", "", "Repository identity of the fixed source")
@@ -37,5 +37,5 @@ func parseVerifyContract(args []string) (Config, error) {
 			cfg.LLMTimeoutExplicit = true
 		}
 	})
-	return cfg.WithLLMProviderDefaults(), nil
+	return recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults(), nil
 }

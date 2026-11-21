@@ -10,7 +10,7 @@
  *              Index.qll for what happens when file and line are drawn from
  *              the Function instead.
  * @kind table
- * @id teecheck/index/symbols
+ * @id cpp/teecheck-index-symbols
  *
  * Columns: name, file, start_line, signature, module
  */

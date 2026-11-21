@@ -18,9 +18,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -266,15 +268,27 @@ func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return "", fmt.Errorf("create db parent dir: %w", err)
 	}
-	if err := m.eng.CreateDatabase(ctx, codeql.CreateDBOptions{
+	opts := codeql.CreateDBOptions{
 		Language:   "cpp",
 		SourceRoot: tree,
 		DBPath:     dbPath,
 		Overwrite:  true, // a stale partial dir (no marker) must not block a rebuild
 		BuildMode:  "none",
 		ExtraPATH:  m.extraPATH,
-	}); err != nil {
-		return "", fmt.Errorf("create database: %w", err)
+	}
+	if err := m.eng.CreateDatabase(ctx, opts); err != nil {
+		if ctx.Err() != nil || !isTransientBuildFailure(err) {
+			return "", fmt.Errorf("create database: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "CodeQL database creation hit an internal JVM/TRAP failure; clearing partial database and retrying once with --threads=1: %v\n", err)
+		if cleanupErr := os.RemoveAll(dbPath); cleanupErr != nil {
+			return "", fmt.Errorf("clear partial database after transient failure (%v): %w", err, cleanupErr)
+		}
+		opts.Threads = 1
+		opts.Overwrite = true
+		if retryErr := m.eng.CreateDatabase(ctx, opts); retryErr != nil {
+			return "", fmt.Errorf("create database recovery failed (initial error: %v): %w", err, retryErr)
+		}
 	}
 
 	marker := filepath.Join(dbPath, dbBuiltMarker)
@@ -282,4 +296,25 @@ func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
 		return "", fmt.Errorf("write db-built marker: %w", err)
 	}
 	return dbPath, nil
+}
+
+var internalExit100 = regexp.MustCompile(`\bexit status 100\b`)
+
+// CodeQL uses exit 100 for internal errors. The named JVM/TRAP mmap markers
+// also occur in wrappers that omit the process exit code. Retrying is bounded
+// to once; ordinary build, configuration and extractor errors are unchanged.
+func isTransientBuildFailure(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if internalExit100.MatchString(message) {
+		return true
+	}
+	for _, marker := range []string{"internalerror", "mmappage", "diskwritablestringstore", "sigbus"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }

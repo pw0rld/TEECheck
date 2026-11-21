@@ -28,7 +28,7 @@
  *              called. A consumer that sees only the edge list cannot know
  *              that; these numbers are the scope it needs.
  * @kind table
- * @id teecheck/index/call-site-counts
+ * @id cpp/teecheck-index-call-site-counts
  *
  * Columns: what, n
  */

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contractreview"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
@@ -13,6 +14,8 @@ type validatedCase struct {
 	pack        artifacts.CasePack
 	contracts   map[string]artifacts.CaseInvariantV2
 	assessments map[string]artifacts.InvariantAssessment
+	hypothesis  artifacts.Hypothesis
+	challenge   artifacts.Challenge
 }
 
 // Contract references are resolved inside their own case. The same logical
@@ -34,6 +37,8 @@ func validateContracts(runDir string, m artifacts.Manifest, add func(string, str
 		memoPath := filepath.Join(runfs.VerifierDir(runDir), fmt.Sprintf("verify-%03d.json", i+1))
 		var memo artifacts.VerificationMemo
 		_ = runfs.ReadJSON(memoPath, &memo)
+		_ = runfs.ReadJSON(filepath.Join(runfs.ExpertDir(runDir), fmt.Sprintf("hypothesis-%03d.json", i+1)), &state.hypothesis)
+		_ = runfs.ReadJSON(filepath.Join(runfs.ChallengerDir(runDir), fmt.Sprintf("challenge-%03d.json", i+1)), &state.challenge)
 		if len(pack.CaseInvariants) > 0 {
 			if len(memo.InvariantUpdates) > 0 {
 				add("legacy_invariant_updates", memoPath, "typed contracts cannot consume case-level legacy invariant updates")
@@ -117,16 +122,16 @@ func validateContracts(runDir string, m artifacts.Manifest, add func(string, str
 		}
 		switch f.Status {
 		case "confirmed_candidate":
-			if a.Assessment != "violated" || !a.AttackChainComplete {
+			if !contractreview.ChainComplete(c, a, state.hypothesis.ContractReviews, state.challenge.ContractReviews, ctx) {
 				add("finding_contract", path, "confirmed finding %q lacks a violated assessment and complete attack chain", f.FindingID)
 			}
 		case "likely_issue":
-			allowed := a.Assessment == "violated" || (a.Assessment == "unresolved" && a.ReasonCode == "no_registered_query" && a.VerificationBasis == "source_corroborated_no_query" && a.SourceCorroborated && a.PreconditionsSatisfied && len(a.Witness) > 0 && len(a.Contradictions) == 0 && len(a.MissingEvidence) == 0)
+			allowed := (a.Assessment == "violated" && contractreview.ConsistentReviews(c, a, state.hypothesis.ContractReviews, state.challenge.ContractReviews, ctx)) || contractreview.SourceOnlyLikely(c, a, state.hypothesis.ContractReviews, state.challenge.ContractReviews, ctx)
 			if !allowed {
 				add("finding_contract", path, "likely finding %q lacks a supported contract assessment", f.FindingID)
 			}
 		case "no_issue_observed":
-			if a.Assessment != "satisfied" {
+			if a.Assessment != "satisfied" || len(a.Contradictions) > 0 {
 				add("finding_contract", path, "negative finding %q lacks a satisfied assessment", f.FindingID)
 			}
 		}

@@ -181,11 +181,14 @@ func ValidateAssessment(a artifacts.InvariantAssessment, c artifacts.CaseInvaria
 	if c.Grounding != "source_bound" {
 		return fmt.Errorf("positive assessment requires bound contract")
 	}
-	if !a.SourceCorroborated || !a.PreconditionsSatisfied || len(a.Witness) == 0 || len(a.EvidenceRefs) == 0 {
-		return fmt.Errorf("positive assessment requires source witness, evidence and proven preconditions")
+	if len(a.Witness) == 0 || len(a.EvidenceRefs) == 0 {
+		return fmt.Errorf("registered assessment requires bound source witnesses and evidence")
 	}
-	if a.Assessment == "violated" && len(a.Contradictions) > 0 {
-		return fmt.Errorf("violation retains counterevidence")
+	if (!a.SourceCorroborated || !a.PreconditionsSatisfied || len(a.Contradictions) > 0) && len(a.MissingEvidence) == 0 {
+		return fmt.Errorf("unresolved source review or preconditions must be recorded as missing evidence")
+	}
+	if a.AttackChainComplete && (!a.SourceCorroborated || !a.PreconditionsSatisfied || len(a.Contradictions) > 0 || len(a.MissingEvidence) > 0) {
+		return fmt.Errorf("complete attack chain cannot retain unresolved prerequisites")
 	}
 	if a.VerificationBasis != "registered_query" {
 		return fmt.Errorf("positive assessment requires registered-query proof")

@@ -62,22 +62,30 @@ func registeredQuery(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) boo
 var contractIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func fieldWriteQuery(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (string, error) {
-	if !registeredQuery(c, q) || len(c.Subjects) != 1 || len(q.Parameters) != 2 {
+	if !registeredQuery(c, q) || len(c.Subjects) == 0 || len(q.Parameters) < 2 || len(q.Parameters) > 3 {
 		return "", fmt.Errorf("query does not describe one registered struct-field property")
 	}
+	for name := range q.Parameters {
+		if name != "type" && name != "field" && name != "subject" {
+			return "", fmt.Errorf("unknown query parameter %q", name)
+		}
+	}
+	s, err := fieldWriteSubject(c, q)
+	if err != nil {
+		return "", err
+	}
 	typeName, field := q.Parameters["type"], q.Parameters["field"]
-	if !contractIdentifier.MatchString(typeName) || !contractIdentifier.MatchString(field) || !contractIdentifier.MatchString(c.Subjects[0].Symbol) {
+	if !contractIdentifier.MatchString(typeName) || !contractIdentifier.MatchString(field) || !contractIdentifier.MatchString(s.Symbol) {
 		return "", fmt.Errorf("invalid query identifier")
 	}
 	if c.RequiredProperty.Destination != typeName+"."+field || len(c.RequiredProperty.TargetFields) != 1 || c.RequiredProperty.TargetFields[0] != field || c.RequiredProperty.Source != "" || c.RequiredProperty.Authority != "" {
 		return "", fmt.Errorf("query parameters differ from the declared property")
 	}
-	s := c.Subjects[0]
 	return fmt.Sprintf(`/**
  * @name Contract struct field assignment
  * @description Reports a positive or negative answer for one exact function and declared struct field.
  * @kind problem
- * @id teecheck/contract/struct-field-write
+ * @id cpp/teecheck-contract-direct-struct-field-assignment
  * @problem.severity recommendation
  */
 import cpp
@@ -102,6 +110,25 @@ select d, "teecheck-contract-field:" + answer
 `, strconv.Quote(field), strconv.Quote(typeName), strconv.Quote(s.Symbol), strconv.Quote(filepath.ToSlash(s.Path)), s.StartLine, s.EndLine, strconv.Quote(field), strconv.Quote(typeName)), nil
 }
 
+// Explicitly bind the query target when context contains more than one
+// function. Subject ordering is not part of a logical contract's identity.
+func fieldWriteSubject(c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (artifacts.ContractSubject, error) {
+	target := q.Parameters["subject"]
+	if target == "" && len(c.Subjects) == 1 {
+		return c.Subjects[0], nil
+	}
+	var found []artifacts.ContractSubject
+	for _, s := range c.Subjects {
+		if target == s.Path+"::"+s.Symbol {
+			found = append(found, s)
+		}
+	}
+	if len(found) != 1 {
+		return artifacts.ContractSubject{}, fmt.Errorf("query requires a unique subject parameter for its target definition")
+	}
+	return found[0], nil
+}
+
 func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInvariantV2, q artifacts.ContractQuery) (ContractQueryResult, error) {
 	result := ContractQueryResult{Assessment: "unresolved", ReasonCode: "no_registered_query", Reason: "No registered executor for this property and operation."}
 	if !registeredQuery(c, q) {
@@ -120,6 +147,7 @@ func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInva
 		result.ReasonCode, result.Reason = "query_property_mismatch", err.Error()
 		return result, nil
 	}
+	subject, _ := fieldWriteSubject(c, q)
 	if r.engine == nil || !r.engine.Available() || r.db == nil {
 		result.ReasonCode, result.Reason = "tool_unavailable", "Registered CodeQL executor is unavailable."
 		return result, nil
@@ -136,9 +164,9 @@ func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInva
 	// tool result to local source witnesses.
 	if sourceDB, ok := r.db.(interface{ SourceDir(codedb.Scope) string }); ok {
 		dbRoot := sourceDB.SourceDir(codedb.Scope{RunDir: r.runDir, Repository: c.Scope.RepoURL, Commit: c.Scope.Commit})
-		for _, subject := range c.Subjects {
-			local, localErr := os.ReadFile(filepath.Join(c.Scope.Root, subject.Path))
-			extracted, extractedErr := os.ReadFile(filepath.Join(dbRoot, subject.Path))
+		for _, anchor := range c.Subjects {
+			local, localErr := os.ReadFile(filepath.Join(c.Scope.Root, anchor.Path))
+			extracted, extractedErr := os.ReadFile(filepath.Join(dbRoot, anchor.Path))
 			if localErr != nil || extractedErr != nil || sha256.Sum256(local) != sha256.Sum256(extracted) {
 				result.ReasonCode, result.Reason = "source_scope_mismatch", "The database source does not match the bound subject file."
 				return result, nil
@@ -176,10 +204,10 @@ func (r *registeredContractRunner) Run(ctx context.Context, c artifacts.CaseInva
 		result.ReasonCode, result.Reason = "tool_error", runErr.Error()
 	} else {
 		for _, row := range rows {
-			fact.Locations = append(fact.Locations, artifacts.ToolLocation{Path: row.Path, StartLine: row.StartLine, EndLine: row.EndLine, Symbol: c.Subjects[0].Symbol})
+			fact.Locations = append(fact.Locations, artifacts.ToolLocation{Path: row.Path, StartLine: row.StartLine, EndLine: row.EndLine, Symbol: subject.Symbol})
 			fact.Findings = append(fact.Findings, artifacts.ToolFinding{Message: row.Message, Location: fact.Locations[len(fact.Locations)-1]})
 		}
-		if len(rows) == 1 && filepath.ToSlash(rows[0].Path) == filepath.ToSlash(c.Subjects[0].Path) && rows[0].StartLine >= c.Subjects[0].StartLine && rows[0].StartLine <= c.Subjects[0].EndLine {
+		if len(rows) == 1 && filepath.ToSlash(rows[0].Path) == filepath.ToSlash(subject.Path) && rows[0].StartLine >= subject.StartLine && rows[0].StartLine <= subject.EndLine {
 			switch strings.TrimSpace(rows[0].Message) {
 			case "teecheck-contract-field:written":
 				result.Assessment, result.ReasonCode, result.Reason = "satisfied", "query_satisfied", "The requested definition contains a direct AST assignment to the declared struct field."

@@ -21,31 +21,33 @@ type Config struct {
 	// Hint is the caller's free-text concern, passed through to the
 	// planner's system prompt. It biases what gets investigated; it never
 	// narrows what gets modelled or scanned.
-	Hint               string
-	OutputDir          string
-	KnowledgeRoot      string
-	GraphJSONPath      string
-	MaxHotspots        int
-	MaxCases           int
-	MaxFindings        int
-	AgentID            string
-	LLMProvider        string
-	LLMBaseURL         string
-	LLMAPIKey          string
-	LLMModel           string
-	LLMTransport       string
-	LLMReasoningEffort string
-	LLMTimeoutSec      int
-	LLMTimeoutExplicit bool
-	LLMMaxTokens       int
-	LLMTemp            float64
-	RoleConfigFile     string
-	RoleOverrides      map[string]LLMRoleOverride
-	LLMAPIKeyEnv       string
-	StaticTools        string
-	MaxDialogRounds    int
-	Target             string
-	Mode               string
+	Hint                  string
+	OutputDir             string
+	KnowledgeRoot         string
+	GraphJSONPath         string
+	MaxHotspots           int
+	MaxCases              int
+	MaxFindings           int
+	AgentID               string
+	LLMProvider           string
+	LLMBaseURL            string
+	LLMAPIKey             string
+	LLMModel              string
+	LLMTransport          string
+	LLMReasoningEffort    string
+	LLMTimeoutSec         int
+	LLMTimeoutExplicit    bool
+	LLMMaxTokens          int
+	LLMMaxTokensExplicit  bool
+	llmMaxTokensDefaulted bool
+	LLMTemp               float64
+	RoleConfigFile        string
+	RoleOverrides         map[string]LLMRoleOverride
+	LLMAPIKeyEnv          string
+	StaticTools           string
+	MaxDialogRounds       int
+	Target                string
+	Mode                  string
 	// EnableLegacyPrior opts into the old architecture/invariant model stages.
 	// The default pipeline grounds investigation in the project map and code.
 	EnableLegacyPrior bool
@@ -260,13 +262,13 @@ func parseExpert(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable expert agent identifier")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
-	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the expert agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the expert agent")
@@ -275,7 +277,7 @@ func parseExpert(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("expert requires --run-dir")
 	}
@@ -292,13 +294,13 @@ func parseChallenge(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable challenger agent identifier")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
-	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the challenger agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the challenger agent")
@@ -307,7 +309,7 @@ func parseChallenge(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("challenge requires --run-dir")
 	}
@@ -324,14 +326,14 @@ func parseVerifier(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		StaticTools:   "auto",
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable verifier agent identifier")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
-	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the verifier agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the verifier agent")
@@ -341,7 +343,7 @@ func parseVerifier(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("verifier requires --run-dir")
 	}
@@ -359,14 +361,14 @@ func parseArbiter(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory created by init-run")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable arbiter agent identifier")
 	fs.IntVar(&cfg.MaxFindings, "max-findings", cfg.MaxFindings, "Maximum number of findings to emit; 0 means all")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
-	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
@@ -375,7 +377,7 @@ func parseArbiter(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("arbiter requires --run-dir")
 	}
@@ -396,15 +398,15 @@ func parseCurator(args []string) (Config, error) {
 		LLMTransport:       firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
 		LLMReasoningEffort: firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
 		LLMTimeoutSec:      envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:       envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:       envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing review outputs")
 	fs.StringVar(&cfg.KnowledgeRoot, "knowledge-root", cfg.KnowledgeRoot, "Knowledge root directory")
 	fs.StringVar(&cfg.AgentID, "agent-id", cfg.AgentID, "Stable curator agent identifier")
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum inter-agent dialog rounds per case, per asking agent")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
-	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm preset fills this automatically")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
+	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds")
@@ -412,7 +414,7 @@ func parseCurator(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("curator requires --run-dir")
 	}
@@ -429,7 +431,7 @@ func parseReport(args []string) (Config, error) {
 		LLMAPIKey:     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
 		LLMModel:      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
 		LLMTimeoutSec: envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:  envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:       envFloat(0.1, "TEECHECK_LLM_TEMPERATURE"),
 	}
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Run directory containing arbiter outputs")
@@ -443,7 +445,7 @@ func parseReport(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("report requires --run-dir")
 	}
@@ -503,7 +505,7 @@ func parseRun(args []string) (Config, error) {
 		LLMTransport:       firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
 		LLMReasoningEffort: firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
 		LLMTimeoutSec:      envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:       envInt(DefaultLLMMaxTokens, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMMaxTokens:       envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
 		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
 		Samples:            1,
 	}
@@ -525,7 +527,7 @@ func parseRun(args []string) (Config, error) {
 	fs.IntVar(&cfg.MaxHotspots, "max-hotspots", cfg.MaxHotspots, "Maximum hotspots")
 	fs.IntVar(&cfg.MaxDialogRounds, "max-dialog-rounds", cfg.MaxDialogRounds, "Maximum dialog rounds")
 	fs.StringVar(&cfg.StaticTools, "static-tools", cfg.StaticTools, "Static tools")
-	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai or glm")
+	fs.StringVar(&cfg.LLMProvider, "llm-provider", cfg.LLMProvider, "LLM provider preset, such as openai, glm, or deepseek")
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
@@ -560,7 +562,7 @@ func parseRun(args []string) (Config, error) {
 	if os.Getenv("TEECHECK_LLM_TIMEOUT_SECONDS") != "" {
 		cfg.LLMTimeoutExplicit = true
 	}
-	cfg = cfg.WithLLMProviderDefaults()
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	// Also check remaining args after flag parse
 	if target == "" {
 		remaining := fs.Args()
@@ -598,7 +600,7 @@ func parsePlan(args []string) (Config, error) {
 }
 
 func usageError(msg string) error {
-	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--focus NAME] [--max-cases N] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck validate-run --run-dir DIR\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
+	return fmt.Errorf("%s\n\nusage:\n  teecheck run <url-or-path> [--focus NAME] [--max-cases N] [--llm-provider openai|glm|deepseek] [--llm-base-url URL] [--llm-model NAME]\n  teecheck knowledge-init [--knowledge-root DIR]\n  teecheck init-run --repo-url URL --local-path PATH --commit SHA [--focus NAME] [--run-id ID] [--output-dir DIR] [--knowledge-root DIR]\n  teecheck preprocess --run-dir DIR\n  teecheck mapper --run-dir DIR --graph-json FILE [--max-hotspots N]\n  teecheck map --run-dir DIR --graph-json FILE\n  teecheck hotspots --run-dir DIR [--max-hotspots N]\n  teecheck cases --run-dir DIR [--knowledge-root DIR] [--max-cases N]\n  teecheck expert --run-dir DIR [--agent-id ID] [--llm-provider openai|glm|deepseek] [--llm-base-url URL] [--llm-model NAME]\n  teecheck challenge --run-dir DIR [--agent-id ID] [--llm-provider openai|glm|deepseek] [--llm-base-url URL] [--llm-model NAME]\n  teecheck verifier --run-dir DIR [--agent-id ID] [--llm-provider openai|glm|deepseek] [--llm-base-url URL] [--llm-model NAME]\n  teecheck arbiter --run-dir DIR [--agent-id ID] [--max-findings N]\n  teecheck validate-run --run-dir DIR\n  teecheck curator --run-dir DIR [--knowledge-root DIR] [--max-dialog-rounds N]\n  teecheck review --run-dir DIR [--knowledge-root DIR]\n  teecheck feedback --run-dir DIR [--knowledge-root DIR]", msg)
 }
 
 func validateProviderConfig(cfg Config, context string) error {
@@ -610,12 +612,16 @@ func validateProviderConfig(cfg Config, context string) error {
 		return fmt.Errorf("%s transport responses requires provider openai", context)
 	}
 	if cfg.LLMReasoningEffort != "" {
-		if cfg.LLMTransport != LLMTransportResponses {
+		deepSeekChat := cfg.LLMProvider == LLMProviderDeepSeek && cfg.LLMTransport == LLMTransportChatCompletions && DeepSeekSupportsThinkingControl(cfg.LLMModel)
+		if cfg.LLMTransport != LLMTransportResponses && !deepSeekChat {
 			return fmt.Errorf("%s reasoning effort requires the responses transport", context)
 		}
 		supported := map[string]bool{
 			"none": true, "minimal": true, "low": true,
 			"medium": true, "high": true, "xhigh": true,
+		}
+		if deepSeekChat {
+			supported["max"] = true
 		}
 		if !supported[cfg.LLMReasoningEffort] {
 			return fmt.Errorf("%s has unsupported reasoning effort %q", context, cfg.LLMReasoningEffort)

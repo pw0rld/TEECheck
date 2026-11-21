@@ -2,11 +2,14 @@ package codedb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/codeql"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/executor"
 )
 
@@ -26,6 +29,112 @@ func TestDbDirName_DeterministicAndDiscriminating(t *testing.T) {
 	// same db dir, so a build under one spelling is reused under another.
 	if dirName("https://github.com/OP-TEE/optee_os.git", "abc123") != a {
 		t.Error("equivalent repository spellings must name the same db dir")
+	}
+}
+
+type retryBuildEngine struct {
+	failures       []error
+	calls          []codeql.CreateDBOptions
+	partialCleared bool
+	sourceKept     bool
+	onFirst        func()
+}
+
+func (e *retryBuildEngine) Available() bool { return true }
+func (e *retryBuildEngine) CreateDatabase(_ context.Context, opts codeql.CreateDBOptions) error {
+	index := len(e.calls)
+	e.calls = append(e.calls, opts)
+	if index > 0 {
+		_, err := os.Stat(filepath.Join(opts.DBPath, "partial-trap"))
+		e.partialCleared = os.IsNotExist(err)
+		_, err = os.Stat(filepath.Join(opts.SourceRoot, srcClonedMarker))
+		e.sourceKept = err == nil
+	}
+	if err := os.MkdirAll(opts.DBPath, 0755); err != nil {
+		return err
+	}
+	if index < len(e.failures) && e.failures[index] != nil {
+		if err := os.WriteFile(filepath.Join(opts.DBPath, "partial-trap"), []byte("incomplete"), 0644); err != nil {
+			return err
+		}
+		if index == 0 && e.onFirst != nil {
+			e.onFirst()
+		}
+		return e.failures[index]
+	}
+	return nil
+}
+
+func setupRetryBuild(t *testing.T, engine *retryBuildEngine) (*Manager, Scope) {
+	t.Helper()
+	m := New(engine, nil)
+	scope := Scope{RunDir: t.TempDir(), Repository: "fixture", Commit: "fixed"}
+	if err := os.MkdirAll(m.SourceDir(scope), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.SourceDir(scope), srcClonedMarker), []byte("fixed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return m, scope
+}
+
+func TestEnsureDatabase_TransientFailureRetriesOnce(t *testing.T) {
+	for _, marker := range []string{"exit status 100", "java.lang.InternalError", "MMapPage", "DiskWritableStringStore", "SIGBUS"} {
+		t.Run(marker, func(t *testing.T) {
+			e := &retryBuildEngine{failures: []error{fmt.Errorf("database build failed: %s", marker)}}
+			m, scope := setupRetryBuild(t, e)
+			if _, err := m.Ensure(context.Background(), scope); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.calls) != 2 || e.calls[1].Threads != 1 || !e.calls[1].Overwrite {
+				t.Fatalf("unexpected attempts: %+v", e.calls)
+			}
+			if !e.partialCleared || !e.sourceKept {
+				t.Fatalf("cleanup partial=%t source-kept=%t", e.partialCleared, e.sourceKept)
+			}
+			if m.State(scope) != StateReady {
+				t.Fatal("successful retry was not cached")
+			}
+		})
+	}
+}
+
+func TestEnsureDatabase_NonTransientFailureDoesNotRetry(t *testing.T) {
+	for _, failure := range []error{errors.New("compiler failed: missing header"), errors.New("exit status 1"), errors.New("exit status 1000"), fmt.Errorf("MMapPage: %w", context.Canceled), fmt.Errorf("SIGBUS: %w", context.DeadlineExceeded)} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			e := &retryBuildEngine{failures: []error{failure}}
+			m, scope := setupRetryBuild(t, e)
+			if _, err := m.Ensure(context.Background(), scope); err == nil {
+				t.Fatal("expected failure")
+			}
+			if len(e.calls) != 1 || m.State(scope) != StateAbsent {
+				t.Fatalf("calls=%d state=%s", len(e.calls), m.State(scope))
+			}
+		})
+	}
+}
+
+func TestEnsureDatabase_TransientRecoveryFailureIsNotCached(t *testing.T) {
+	e := &retryBuildEngine{failures: []error{errors.New("MMapPage"), errors.New("SIGBUS")}}
+	m, scope := setupRetryBuild(t, e)
+	if _, err := m.Ensure(context.Background(), scope); err == nil {
+		t.Fatal("expected recovery failure")
+	}
+	if len(e.calls) != 2 || m.State(scope) != StateAbsent {
+		t.Fatalf("calls=%d state=%s", len(e.calls), m.State(scope))
+	}
+}
+
+func TestEnsureDatabase_CancellationStopsTransientRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e := &retryBuildEngine{failures: []error{errors.New("MMapPage")}, onFirst: cancel}
+	m, scope := setupRetryBuild(t, e)
+	if _, err := m.Ensure(ctx, scope); err == nil {
+		t.Fatal("expected canceled build")
+	}
+	if len(e.calls) != 1 {
+		t.Fatalf("canceled build retried %d times", len(e.calls))
 	}
 }
 

@@ -114,8 +114,10 @@ func TestArbiter_TwoInvariantsInSameCaseDoNotCrossContaminate(t *testing.T) {
 	aa := arbiterAssessment(t, b, a, "violated")
 	ab := arbiterAssessment(t, b, other, "satisfied")
 	ab.Contradictions = []string{"violation disproved"}
+	ab.MissingEvidence = []string{"resolve the reported conflict"}
+	ab.AttackChainComplete = false
 	items := arbitrateFixture(b, []artifacts.CaseInvariantV2{a, other}, []artifacts.ContractReview{ra, rb}, []artifacts.InvariantAssessment{aa, ab})
-	if len(items) != 2 || items[0].Status != "confirmed_candidate" || items[1].Status != "no_issue_observed" {
+	if len(items) != 2 || items[0].Status != "confirmed_candidate" || items[1].Status != "needs_review" {
 		t.Fatalf("cross-contract contamination: %+v", items)
 	}
 }

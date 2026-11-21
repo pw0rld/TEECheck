@@ -20,7 +20,7 @@
  *              CallSiteCounts.ql reports the four totals so the gap between
  *              this list and the resolved count is a number, not a mystery.
  * @kind table
- * @id teecheck/index/call-edges
+ * @id cpp/teecheck-index-call-edges
  *
  * Columns: caller_name, caller_file, caller_line, caller_sig,
  *          callee_name, callee_file, callee_line, callee_sig,

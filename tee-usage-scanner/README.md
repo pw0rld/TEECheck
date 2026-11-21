@@ -122,14 +122,24 @@ mechanical gates to those assessments without another free-form LLM verdict:
 - Tool errors, unproved preconditions, conflicting evidence, and unformalized
   new candidates remain `needs_review`.
 
+A validated registered query retains its local `satisfied` or `violated`
+assessment even when a model cannot establish cross-function preconditions.
+Those gaps remain in `missing_evidence` and prevent promotion to a positive
+security finding. A source-only review that contradicts the proposed issue is
+recorded as `unresolved / source_contradicted`; it does not manufacture a
+deterministic proof of a fix. Runtime arbitration and offline validation use
+the same independent-review gates.
+
 The first registered contract query is
 `cpp.contract.direct_struct_field_assignment`. It checks only whether one exact
 function definition contains a direct `Assignment` AST node to a named field of
 a named struct. Initializers, helper calls, indirect writes and overloaded
 assignment operators do not satisfy that syntactic property; compound assignment
-nodes do. The contract kind is `direct_struct_field_assignment`, with exactly
-one subject, destination `Struct.field`, one target field, and query parameters
-`type` and `field`. Stronger value-propagation, authority, dominance or all-path
+nodes do. The contract kind is `direct_struct_field_assignment`, with
+destination `Struct.field`, one target field, and query parameters `type` and
+`field`. With multiple subjects, `subject="path::symbol"` explicitly selects
+the query target; other subjects supply consumer/caller context. Stronger
+value-propagation, authority, dominance or all-path
 properties cannot be verified by substituting this query.
 
 Recheck a frozen logical contract against a separate local checkout:
@@ -145,9 +155,17 @@ This strips the old source anchors, witnesses and lead before binding the new
 revision. Results go to a fresh `verify-*` directory and never feed the knowledge
 store or autonomous discovery. Git checkouts must match the requested revision
 and have no tracked modifications. Non-Git fixtures are labeled `local_partial`.
-Without CodeQL or a configured Verifier model, the result may remain `unresolved`;
-the command does not convert unavailable verification into success. A quiet
+Without a successful registered CodeQL query, the result remains `unresolved`.
+A successful query can retain its local result without a Verifier model, but
+the unproved preconditions and missing source review remain explicit. The
+command does not convert unavailable verification into success. A quiet
 independent scan of a fixed version is distinct from a `satisfied` contract recheck.
+
+CodeQL resource defaults can be set with `TEECHECK_CODEQL_RAM` (MiB) and
+`TEECHECK_CODEQL_THREADS`. Explicit nonzero options override those defaults;
+zero leaves the CLI defaults unchanged when the environment is unset. A known
+internal JVM/TRAP database-build failure gets one clean retry with one thread;
+ordinary build failures and cancellation do not retry.
 
 ## Commands and controls
 
@@ -175,7 +193,7 @@ Common run controls:
 | `--output-dir DIR`, `--run-id ID` | Choose artifact destination and identity |
 | `--knowledge-root DIR` | Select the knowledge tree |
 | `--enable-legacy-prior` | Opt into old pre-investigation model stages |
-| `--llm-provider glm\|openai` | Select provider protocol |
+| `--llm-provider glm\|openai\|deepseek` | Select provider preset |
 | `--llm-base-url`, `--llm-model` | Select endpoint/model |
 | `--llm-transport chat_completions\|responses` | OpenAI transport |
 | `--llm-reasoning-effort` | Reasoning effort for Responses |
@@ -185,6 +203,19 @@ Common run controls:
 Credentials and provider settings also accept `TEECHECK_LLM_*` environment
 variables. `--max-hotspots` survives in the parser for old scripts but no longer
 selects audit targets.
+
+The `deepseek` preset defaults to `https://api.deepseek.com/v1`, Chat Completions,
+and `deepseek-flash`. The [current official API documentation](https://api-docs.deepseek.com/api/create-chat-completion/)
+lists `deepseek-flash` and `deepseek-v4-pro`; explicit model names are sent
+unchanged so a compatible gateway can still serve older models.
+
+For legacy `deepseek-chat`, an unspecified completion budget defaults to 8,192
+tokens. An explicit CLI, environment, role profile, or programmatic budget is
+preserved (programmatic callers can mark a default-sized override with
+`LLMMaxTokensExplicit`). This is a compatibility default, not a claim that all current
+DeepSeek models have an 8,192-token maximum. `deepseek-reasoner` omits temperature;
+current DeepSeek thinking models also omit it unless thinking is disabled with
+`--llm-reasoning-effort none`. See the [thinking-mode parameter rules](https://api-docs.deepseek.com/guides/thinking_mode/).
 
 ## Run artifacts
 

@@ -46,14 +46,26 @@ func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (Gener
 
 func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	body := openAIChatRequest{
-		Model:       c.model,
-		Messages:    buildMessages(req.SystemPrompt, req.Messages),
-		Temperature: req.Temperature,
-		Stream:      false,
-		MaxTokens:   requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
+		Model:     c.model,
+		Messages:  buildMessages(req.SystemPrompt, req.Messages),
+		Stream:    false,
+		MaxTokens: requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
 	}
-	if body.Temperature == 0.0 {
-		body.Temperature = c.temperature
+	// The legacy reasoner rejects/ignores sampling controls. Current DeepSeek
+	// thinking models likewise do not use temperature unless thinking is disabled.
+	thinking := config.DeepSeekThinkingModel(c.model)
+	if config.DeepSeekSupportsThinkingControl(c.model) {
+		body.ReasoningEffort = c.reasoningEffort
+		if c.reasoningEffort == "none" {
+			thinking = false
+		}
+	}
+	if !thinking {
+		temperature := req.Temperature
+		if temperature == 0.0 {
+			temperature = c.temperature
+		}
+		body.Temperature = &temperature
 	}
 	// Honour the caller's JSONMode. Every LLM-backed agent in this repo sets
 	// it (14 call sites) because every one of them parses the reply as a JSON
@@ -184,12 +196,13 @@ func (c *OpenAIClient) generateResponses(ctx context.Context, req GenerateReques
 }
 
 type openAIChatRequest struct {
-	Model          string                `json:"model"`
-	Messages       []map[string]string   `json:"messages"`
-	Temperature    float64               `json:"temperature"`
-	Stream         bool                  `json:"stream"`
-	MaxTokens      int                   `json:"max_tokens,omitempty"`
-	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+	Model           string                `json:"model"`
+	Messages        []map[string]string   `json:"messages"`
+	Temperature     *float64              `json:"temperature,omitempty"`
+	ReasoningEffort string                `json:"reasoning_effort,omitempty"`
+	Stream          bool                  `json:"stream"`
+	MaxTokens       int                   `json:"max_tokens,omitempty"`
+	ResponseFormat  *openAIResponseFormat `json:"response_format,omitempty"`
 }
 
 type openAIResponseFormat struct {

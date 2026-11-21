@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
@@ -82,36 +83,53 @@ func buildContractMemo(ctx context.Context, cfg config.Config, client llm.Client
 	return memo, nil
 }
 
-// AssessContract applies the same per-contract rules regardless of transport
-// or model. A source-only opinion can never manufacture a query result.
+// AssessContract keeps a registered query's local result separate from the
+// evidence needed to turn that result into a security finding. Missing runtime
+// preconditions cannot erase a verified syntactic result, or establish impact.
 func AssessContract(c artifacts.CaseInvariantV2, binding contracts.BindingContext, experts, challengers []artifacts.ContractReview, review artifacts.ContractReview, query ContractQueryResult) artifacts.InvariantAssessment {
 	a := artifacts.InvariantAssessment{SchemaVersion: artifacts.SchemaVersionInvariantAssessmentV1, InvariantID: c.InvariantID,
 		DefinitionHash: c.DefinitionHash, Scope: c.Scope, Assessment: "unresolved", ReasonCode: query.ReasonCode,
 		Reason: query.Reason, VerificationBasis: "unresolved", EvidenceRefs: append([]artifacts.ContractEvidenceRef{}, c.EvidenceRefs...), Witness: []artifacts.ContractSubject{}}
 	v := contractreview.ValidateReview(review, c, binding)
 	a.Witness, a.PreconditionsSatisfied = v.Witness, v.PreconditionsSatisfied
-	a.Contradictions = append(a.Contradictions, v.CounterEvidence...)
-	if v.Position == "contradicted" {
-		a.Contradictions = append(a.Contradictions, v.Reason)
-	}
 	e, eok := contractreview.Find(experts, c.InvariantID)
 	ch, chok := contractreview.Find(challengers, c.InvariantID)
 	if eok {
 		e = contractreview.ValidateReview(e, c, binding)
-		a.Contradictions = append(a.Contradictions, e.CounterEvidence...)
-		if e.Position == "contradicted" {
-			a.Contradictions = append(a.Contradictions, e.Reason)
-		}
 	}
 	if chok {
 		ch = contractreview.ValidateReview(ch, c, binding)
-		a.Contradictions = append(a.Contradictions, ch.CounterEvidence...)
-		if ch.Position == "contradicted" {
-			a.Contradictions = append(a.Contradictions, ch.Reason)
+	}
+	reviews := []artifacts.ContractReview{v}
+	if eok {
+		reviews = append(reviews, e)
+	}
+	if chok {
+		reviews = append(reviews, ch)
+	}
+	for _, r := range reviews {
+		if query.Assessment == "satisfied" {
+			// A source review against the proposed violation agrees with a
+			// satisfied query; only a claimed violation conflicts with it.
+			if r.Position == "contradicted" {
+				if len(r.CounterEvidence) > 0 {
+					a.Reason += " Source evidence against the proposed violation: " + strings.Join(r.CounterEvidence, "; ")
+				}
+			} else {
+				a.Contradictions = append(a.Contradictions, r.CounterEvidence...)
+			}
+			if r.Position == "supported" {
+				a.Contradictions = append(a.Contradictions, r.Reason)
+			}
+		} else {
+			a.Contradictions = append(a.Contradictions, r.CounterEvidence...)
+			if r.Position == "contradicted" {
+				a.Contradictions = append(a.Contradictions, r.Reason)
+			}
 		}
 	}
 	a.SourceCorroborated = eok && chok && e.Position == "supported" && ch.Position == "supported" && v.Position == "supported" && len(v.Witness) > 0
-	a.AttackChainComplete = a.SourceCorroborated && e.AttackChainComplete && ch.AttackChainComplete && v.AttackChainComplete
+	a.AttackChainComplete = a.SourceCorroborated && a.PreconditionsSatisfied && e.AttackChainComplete && ch.AttackChainComplete && v.AttackChainComplete
 	if query.FactRef != "" {
 		ref, err := contracts.ResolveEvidence(artifacts.ContractEvidenceRef{Kind: "tool_fact", Ref: query.FactRef}, binding)
 		if err != nil {
@@ -120,28 +138,50 @@ func AssessContract(c artifacts.CaseInvariantV2, binding contracts.BindingContex
 		}
 		a.EvidenceRefs = append(a.EvidenceRefs, ref)
 	}
-	if !v.PreconditionsSatisfied {
-		a.ReasonCode, a.Reason = "precondition_unproven", "Verifier could not establish all contract preconditions."
-		return a
-	}
-	if len(a.Contradictions) > 0 && query.Assessment != "satisfied" {
-		a.ReasonCode, a.Reason = "counterevidence", "This contract has unresolved counter-evidence."
-		return a
-	}
-	if (query.Assessment == "violated" || query.Assessment == "satisfied") && query.Fact.Status == "success" && query.FactRef != "" && len(v.Witness) > 0 {
-		// A fixed revision supports satisfaction by contradicting the
-		// proposed violation. It need not recreate a positive hypothesis.
-		a.SourceCorroborated = (query.Assessment == "violated" && v.Position == "supported") || (query.Assessment == "satisfied" && v.Position == "contradicted")
-		if !a.SourceCorroborated {
-			a.ReasonCode, a.Reason = "query_review_disagreement", "Source review does not support the registered query's interpretation."
+	if (query.Assessment == "violated" || query.Assessment == "satisfied") && query.Fact.Status == "success" && query.FactRef != "" {
+		candidate := a
+		candidate.Assessment, candidate.VerificationBasis = query.Assessment, "registered_query"
+		candidate.QueryOperation = query.Fact.Operation
+		// These are validated current-revision subject anchors, not model
+		// assertions. They support the registered query's narrowly scoped result.
+		candidate.Witness = append([]artifacts.ContractSubject{}, c.Subjects...)
+		candidate.SourceCorroborated = len(v.Witness) > 0 && ((query.Assessment == "violated" && v.Position == "supported") || (query.Assessment == "satisfied" && v.Position == "contradicted"))
+		if !candidate.PreconditionsSatisfied {
+			candidate.MissingEvidence = append(candidate.MissingEvidence, "precondition_unproven: "+strings.Join(c.Preconditions, "; "))
+		}
+		if !candidate.SourceCorroborated {
+			candidate.MissingEvidence = append(candidate.MissingEvidence, "source_review_unresolved: "+v.Reason)
+		}
+		if len(candidate.Contradictions) > 0 {
+			candidate.MissingEvidence = append(candidate.MissingEvidence, "Resolve the source review's disagreement with the registered query.")
+		}
+		if len(candidate.MissingEvidence) > 0 || len(candidate.Contradictions) > 0 {
+			candidate.AttackChainComplete = false
+		}
+		if err := contracts.ValidateAssessment(candidate, c, binding); err != nil {
+			a.ReasonCode, a.Reason = "invalid_tool_evidence", err.Error()
+			a.AttackChainComplete = false
 			return a
 		}
-		a.Assessment, a.VerificationBasis = query.Assessment, "registered_query"
-		a.QueryOperation = query.Fact.Operation
-		return a
+		return candidate
 	}
-	if query.ReasonCode == "no_registered_query" && c.RequiredProperty.Kind != "direct_struct_field_assignment" && a.SourceCorroborated && len(a.Contradictions) == 0 {
-		a.VerificationBasis = "source_corroborated_no_query"
+	a.AttackChainComplete = a.AttackChainComplete && len(a.Contradictions) == 0
+	if query.ReasonCode == "no_registered_query" && c.RequiredProperty.Kind != "direct_struct_field_assignment" {
+		if v.Position == "contradicted" && len(v.Witness) > 0 {
+			a.ReasonCode, a.Reason = "source_contradicted", v.Reason
+			return a
+		}
+		if !v.PreconditionsSatisfied {
+			a.ReasonCode, a.Reason = "precondition_unproven", "Verifier could not establish all contract preconditions."
+			return a
+		}
+		if len(a.Contradictions) > 0 {
+			a.ReasonCode, a.Reason = "counterevidence", "This contract has unresolved counter-evidence."
+			return a
+		}
+		if a.SourceCorroborated {
+			a.VerificationBasis = "source_corroborated_no_query"
+		}
 	}
 	return a
 }
@@ -164,9 +204,7 @@ func Reverify(ctx context.Context, cfg config.Config, c artifacts.CaseInvariantV
 		return artifacts.InvariantAssessment{}, err
 	}
 	role := roles["verifier"]
-	cfg.LLMProvider, cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel = role.LLMProvider, role.LLMBaseURL, role.LLMAPIKey, role.LLMModel
-	cfg.LLMTransport, cfg.LLMReasoningEffort = role.LLMTransport, role.LLMReasoningEffort
-	cfg.LLMTimeoutSec, cfg.LLMMaxTokens, cfg.LLMTemp = role.LLMTimeoutSec, role.LLMMaxTokens, role.LLMTemp
+	cfg = cfg.WithLLMSettingsFrom(role)
 	var client llm.Client
 	if cfg.LLMModel != "" && cfg.LLMBaseURL != "" && cfg.LLMAPIKey != "" {
 		client = llm.NewClient(cfg)

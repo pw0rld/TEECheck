@@ -124,6 +124,12 @@ type CreateDBOptions struct {
 	// ExtraPATH is prepended to PATH for the build (e.g. so the Rust
 	// extractor finds cargo). Empty leaves the environment untouched.
 	ExtraPATH string
+	// RAM is the import memory budget in MiB. Threads may be negative to
+	// leave CPU cores unused. Nonzero options override environment defaults;
+	// zero reads TEECHECK_CODEQL_RAM / TEECHECK_CODEQL_THREADS, then omits
+	// the corresponding flag if still zero.
+	RAM     int
+	Threads int
 }
 
 // CreateDatabase runs `codeql database create`. For Rust, SourceRoot must be a
@@ -134,6 +140,10 @@ func (e *Engine) CreateDatabase(ctx context.Context, opts CreateDBOptions) error
 	}
 	if opts.Language == "" || opts.SourceRoot == "" || opts.DBPath == "" {
 		return fmt.Errorf("codeql create: language, source root, and db path are required")
+	}
+	resources, err := resourceArgs(opts.RAM, opts.Threads)
+	if err != nil {
+		return fmt.Errorf("codeql create: %w", err)
 	}
 	args := []string{
 		"database", "create", opts.DBPath,
@@ -146,6 +156,7 @@ func (e *Engine) CreateDatabase(ctx context.Context, opts CreateDBOptions) error
 	if opts.BuildMode != "" {
 		args = append(args, "--build-mode="+opts.BuildMode)
 	}
+	args = append(args, resources...)
 	res := e.run(ctx, "codeql-database-create", args, codeqlCreateTimeout, opts.ExtraPATH)
 	if err := res.Err(); err != nil {
 		return fmt.Errorf("codeql database create failed: %w\n%s", err, tail(res.Combined(), 2000))
@@ -190,6 +201,8 @@ type AnalyzeOptions struct {
 	// TWE query packs resolve their dependencies against a local bundle.
 	AdditionalPacks []string
 	ExtraPATH       string
+	RAM             int
+	Threads         int
 }
 
 // Analyze runs `codeql database analyze` to a temporary SARIF file, parses it,
@@ -200,6 +213,10 @@ func (e *Engine) Analyze(ctx context.Context, opts AnalyzeOptions) ([]Result, er
 	}
 	if opts.DBPath == "" || len(opts.Queries) == 0 {
 		return nil, fmt.Errorf("codeql analyze: db path and at least one query are required")
+	}
+	resources, err := resourceArgs(opts.RAM, opts.Threads)
+	if err != nil {
+		return nil, fmt.Errorf("codeql analyze: %w", err)
 	}
 	sarifFile, err := os.CreateTemp("", "teecheck-*.sarif")
 	if err != nil {
@@ -218,6 +235,7 @@ func (e *Engine) Analyze(ctx context.Context, opts AnalyzeOptions) ([]Result, er
 	if len(opts.AdditionalPacks) > 0 {
 		args = append(args, "--additional-packs="+strings.Join(opts.AdditionalPacks, string(os.PathListSeparator)))
 	}
+	args = append(args, resources...)
 	args = append(args, opts.Queries...)
 
 	res := e.run(ctx, "codeql-database-analyze", args, codeqlAnalyzeTimeout, opts.ExtraPATH)

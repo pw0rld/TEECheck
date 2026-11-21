@@ -51,3 +51,13 @@ assessed by Verifier. Their Arbiter uses the validated assessments directly and
 does not require a further model call. The Arbiter profile remains available for
 legacy case review and agent-bus requests. `verify-contract` uses the Verifier
 profile only; absent model/tool prerequisites produce an unresolved recheck.
+
+For DeepSeek, use `"provider": "deepseek"`. The preset uses Chat Completions at
+`https://api.deepseek.com/v1` and defaults to the current `deepseek-flash` model.
+Explicit model names are retained for compatible gateways. A legacy
+`deepseek-chat` role gets an 8,192-token default only when no budget was supplied;
+`max_output_tokens` and explicit global budgets take precedence. Switching a
+role to a different model recomputes inferred defaults rather than inheriting
+the legacy cap. Current thinking models support `reasoning_effort`, including
+`none` to disable thinking; `deepseek-reasoner` omits temperature and does not
+assume support for the newer thinking-mode controls.

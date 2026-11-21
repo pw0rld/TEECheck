@@ -92,7 +92,7 @@ func (cfg Config) ResolveRoleConfigs() (map[string]Config, error) {
 			}
 		}
 		current = current.WithLLMProviderDefaults()
-		if current.LLMProvider != LLMProviderOpenAI && current.LLMProvider != LLMProviderGLM {
+		if current.LLMProvider != LLMProviderOpenAI && current.LLMProvider != LLMProviderGLM && current.LLMProvider != LLMProviderDeepSeek {
 			return nil, fmt.Errorf("%s role has unsupported provider %q", role, current.LLMProvider)
 		}
 		resolved[role] = current
@@ -128,6 +128,8 @@ func applyRoleOverride(cfg Config, override LLMRoleOverride) (Config, error) {
 			return cfg, fmt.Errorf("max_output_tokens must be positive")
 		}
 		cfg.LLMMaxTokens = *override.MaxOutputTokens
+		cfg.LLMMaxTokensExplicit = true
+		cfg.llmMaxTokensDefaulted = false
 	}
 	if override.Temperature != nil {
 		if *override.Temperature < 0 || *override.Temperature > 2 {

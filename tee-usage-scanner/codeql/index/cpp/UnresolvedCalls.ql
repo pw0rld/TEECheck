@@ -16,7 +16,7 @@
  *              naming one of them would be a claim about a mechanism the
  *              query never established.
  * @kind table
- * @id teecheck/index/unresolved-calls
+ * @id cpp/teecheck-index-unresolved-calls
  *
  * Columns: enclosing_name, enclosing_file, enclosing_line, enclosing_sig,
  *          call_file, call_line, expression, resolution_kind

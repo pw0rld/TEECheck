@@ -21,7 +21,7 @@
  *              pointer alias, or by a designated initializer. Its absence is
  *              never proof that a field is unwritten.
  * @kind table
- * @id teecheck/index/field-accesses
+ * @id cpp/teecheck-index-field-accesses
  *
  * Columns: function_name, function_file, function_line, function_sig,
  *          accesses, direct_writes   (the last two comma-joined)
