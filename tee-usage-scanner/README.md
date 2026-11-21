@@ -60,6 +60,24 @@ observed file/symbol targets instead. After opening a lead, it can consult TWE
 investigation methods and security obligations. Observing a file or receiving an
 empty query result does not establish whole-repository safety.
 
+The project map also exposes a neutral entry-surface index. Its signals are
+global non-static definitions, function references in global initializers,
+pointer/integral parameter combinations, and definitions with no recorded
+direct in-tree caller. These are navigation clues, not proof of external
+reachability, attacker-controlled input, or a vulnerability. The repository
+card previews a few definitions; `list_entry_surfaces` pages through the rest
+with optional module and signal filters. Source locations and evidence are
+kept in `repo_facts.v1.json` and `project_map.v1.json`.
+
+For a normal zero-lead completion, available entry candidates require reading
+the opening source windows of `min(3, entry count)` different definitions,
+across `min(2, module count)` modules. Each window covers the first 12 lines
+or the whole definition when shorter. Only complete source lines actually
+sent to the model count: cards, outlines, duplicate reads, requested ranges,
+and undisplayed blobs do not. Opening a supported audit lead remains separate
+from this completion gate. Budget exhaustion still permits exit but records
+unmet coverage; it does not turn an incomplete zero-lead result into safety.
+
 Default budgets distinguish reconnaissance, investigation, and finalization:
 60,000 reconnaissance tokens, 140,000 investigation tokens, a 200,000 aggregate
 ceiling, and a 20,000-token finalization reserve within that ceiling. The
@@ -67,6 +85,15 @@ planner also limits rounds and elapsed time. `--samples N` repeats planner
 passes with an avoid-list, then reviews the merged candidates once.
 It measures additional exploration coverage. Use separate complete runs with
 `--samples 1` to measure repeatability.
+
+The wall-clock allowance stays at 10 minutes per planner pass by default.
+Use `--planner-wall-clock 30m` explicitly for deeper runs; the same allowance
+is recorded in the manifest. Compare the entry-index change under the same
+budget first, then measure extended-budget runs separately.
+
+The coverage ledger and report record entry windows and module spread per
+sample. Offline validation marks a zero-lead run with missing entry coverage
+or a degraded entry index as incomplete coverage, rather than a clean result.
 
 `tree_sitter_outline` is a compatibility action name: its implementation now
 uses text heuristics. Parsed program relationships come from CodeQL. The index

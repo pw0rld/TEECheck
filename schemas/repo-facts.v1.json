@@ -11,6 +11,8 @@
     "scope": { "$ref": "#/$defs/scannedScope" },
     "capabilities": { "$ref": "#/$defs/capabilities" },
     "coverage_status": { "enum": ["partial"] },
+    "entry_surfaces": { "type": "array", "items": { "$ref": "#/$defs/entrySurface" } },
+    "entry_surface_note": { "type": "string" },
     "index_note": {
       "type": "string",
       "description": "Why a capability is degraded. A reader must be able to tell a repository with no indirect calls from an extractor that could not run."
@@ -52,6 +54,37 @@
       },
       "additionalProperties": false
     },
+    "entrySurfaceEvidence": {
+      "type": "object",
+      "required": ["signal", "path", "start_line", "end_line"],
+      "properties": {
+        "signal": { "$ref": "#/$defs/entrySurfaceSignal" },
+        "path": { "type": "string", "minLength": 1 },
+        "start_line": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "entrySurfaceSignal": {
+      "enum": ["external_linkage", "global_function_pointer_initializer", "buffer_length_parameters", "no_resolved_internal_callers"]
+    },
+    "entrySurface": {
+      "type": "object",
+      "description": "A neutral navigation candidate. Signals do not establish external reachability, untrusted input, or a security finding.",
+      "required": ["symbol_id", "name", "path", "module", "start_line", "end_line", "signals", "evidence_refs"],
+      "properties": {
+        "symbol_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "module": { "type": "string" },
+        "start_line": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "signals": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/entrySurfaceSignal" } },
+        "evidence_refs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entrySurfaceEvidence" } }
+      },
+      "additionalProperties": false
+    },
     "capabilityState": { "enum": ["available", "partial", "unavailable"] },
     "capabilities": {
       "type": "object",
@@ -61,7 +94,8 @@
         "symbols": { "$ref": "#/$defs/capabilityState" },
         "direct_calls": { "$ref": "#/$defs/capabilityState" },
         "field_accesses": { "$ref": "#/$defs/capabilityState" },
-        "build_reachability": { "$ref": "#/$defs/capabilityState" }
+        "build_reachability": { "$ref": "#/$defs/capabilityState" },
+        "entry_surfaces": { "$ref": "#/$defs/capabilityState" }
       },
       "additionalProperties": false
     },

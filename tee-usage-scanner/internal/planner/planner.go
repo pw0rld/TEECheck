@@ -210,7 +210,8 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	// buy.
 	projectMap, mapped := loadProjectMap(cfg.RunDir)
 	recon := NewReconState(ReconModeFor(projectMap)).WithTotals(
-		len(projectMap.Modules), totalFunctions(projectMap), projectMap.Repository.FileCount)
+		len(projectMap.Modules), totalFunctions(projectMap), projectMap.Repository.FileCount).
+		WithEntrySurfaces(projectMap.Capabilities.EntrySurfaces, projectMap.EntrySurfaces)
 	if cfg.Budget.MaxReconRounds <= 0 || !mapped {
 		recon.SkipReconnaissance()
 	}
@@ -432,6 +433,10 @@ loop:
 				_ = cfg.Events.Emit(failed)
 				return llm.GenerateResponse{}, err
 			}
+			// Credit entry reading only after these actual source excerpts
+			// reached a model request. A read followed by done in the same
+			// action batch has not yet shown its response to the model.
+			observePresentedEntrySources(recon, state, prompt)
 
 			// Missing input/output fields are independently unknown, never
 			// free. Preserve a larger provider total (e.g. reasoning tokens).
@@ -623,7 +628,7 @@ loop:
 					Name: "done",
 					OK:   false,
 					Error: "done refused: you have not yet seen enough of this project to " +
-						"conclude anything about it. Still needed:\n" + recon.Unmet(),
+						"conclude anything about it. Still needed:\n" + recon.DoneUnmet(),
 				}
 			default:
 				result = registry.Run(ctx, actions.ActionRequest{
@@ -640,7 +645,11 @@ loop:
 				})
 			}
 			loopDet.Record(act.Name, argsStr)
-			recon.ObserveAction(act.Name, act.Args, result.OK)
+			// Source coverage comes from the actual bounded response below,
+			// never a requested line range or an outline without source text.
+			if act.Name != "read_file" && act.Name != "tree_sitter_outline" {
+				recon.ObserveAction(act.Name, act.Args, result.OK)
+			}
 
 			// The blob carries the UNTRUNCATED output. The round
 			// observation below keeps an excerpt so the next prompt
@@ -669,6 +678,7 @@ loop:
 			// bounded its own output, and losing that flag here would
 			// report a doubly-cut observation as complete.
 			body, cutHere := excerpt(result.Output, outputBlob)
+			recon.ObserveSourceOutput(act.Name, act.Args, body, result.OK)
 
 			ref := MakeObservationRef(cfg.RunID, cfg.SampleIndex, roundNum, i, outputBlob)
 			observations.Record(ref, result.OK)
@@ -787,6 +797,14 @@ loop:
 	// run that reaches it is evidence the budget is too small.
 	if runErr == nil && recon.TerminationReason(true) == terminationReconIncomplete {
 		terminationReason = terminationReconIncomplete
+	}
+	if runErr == nil && recon.DoneCoverageIncomplete() {
+		terminationReason = terminationReconIncomplete
+		if entry := recon.EntryCoverage(); entry.GateApplies && len(recon.EntryCoverageGaps()) > 0 {
+			terminationReason = "entry_coverage_incomplete"
+		}
+		gap := "Planner stopped before normal zero-lead completion requirements were met: " + recon.DoneUnmet()
+		coverageGaps = append(coverageGaps, gap)
 	}
 
 	if err := writeCoverageLedger(cfg, recon, projectMap, len(leads)); err != nil {

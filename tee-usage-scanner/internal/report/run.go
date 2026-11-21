@@ -188,6 +188,13 @@ func buildReport(manifest artifacts.Manifest, findings artifacts.Findings, packe
 					sample.RelationQueriesRun, sample.RoundsUsed, sample.ReconRoundsUsed, sample.LeadsOpened)
 			}
 			b.WriteString("\n")
+			b.WriteString("#### Entry Source Coverage\n\n| Sample | Capability | Entry windows read | Required | Modules read | Required modules | Zero-lead gate |\n|---:|---|---:|---:|---:|---:|---|\n")
+			for _, sample := range coverage.BySample {
+				if entry := sample.EntrySurfaces; entry != nil {
+					fmt.Fprintf(&b, "| %d | %s | %d | %d | %d | %d | %t |\n", sample.SampleIndex, entry.Capability, entry.Read, entry.Required, entry.ModulesRead, entry.ModulesRequired, entry.GateApplies)
+				}
+			}
+			b.WriteString("\nThese are opening source windows, not whole-function or whole-repository safety conclusions.\n\n")
 		}
 		renderList(&b, "Unreviewed Clusters", coverage.UnreviewedClusters)
 	}

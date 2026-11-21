@@ -95,6 +95,12 @@ func coverageIssues(runDir string, m artifacts.Manifest) []Issue {
 		if s.ReconStatus != "satisfied" {
 			add("recon_incomplete", fmt.Sprintf("sample %d reconnaissance status is %q", s.SampleIndex, s.ReconStatus))
 		}
+		if entry := s.EntrySurfaces; entry != nil && entry.GateApplies && !entry.Complete {
+			add("entry_coverage_incomplete", fmt.Sprintf("sample %d entry source coverage is %d/%d across %d/%d required modules", s.SampleIndex, entry.Read, entry.Required, entry.ModulesRead, entry.ModulesRequired))
+		}
+		if entry := s.EntrySurfaces; entry != nil && s.LeadsOpened == 0 && entry.Capability != artifacts.CapabilityAvailable {
+			add("entry_index_incomplete", fmt.Sprintf("sample %d entry index capability is %q; a zero-lead result does not establish complete entry coverage", s.SampleIndex, entry.Capability))
+		}
 	}
 	for i := 0; i < want; i++ {
 		if !seen[i] {

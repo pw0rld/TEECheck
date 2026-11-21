@@ -124,13 +124,30 @@ type SampleCoverage struct {
 	// ReconStatus is how the pass left reconnaissance: satisfied,
 	// budget_exhausted or incomplete. A run that finished gated must stay
 	// distinguishable from one that finished.
-	ReconStatus        string   `json:"recon_status"`
-	ModulesReviewed    []string `json:"modules_reviewed"`
-	CapsulesReviewed   int      `json:"capsules_reviewed"`
-	FilesRead          int      `json:"files_read"`
-	RelationQueriesRun int      `json:"relation_queries_run"`
-	RoundsUsed         int      `json:"rounds_used"`
-	ReconRoundsUsed    int      `json:"recon_rounds_used"`
-	LeadsOpened        int      `json:"leads_opened"`
-	LeadsClosed        int      `json:"leads_closed,omitempty"`
+	ReconStatus        string                `json:"recon_status"`
+	ModulesReviewed    []string              `json:"modules_reviewed"`
+	CapsulesReviewed   int                   `json:"capsules_reviewed"`
+	FilesRead          int                   `json:"files_read"`
+	RelationQueriesRun int                   `json:"relation_queries_run"`
+	RoundsUsed         int                   `json:"rounds_used"`
+	ReconRoundsUsed    int                   `json:"recon_rounds_used"`
+	LeadsOpened        int                   `json:"leads_opened"`
+	LeadsClosed        int                   `json:"leads_closed,omitempty"`
+	EntrySurfaces      *EntrySurfaceCoverage `json:"entry_surfaces,omitempty"`
+}
+
+// EntrySurfaceCoverage measures a source-reading sample, not proof that
+// every entry or caller was covered or that an entry is safe.
+type EntrySurfaceCoverage struct {
+	Capability      string     `json:"capability"`
+	Total           int        `json:"total"`
+	Required        int        `json:"required"`
+	Read            int        `json:"read"`
+	ModulesTotal    int        `json:"modules_total"`
+	ModulesRequired int        `json:"modules_required"`
+	ModulesRead     int        `json:"modules_read"`
+	ReadSymbolIDs   []SymbolID `json:"read_symbol_ids,omitempty"`
+	GateApplies     bool       `json:"gate_applies"`
+	Complete        bool       `json:"complete"`
+	CoverageGaps    []string   `json:"coverage_gaps,omitempty"`
 }

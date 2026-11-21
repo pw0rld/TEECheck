@@ -10,6 +10,7 @@ func NewDefaultRegistryWithNav() *Registry {
 	r.Register(GetRepositoryCardHandler{})
 	r.Register(ListModulesHandler{})
 	r.Register(ListFunctionsHandler{})
+	r.Register(ListEntrySurfacesHandler{})
 	r.Register(FindSymbolsHandler{})
 	r.Register(GetFunctionCardHandler{})
 	r.Register(GetCallersHandler{})

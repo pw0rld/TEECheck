@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
@@ -131,6 +132,7 @@ func (h GetRepositoryCardHandler) Run(_ context.Context, req ActionRequest) Acti
 	if b.facts.IndexNote != "" {
 		fmt.Fprintf(&out, "index note: %s\n", b.facts.IndexNote)
 	}
+	writeEntrySurfacePreview(&out, b.m)
 	if card.DocumentedPurpose != "" {
 		// Quoted from the repository's own README, not summarised.
 		fmt.Fprintf(&out, "\ndocumented purpose (quoted from the README):\n%s\n", card.DocumentedPurpose)
@@ -138,6 +140,257 @@ func (h GetRepositoryCardHandler) Run(_ context.Context, req ActionRequest) Acti
 		out.WriteString("\ndocumented purpose: none — the repository has no README this run could read\n")
 	}
 	return observe(h.Name(), out.String())
+}
+
+// Entry signals identify structural facts worth browsing. They do not prove
+// external reachability, untrusted input, or a security defect. Source reads,
+// rather than this navigation action, establish the planner's read coverage.
+const entrySurfaceNotice = "Entry signals are structural observations, not proof of external reachability or a vulnerability. No recorded direct caller is not proof of no caller. Read the source definitions before drawing conclusions."
+
+type listEntrySurfacesArgs struct {
+	Page   int    `json:"page"`
+	Module string `json:"module,omitempty"`
+	Signal string `json:"signal,omitempty"`
+}
+
+type ListEntrySurfacesHandler struct{}
+
+func (ListEntrySurfacesHandler) Name() string { return "list_entry_surfaces" }
+
+func (h ListEntrySurfacesHandler) Run(_ context.Context, req ActionRequest) ActionResult {
+	var args listEntrySurfacesArgs
+	if err := json.Unmarshal(req.Args, &args); err != nil {
+		return fail(h.Name(), fmt.Sprintf("invalid args: %v", err))
+	}
+	if args.Page < 0 || len(args.Module) > 512 || len(args.Signal) > 128 {
+		return fail(h.Name(), "page must be non-negative and module/signal filters must be short")
+	}
+	b, err := loadBrowseIndex(req.RunDir)
+	if err != nil {
+		return fail(h.Name(), err.Error())
+	}
+	status := entrySurfaceCapability(b.m)
+	all := sortedEntrySurfaces(b.m.EntrySurfaces)
+	var matched []artifacts.EntrySurface
+	if status != artifacts.CapabilityUnavailable {
+		for _, entry := range all {
+			if args.Module != "" && entry.Module != args.Module {
+				continue
+			}
+			if args.Signal != "" && !hasEntrySignal(entry, args.Signal) {
+				continue
+			}
+			matched = append(matched, entry)
+		}
+	}
+	pages, err := paginateEntrySurfaces(matched)
+	if err != nil {
+		return fail(h.Name(), err.Error())
+	}
+	if args.Page >= len(pages) {
+		return fail(h.Name(), fmt.Sprintf("entry filter has pages 0..%d, not %d", len(pages)-1, args.Page))
+	}
+	page := pages[args.Page]
+	var next *listEntrySurfacesArgs
+	if args.Page+1 < len(pages) {
+		cursor := args
+		cursor.Page++
+		next = &cursor
+	}
+	note := b.m.EntrySurfaceNote
+	if status == artifacts.CapabilityUnavailable {
+		note = "Entry signals were not computed for this scope; this is not evidence that the repository has no entries. " + note
+	}
+	response := struct {
+		Capability      string                   `json:"capability"`
+		CoverageNote    string                   `json:"coverage_note,omitempty"`
+		Notice          string                   `json:"notice"`
+		IndexTotal      int                      `json:"index_total"`
+		MatchedCount    int                      `json:"matched_count"`
+		Page            int                      `json:"page"`
+		TotalPages      int                      `json:"total_pages"`
+		Entries         []artifacts.EntrySurface `json:"entry_surfaces"`
+		EvidenceOmitted bool                     `json:"evidence_omitted_for_display,omitempty"`
+		NextCursor      *listEntrySurfacesArgs   `json:"next_cursor,omitempty"`
+	}{status, entryDisplayText(note, 2048), entrySurfaceNotice, len(all), len(matched), args.Page, len(pages), page.entries, page.evidenceOmitted, next}
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fail(h.Name(), fmt.Sprintf("marshal entry page: %v", err))
+	}
+	if len(data) > observationlimits.MaxBytes {
+		return fail(h.Name(), "entry page metadata exceeds the observation limit; use narrower filters")
+	}
+	return ActionResult{Name: h.Name(), OK: true, Output: string(data), Truncated: page.evidenceOmitted}
+}
+
+type entryDisplayPage struct {
+	entries         []artifacts.EntrySurface
+	evidenceOmitted bool
+}
+
+// Whole records determine page boundaries, so advancing a page never skips
+// records cut from a previous observation. A single oversized evidence list
+// may be omitted from display, with that omission explicitly recorded.
+func paginateEntrySurfaces(entries []artifacts.EntrySurface) ([]entryDisplayPage, error) {
+	const maxBodyBytes = observationlimits.MaxBytes - 4096
+	pages := []entryDisplayPage{}
+	page := entryDisplayPage{entries: []artifacts.EntrySurface{}}
+	used := 0
+	for _, original := range entries {
+		entry := original
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return nil, err
+		}
+		omitted := false
+		if len(data)+1 > maxBodyBytes {
+			entry.EvidenceRefs = nil
+			omitted = true
+			data, err = json.Marshal(entry)
+			if err != nil {
+				return nil, err
+			}
+			if len(data)+1 > maxBodyBytes {
+				return nil, fmt.Errorf("an indexed entry identity exceeds the observation limit; inspect its source definition directly")
+			}
+		}
+		if len(page.entries) > 0 && (len(page.entries) >= 20 || used+len(data)+1 > maxBodyBytes) {
+			pages = append(pages, page)
+			page = entryDisplayPage{entries: []artifacts.EntrySurface{}}
+			used = 0
+		}
+		page.entries = append(page.entries, entry)
+		page.evidenceOmitted = page.evidenceOmitted || omitted
+		used += len(data) + 1
+	}
+	if len(page.entries) > 0 || len(pages) == 0 {
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+func entrySurfaceCapability(m artifacts.ProjectMap) string {
+	if m.Capabilities.Symbols == artifacts.CapabilityUnavailable {
+		return artifacts.CapabilityUnavailable
+	}
+	if m.Capabilities.EntrySurfaces == artifacts.CapabilityAvailable || m.Capabilities.EntrySurfaces == artifacts.CapabilityPartial {
+		return m.Capabilities.EntrySurfaces
+	}
+	return artifacts.CapabilityUnavailable
+}
+
+func sortedEntrySurfaces(entries []artifacts.EntrySurface) []artifacts.EntrySurface {
+	out := append([]artifacts.EntrySurface(nil), entries...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Module != out[j].Module {
+			return out[i].Module < out[j].Module
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		if out[i].StartLine != out[j].StartLine {
+			return out[i].StartLine < out[j].StartLine
+		}
+		return out[i].SymbolID < out[j].SymbolID
+	})
+	return out
+}
+
+func hasEntrySignal(entry artifacts.EntrySurface, signal string) bool {
+	for _, s := range entry.Signals {
+		if s == signal {
+			return true
+		}
+	}
+	return false
+}
+
+func writeEntrySurfacePreview(out *strings.Builder, m artifacts.ProjectMap) {
+	status := entrySurfaceCapability(m)
+	fmt.Fprintf(out, "entry signal index: capability=%s definitions=%d\n", status, len(m.EntrySurfaces))
+	if m.EntrySurfaceNote != "" {
+		fmt.Fprintf(out, "entry signal note: %s\n", entryDisplayText(m.EntrySurfaceNote, 2048))
+	}
+	if status == artifacts.CapabilityUnavailable {
+		out.WriteString("Entry signals were not computed; this does not establish an absence of boundary entries.\n")
+		return
+	}
+	out.WriteString(entrySurfaceNotice + "\n")
+	for _, entry := range diverseEntryPreview(sortedEntrySurfaces(m.EntrySurfaces), 5) {
+		row := fmt.Sprintf("  %s %s:%d-%d id=%s signals=%s\n", entry.Name, entry.Path, entry.StartLine, entry.EndLine, entry.SymbolID, strings.Join(entry.Signals, ","))
+		if len(row) > 2048 {
+			out.WriteString("  (one preview identity omitted because it exceeds the display budget)\n")
+			continue
+		}
+		out.WriteString(row)
+	}
+	out.WriteString("Browse list_entry_surfaces with page=0 and optional module/signal filters; the preview is not a complete list.\n")
+}
+
+func diverseEntryPreview(entries []artifacts.EntrySurface, limit int) []artifacts.EntrySurface {
+	var out []artifacts.EntrySurface
+	seen := map[artifacts.SymbolID]bool{}
+	modules := map[string]bool{}
+	signalSet := map[string]bool{}
+	for _, entry := range entries {
+		for _, signal := range entry.Signals {
+			signalSet[signal] = true
+		}
+	}
+	var signals []string
+	for signal := range signalSet {
+		signals = append(signals, signal)
+	}
+	sort.Strings(signals)
+	add := func(entry artifacts.EntrySurface) {
+		out = append(out, entry)
+		seen[entry.SymbolID] = true
+		modules[entry.Module] = true
+	}
+	for _, signal := range signals {
+		if len(out) >= limit {
+			break
+		}
+		candidate := -1
+		for i, entry := range entries {
+			if seen[entry.SymbolID] || !hasEntrySignal(entry, signal) {
+				continue
+			}
+			if candidate < 0 {
+				candidate = i
+			}
+			if !modules[entry.Module] {
+				candidate = i
+				break
+			}
+		}
+		if candidate >= 0 {
+			add(entries[candidate])
+		}
+	}
+	for _, distinctModule := range []bool{true, false} {
+		for _, entry := range entries {
+			if len(out) >= limit {
+				return out
+			}
+			if seen[entry.SymbolID] || (distinctModule && modules[entry.Module]) {
+				continue
+			}
+			add(entry)
+		}
+	}
+	return out
+}
+
+func entryDisplayText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	text = text[:limit]
+	for !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text + "…"
 }
 
 // ─── list_modules ───────────────────────────────────────────────────────
@@ -477,6 +730,7 @@ var (
 	_ Handler = GetRepositoryCardHandler{}
 	_ Handler = ListModulesHandler{}
 	_ Handler = ListFunctionsHandler{}
+	_ Handler = ListEntrySurfacesHandler{}
 	_ Handler = FindSymbolsHandler{}
 	_ Handler = GetFunctionCardHandler{}
 	_ Handler = GetCallersHandler{}

@@ -92,6 +92,7 @@ func Run(cfg config.Config) error {
 		m.Capabilities.Symbols = artifacts.CapabilityUnavailable
 		m.CoverageStatus = artifacts.CapabilityPartial
 	}
+	m.EntrySurfaces, m.Capabilities.EntrySurfaces, m.EntrySurfaceNote = entrySurfacesForMap(facts, m.Capabilities.Symbols)
 
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -105,6 +106,57 @@ func Run(cfg config.Config) error {
 	}
 	fmt.Printf("Project map: %d module(s), %d function card page(s)\n", len(m.Modules), len(m.FunctionPages))
 	return nil
+}
+
+// The navigation view only advertises entry signals whose definitions exist
+// in this run's index. An unavailable extractor is not an empty entry set.
+func entrySurfacesForMap(facts artifacts.RepoFacts, symbolsCapability string) ([]artifacts.EntrySurface, string, string) {
+	note := facts.EntrySurfaceNote
+	if symbolsCapability == artifacts.CapabilityUnavailable || len(facts.Symbols) == 0 {
+		return nil, artifacts.CapabilityUnavailable, appendEntryNote(note, "entry signals unavailable because source definitions were not indexed")
+	}
+	status := facts.Capabilities.EntrySurfaces
+	if status != artifacts.CapabilityAvailable && status != artifacts.CapabilityPartial {
+		return nil, artifacts.CapabilityUnavailable, appendEntryNote(note, "entry signals were not indexed for this run")
+	}
+	byID := make(map[artifacts.SymbolID]artifacts.Symbol, len(facts.Symbols))
+	for _, symbol := range facts.Symbols {
+		byID[symbol.SymbolID] = symbol
+	}
+	var entries []artifacts.EntrySurface
+	dropped := 0
+	for _, entry := range facts.EntrySurfaces {
+		symbol, ok := byID[entry.SymbolID]
+		if !ok || entry.Path != symbol.File || entry.StartLine != symbol.StartLine || entry.EndLine < entry.StartLine || len(entry.Signals) == 0 {
+			dropped++
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if dropped > 0 {
+		status = artifacts.CapabilityPartial
+		note = appendEntryNote(note, fmt.Sprintf("%d entry record(s) did not match indexed definitions and were omitted", dropped))
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Module != entries[j].Module {
+			return entries[i].Module < entries[j].Module
+		}
+		if entries[i].Path != entries[j].Path {
+			return entries[i].Path < entries[j].Path
+		}
+		if entries[i].StartLine != entries[j].StartLine {
+			return entries[i].StartLine < entries[j].StartLine
+		}
+		return entries[i].SymbolID < entries[j].SymbolID
+	})
+	return entries, status, note
+}
+
+func appendEntryNote(note, extra string) string {
+	if note == "" {
+		return extra
+	}
+	return note + "; " + extra
 }
 
 // writePages groups the capsules by module, paginates each module by bytes,

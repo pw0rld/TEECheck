@@ -101,6 +101,9 @@ func reconStatusBlock(r *ReconState) string {
 
 	b.WriteString("\nReply with the JSON object described in the system prompt and nothing else — " +
 		"no prose before it, no prose after it, no markdown fence.\n")
+	if gaps := r.EntryCoverageGaps(); len(gaps) > 0 && r.LeadsOpened() == 0 {
+		b.WriteString("\nBefore normal completion with zero leads, inspect entry source (do not invent a lead):\n  - " + strings.Join(gaps, "\n  - ") + "\n")
+	}
 	return b.String()
 }
 
@@ -199,6 +202,14 @@ func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMa
 		RoundsUsed:         cfg.Budget.RoundsUsed,
 		ReconRoundsUsed:    cfg.Budget.ReconRoundsUsed,
 		LeadsOpened:        leadsOpen,
+	}
+	entryCoverage := recon.EntryCoverage()
+	entry.EntrySurfaces = &artifacts.EntrySurfaceCoverage{
+		Capability: entryCoverage.Capability, Total: entryCoverage.Total,
+		Required: entryCoverage.Required, Read: entryCoverage.Read,
+		ModulesTotal: entryCoverage.ModulesTotal, ModulesRequired: entryCoverage.ModulesRequired, ModulesRead: entryCoverage.ModulesRead,
+		ReadSymbolIDs: entryCoverage.ReadSymbolIDs, GateApplies: entryCoverage.GateApplies,
+		Complete: len(recon.EntryCoverageGaps()) == 0, CoverageGaps: recon.EntryCoverageGaps(),
 	}
 	if current, err := contractLeads(cfg); err == nil {
 		for _, lead := range current {

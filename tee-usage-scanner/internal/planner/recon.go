@@ -107,6 +107,12 @@ type ReconState struct {
 	// stronger observation than opening its index card, and holding a lead
 	// to the card alone rejected a correct one.
 	linesRead map[string][]lineRange
+	// Entry reads have their own accounting: a tool may have returned source
+	// before a subsequent model request actually included it. The runtime
+	// credits that presented source through ObserveEntrySourceOutput.
+	entryCapability string
+	entrySurfaces   map[artifacts.SymbolID]artifacts.EntrySurface
+	entryLinesRead  map[string]map[int]bool
 
 	budgetExhausted bool
 	skipped         bool
@@ -441,7 +447,10 @@ func (r *ReconState) ExhaustReconTokenBudget() {
 // model it MUST call done, and a gate that then refused it would leave the
 // model with no legal action at all.
 func (r *ReconState) AllowDone(isFinalRound bool) bool {
-	return isFinalRound || r.AllowLead()
+	if isFinalRound || r.budgetExhausted {
+		return true
+	}
+	return !r.DoneCoverageIncomplete()
 }
 
 // AllowLead reports whether `open_audit_lead` may be dispatched.
@@ -463,9 +472,9 @@ func (r *ReconState) OpenedLead() {
 // Status is how the pass left reconnaissance.
 func (r *ReconState) Status() string {
 	switch {
-	case r.skipped:
+	case r.skipped && !r.entryCoverageIncomplete():
 		return reconStatusNotRequested
-	case r.Satisfied():
+	case r.Satisfied() && !r.entryCoverageIncomplete():
 		return reconStatusSatisfied
 	case r.budgetExhausted:
 		return reconStatusBudgetExhausted
@@ -478,6 +487,17 @@ func (r *ReconState) Status() string {
 // met on its own terms. finishedGated is true when the loop ended while
 // reconnaissance was still incomplete.
 func (r *ReconState) TerminationReason(finishedGated bool) string {
+	// Entry reading is a completion requirement only for a no-lead result.
+	// It deliberately does not feed Satisfied/AllowLead: useful evidence must
+	// still be allowed to open investigation before every entry was sampled.
+	if r.entryCoverageIncomplete() {
+		if r.budgetExhausted {
+			return terminationReconBudgetSpent
+		}
+		if finishedGated {
+			return terminationReconIncomplete
+		}
+	}
 	if r.skipped {
 		return ""
 	}

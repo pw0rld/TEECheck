@@ -127,7 +127,37 @@ type IndexCapabilities struct {
 	DirectCalls       string `json:"direct_calls"`
 	FieldAccesses     string `json:"field_accesses"`
 	BuildReachability string `json:"build_reachability"`
+	EntrySurfaces     string `json:"entry_surfaces,omitempty"`
 }
+
+// EntrySurface is a neutral navigation candidate, not a claim that a function
+// is externally reachable or receives untrusted input. Signals describe only
+// the structural facts the index observed in its extraction scope.
+type EntrySurface struct {
+	SymbolID     SymbolID               `json:"symbol_id"`
+	Name         string                 `json:"name"`
+	Path         string                 `json:"path"`
+	Module       string                 `json:"module"`
+	StartLine    int                    `json:"start_line"`
+	EndLine      int                    `json:"end_line"`
+	Signals      []string               `json:"signals"`
+	EvidenceRefs []EntrySurfaceEvidence `json:"evidence_refs"`
+}
+
+type EntrySurfaceEvidence struct {
+	Signal    string `json:"signal"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+const (
+	EntrySignalExternalLinkage                  = "external_linkage"
+	EntrySignalGlobalFunctionPointerInitializer = "global_function_pointer_initializer"
+	EntrySignalBufferLengthParameters           = "buffer_length_parameters"
+	EntrySignalNoResolvedInternalCallers        = "no_resolved_internal_callers"
+)
 
 // RepoFacts is the deterministic whole-repo program index. It answers "what
 // structure was observed", never "what is dangerous".
@@ -176,6 +206,8 @@ type RepoFacts struct {
 	// UnresolvedCallSites is the deduplicated list. See
 	// UnresolvedCallSiteCount for the multiplicity.
 	UnresolvedCallSites []UnresolvedCall `json:"unresolved_call_sites,omitempty"`
+	EntrySurfaces       []EntrySurface   `json:"entry_surfaces,omitempty"`
+	EntrySurfaceNote    string           `json:"entry_surface_note,omitempty"`
 }
 
 // ProjectMap is the navigation view the planner browses.
@@ -190,9 +222,11 @@ type ProjectMap struct {
 	Scope          ScannedScope      `json:"scope"`
 	Capabilities   IndexCapabilities `json:"capabilities"`
 
-	Repository    RepositoryCard        `json:"repository"`
-	Modules       []ModuleCard          `json:"modules,omitempty"`
-	FunctionPages []FunctionCardPageRef `json:"function_pages,omitempty"`
+	Repository       RepositoryCard        `json:"repository"`
+	Modules          []ModuleCard          `json:"modules,omitempty"`
+	FunctionPages    []FunctionCardPageRef `json:"function_pages,omitempty"`
+	EntrySurfaces    []EntrySurface        `json:"entry_surfaces,omitempty"`
+	EntrySurfaceNote string                `json:"entry_surface_note,omitempty"`
 }
 
 // RepositoryCard is the top-level orientation: what the project says it is,

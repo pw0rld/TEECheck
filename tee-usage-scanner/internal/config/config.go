@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -58,6 +59,8 @@ type Config struct {
 	// different ones; the union is deduped and fed to the 4-agent
 	// downstream pipeline as a single case set.
 	Samples int
+	// Zero uses the Planner's default wall-clock allowance for each pass.
+	PlannerWallClock time.Duration
 }
 
 func Parse(args []string) (Config, error) {
@@ -512,6 +515,7 @@ func parseRun(args []string) (Config, error) {
 		Samples:            1,
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
+	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")
 	fs.StringVar(&cfg.RoleConfigFile, "role-config", os.Getenv("TEECHECK_ROLE_CONFIG"), "JSON file with startup-only per-role LLM overrides; credentials use api_key_env references")
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
@@ -561,6 +565,18 @@ func parseRun(args []string) (Config, error) {
 			cfg.LLMTimeoutExplicit = true
 		}
 	})
+	if cfg.PlannerWallClock < 0 {
+		return Config{}, fmt.Errorf("--planner-wall-clock must be positive")
+	}
+	var plannerWallClockSet bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "planner-wall-clock" {
+			plannerWallClockSet = true
+		}
+	})
+	if plannerWallClockSet && cfg.PlannerWallClock == 0 {
+		return Config{}, fmt.Errorf("--planner-wall-clock must be positive")
+	}
 	if os.Getenv("TEECHECK_LLM_TIMEOUT_SECONDS") != "" {
 		cfg.LLMTimeoutExplicit = true
 	}

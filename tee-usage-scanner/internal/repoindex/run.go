@@ -28,6 +28,7 @@ const (
 	queryUnresolved      = "UnresolvedCalls.ql"
 	queryFieldAccesses   = "FieldAccesses.ql"
 	queryCallSiteCounts  = "CallSiteCounts.ql"
+	queryEntrySurfaces   = "EntrySurfaces.ql"
 	indexQueryPackSubdir = "index"
 )
 
@@ -61,10 +62,11 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 	}
 
 	facts := artifacts.RepoFacts{
-		SchemaVersion: artifacts.SchemaVersionRepoFactsV1,
-		RunID:         manifest.RunID,
-		Scope:         manifest.Scope,
-		Languages:     []string{lang},
+		SchemaVersion:    artifacts.SchemaVersionRepoFactsV1,
+		RunID:            manifest.RunID,
+		Scope:            manifest.Scope,
+		Languages:        []string{lang},
+		EntrySurfaceNote: "No entry-surface index was produced; consult index_note for source/index availability.",
 		// Build reachability is never computed: the database is built with
 		// --build-mode=none, so nothing here can say whether a path is
 		// reachable under any particular build configuration.
@@ -73,6 +75,7 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 			DirectCalls:       artifacts.CapabilityUnavailable,
 			FieldAccesses:     artifacts.CapabilityUnavailable,
 			BuildReachability: artifacts.CapabilityUnavailable,
+			EntrySurfaces:     artifacts.CapabilityUnavailable,
 		},
 	}
 
@@ -175,6 +178,23 @@ func Run(cfg config.Config, db codedb.DatabaseProvider, eng TableQuerier) error 
 		facts.Capabilities.FieldAccesses = artifacts.CapabilityPartial
 	}
 
+	if entryRows, entryErr := query(queryEntrySurfaces); entryErr != nil {
+		facts.EntrySurfaceNote = queryEntrySurfaces + ": " + entryErr.Error()
+	} else {
+		var entryNotes []string
+		facts.EntrySurfaces, entryNotes = decodeEntrySurfaces(entryRows, facts)
+		facts.Capabilities.EntrySurfaces = artifacts.CapabilityPartial
+		if len(entryNotes) == 0 {
+			facts.Capabilities.EntrySurfaces = artifacts.CapabilityAvailable
+		}
+		if len(entryRows) == 0 {
+			facts.Capabilities.EntrySurfaces = artifacts.CapabilityUnavailable
+		}
+		facts.EntrySurfaceNote = "Neutral interface signals only; external reachability, untrusted input and build-specific reachability are not established."
+		if len(entryNotes) > 0 {
+			facts.EntrySurfaceNote += " " + joinNotes(entryNotes)
+		}
+	}
 	facts.IndexNote = joinNotes(notes)
 	return write(cfg.RunDir, facts)
 }

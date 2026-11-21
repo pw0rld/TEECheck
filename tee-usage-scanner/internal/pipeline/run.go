@@ -109,6 +109,9 @@ func runStage(rec events.Recorder, runID, stage string, fn func() error) error {
 }
 
 func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map[string]config.Config) (runDir string, err error) {
+	if cfg.PlannerWallClock < 0 {
+		return "", fmt.Errorf("planner wall-clock allowance must not be negative")
+	}
 	// === Repo Acquisition ===
 	fetch, err := repofetch.Fetch(cfg.Target)
 	if err != nil {
@@ -135,7 +138,7 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	if err := runinit.RecordRoleConfigurations(runDir, roleSettings); err != nil {
 		return runDir, fmt.Errorf("record role configuration: %w", err)
 	}
-	plannerBudget := planner.NewDefaultBudget()
+	plannerBudget := configuredPlannerBudget(cfg)
 	if err := runinit.RecordPlannerLimits(runDir, artifacts.PlannerLimits{
 		MaxInvestigationRounds: plannerBudget.MaxRounds,
 		MaxReconRounds:         plannerBudget.MaxReconRounds,
@@ -657,7 +660,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 			Profile:       promptProfile,
 			Client:        client,
 			Registry:      registry,
-			Budget:        planner.NewDefaultBudget(),
+			Budget:        configuredPlannerBudget(cfg),
 			Temperature:   cfg.LLMTemp,
 			KnowledgeRoot: cfg.KnowledgeRoot,
 			AvoidPaths:    avoid,

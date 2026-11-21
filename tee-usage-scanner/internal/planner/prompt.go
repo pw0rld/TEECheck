@@ -55,6 +55,7 @@ type PriorKnowledge struct {
 // Keep entries terse (one line each). When a new action is added
 // to the registry, add a matching entry here.
 var actionArgSchemas = map[string]string{
+	"list_entry_surfaces":   `{"page": int (0-based, optional), "module": string (optional), "signal": string (optional)} — page through neutral entry candidates and their source evidence. Signals describe structure, not external reachability or vulnerabilities. Use read_file on distinct entry definitions to inspect actual code`,
 	"get_repository_card":   `{}` + ` — what the project says it is, how it builds, how many files and modules it has, and what the program index can and cannot answer. Start here`,
 	"list_modules":          `{}` + ` — every module with its file and function counts and its dependency edges. The counts are how you tell the project's own code from vendored dependencies`,
 	"list_functions":        `{"module": string (a path from list_modules), "page": int (0-based)}` + ` — one page of function cards. The reply names the next cursor; a module absent from the index is not a module without functions`,
@@ -117,6 +118,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	b.WriteString("  - An unanswered question — an open lead, a missing role — is YOUR NEXT INVESTIGATIVE TASK. It is NOT a vulnerability conclusion, and it is NOT evidence of safety. Keep investigating until you answer it, exhaust your budget, or have concrete evidence the thing does not exist in this codebase.\n")
 	b.WriteString("  - Zero results is not a negative result. A fact_layer_query that returns \"unresolved\" or \"unsupported\" or zero locations, a caller list that came back empty, a ripgrep with no matches: each proves only that nothing was found within that scope (§6.5). Never conclude safety from an absence of a match. Every browsing action tells you the scope of what it could see and what it could not cover — read it, and say which one you mean.\n")
 	b.WriteString("  - Anything you did not look at is a coverage gap, never a safe area.\n")
+	b.WriteString("  - Entry-surface records are neutral navigation clues. No resolved internal caller does not prove external reachability; pointer and length-like parameters do not prove untrusted input. Read the source and investigate the actual callers. With available entry candidates, normal zero-lead completion requires source reading across the entry quota shown below. Do not invent a lead to satisfy a quota; zero leads is valid after adequate reading.\n")
 	b.WriteString("  - You do not decide the final vulnerability verdict. Report what you found — Expert/Challenger/Verifier judge it afterward.\n\n")
 
 	if phase == PhaseInvestigation && strings.TrimSpace(knowledge.TWEText) != "" {
@@ -159,6 +161,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 	} else {
 		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, and what the index can and cannot answer.\n")
 		b.WriteString("  2. list_modules — the parts, with their sizes. Sizes are how you tell the project's own code from vendored dependencies.\n")
+		b.WriteString("     list_entry_surfaces — inspect structural entry candidates across modules, then read_file their source definitions. Cards and repeated reads do not satisfy source coverage.\n")
 		b.WriteString("  3. list_functions on several modules, and get_function_card on the definitions that look load-bearing. Cover more than one part of the project: what you never open, you cannot have an opinion about.\n")
 		b.WriteString("  4. get_callers to ask how something is reached. find_symbols resolves a name to candidate ids when more than one definition shares it — pick by id, never by name.\n")
 		b.WriteString("  5. read_file and ripgrep when the index cannot answer, or to see the code behind a card.\n")
