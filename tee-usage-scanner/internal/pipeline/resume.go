@@ -13,6 +13,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runinit"
@@ -109,6 +110,27 @@ func inspectResume(cfg config.Config, roles map[string]config.Config) (config.Co
 	}
 	if cp.RunID != m.RunID || cp.Profile.RepoURL != m.RepoURL || cp.Profile.Commit != m.Commit || cp.SampleIndex < 0 {
 		return cfg, nil, fmt.Errorf("resume checkpoint differs from manifest")
+	}
+	prescan, err := loadPrescanContext(runDir)
+	if err != nil {
+		return cfg, nil, fmt.Errorf("resume entry taint prescan: %w", err)
+	}
+	for _, stage := range m.ExpectedStages {
+		if stage == "taint_prescan" && prescan == nil {
+			return cfg, nil, fmt.Errorf("resume entry taint prescan context is missing")
+		}
+	}
+	if cp.State != nil && !reflect.DeepEqual(cp.State.PreScannedTaint, prescan) {
+		return cfg, nil, fmt.Errorf("resume entry taint prescan context differs from checkpoint")
+	}
+	if prescan != nil && prescan.FactRef != "" {
+		fact, err := contracts.LoadToolFact(prescan.FactRef, contracts.BindingContext{RunDir: runDir, RepoRoot: m.LocalPath, Scope: m.Scope})
+		if err != nil {
+			return cfg, nil, fmt.Errorf("resume entry taint prescan evidence: %w", err)
+		}
+		if fact.Operation != artifacts.TaintPrescanOperation || fact.Status != "success" || prescan.ContentSHA256 == "" || prescan.ContentSHA256 != fact.ContentSHA256 {
+			return cfg, nil, fmt.Errorf("resume entry taint prescan evidence identity changed")
+		}
 	}
 	samples := cfg.Samples
 	if samples <= 0 {

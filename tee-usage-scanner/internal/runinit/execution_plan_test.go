@@ -22,7 +22,7 @@ func TestRunRecordsRequiredExecutionPlan(t *testing.T) {
 		for _, s := range m.ExpectedStages {
 			stages[s] = true
 		}
-		for _, s := range []string{"preprocess", "repo_index", "project_map", "l3_planner", "cases_enrich", "expert", "challenger", "verifier", "arbiter"} {
+		for _, s := range []string{"preprocess", "repo_index", "project_map", "taint_prescan", "l3_planner", "cases_enrich", "expert", "challenger", "verifier", "arbiter"} {
 			if !stages[s] {
 				t.Errorf("missing required stage %s", s)
 			}

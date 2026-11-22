@@ -122,6 +122,7 @@ func openLead(
 	observations ObservationSet,
 	args json.RawMessage,
 	round int,
+	states ...*PlannerState,
 ) (artifacts.AuditLead, actions.ActionResult) {
 	payload, err := parseOpenAuditLead(args)
 	if err != nil {
@@ -132,7 +133,15 @@ func openLead(
 		}
 	}
 
-	lead, res := tryOpenAuditLead(recon, observations, payload)
+	var state *PlannerState
+	if len(states) > 0 {
+		state = states[0]
+	}
+	targeted, err := prescanLeadSourceRead(cfg, recon, state, observations, payload)
+	if err != nil {
+		return artifacts.AuditLead{}, leadActionFailure(ActionOpenAuditLead, err)
+	}
+	lead, res := tryOpenAuditLeadWithPrescan(recon, observations, payload, targeted)
 	if !res.OK {
 		return lead, res
 	}

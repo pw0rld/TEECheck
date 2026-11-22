@@ -10,6 +10,7 @@
 固定源码与 ScannedScope
   → 预处理与确定性程序索引（RepoFacts）
   → 中性 ProjectMapV0 / EntrySurfaces
+  → L2 批量入口污点预扫：中性路径 ToolFact / Top-10 浏览线索
   → Planner Pass A：项目侦察、边界入口、按需取证、AuditLead
   → Planner Pass B：TWE 补覆盖、扩展 Lead、CaseInvariantV2
   → CasePack + 独立 Expert / Challenger 源码复核
@@ -19,6 +20,7 @@
 ```
 
 确定性规则通道与 Planner 通道可以分别产生案例，合并后保留来源标记。
+批量污点预扫本身不产生案例或 Finding；它只把可引用的路径线索交给 Planner 做源码调查。
 `architecture.v1` / `project_invariants.v1` 是默认关闭的兼容阶段；只有显式启用
 `--enable-legacy-prior` 才运行，不是上述主线的必要前置条件。
 
@@ -28,6 +30,7 @@
 | --- | --- | --- |
 | Source / scope | 固定仓库、版本、实际扫描路径和源码内容 | 本地裁剪 fixture 等同完整上游仓库 |
 | RepoFacts / ProjectMap | 符号、模块、调用关系、入口特征及覆盖缺口 | 一个导出函数一定能被外部调用，或一定存在漏洞 |
+| Entry taint prescan | 就绪数据库上的批量 may-flow 路径与浏览排序 | 路径可达即存在漏洞，或没有路径即安全 |
 | Planner | 浏览证据、维护 Lead、提出绑定源码的契约 | 自由文本怀疑已得到证实 |
 | ToolFact | 保存工具参数、来源、结果、摘要哈希和覆盖限制 | 没有路径等同安全 |
 | CaseInvariantV2 | 定义要核查的前提和属性 | 属性在当前版本已满足或违反 |

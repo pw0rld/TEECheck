@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
@@ -43,6 +44,9 @@ func formalizeContract(cfg RunConfig, state *PlannerState, observed ObservationS
 	var sourceRefs []artifacts.ContractEvidenceRef
 	for _, ref := range c.EvidenceRefs {
 		if ref.Kind == "observation" {
+			if !strings.HasPrefix(ref.Ref, "obs:") {
+				return fail(fmt.Errorf("ToolFact paths and IDs must use evidence kind tool_fact, not observation"))
+			}
 			if !observed.Observed(ref.Ref) {
 				return fail(fmt.Errorf("reference %q is not a successful observation in this sample", ref.Ref))
 			}

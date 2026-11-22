@@ -9,7 +9,7 @@ import (
 // deep run is explicit, so ordinary runs remain comparable to the 10m baseline.
 func configuredPlannerBudget(cfg config.Config) planner.Budget {
 	b := planner.NewDefaultBudget()
-	if cfg.PlannerWallClock > 0 {
+	if cfg.PlannerWallClockExplicit || cfg.PlannerWallClock > 0 {
 		b.WallClock = cfg.PlannerWallClock
 	}
 	if cfg.PlannerMaxTokensExplicit || cfg.PlannerMaxTokens > 0 {

@@ -46,9 +46,13 @@ func tryOpenAuditLead(
 	observations ObservationSet,
 	payload OpenAuditLeadPayload,
 ) (artifacts.AuditLead, actions.ActionResult) {
+	return tryOpenAuditLeadWithPrescan(recon, observations, payload, false)
+}
+
+func tryOpenAuditLeadWithPrescan(recon *ReconState, observations ObservationSet, payload OpenAuditLeadPayload, targetedSourceRead bool) (artifacts.AuditLead, actions.ActionResult) {
 	var problems []string
 
-	if !recon.AllowLead() {
+	if !recon.AllowLead() && !targetedSourceRead {
 		problems = append(problems,
 			"reconnaissance is not complete, so there is not yet enough of this project "+
 				"in view to say which question matters. Still needed:\n"+recon.Unmet())
@@ -66,7 +70,7 @@ func tryOpenAuditLead(
 	}
 	var unseen []string
 	for _, id := range payload.TargetSymbolIDs {
-		if !recon.SawSymbol(id) {
+		if !recon.SawSymbol(id) && !targetedSourceRead {
 			unseen = append(unseen, string(id))
 		}
 	}

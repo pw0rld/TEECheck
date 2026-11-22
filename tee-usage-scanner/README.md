@@ -41,6 +41,13 @@ Planner cumulative token limits can be configured independently with
 `--planner-max-investigation-tokens`. Set all three to `0` to disable those
 limits while retaining per-call model, round and wall-clock limits; see
 [HARNESS.md](docs/HARNESS.md#默认预算与资源).
+An explicit `--planner-wall-clock=0` also disables the Planner's pass clock;
+omitting it keeps the 10m default and individual request timeouts still apply.
+
+With a ready CodeQL database, an L2 batch entry-to-sink prescan supplies up to
+10 neutral path clues to the Planner before its first request. It shares the
+existing database, preserves immutable ToolFacts, and never directly promotes
+a finding. Details and coverage limits are in [HARNESS.md](docs/HARNESS.md).
 
 For a local fixture, set `TEECHECK_REPO_URL` and `TEECHECK_COMMIT` to identify the
 upstream source revision. `--repo-url` and `--commit` override these environment
@@ -54,6 +61,7 @@ source acquisition and common revision/root
   -> preprocess
   -> program index (CodeQL when available)
   -> project map (repository, module, and function cards)
+  -> one batch entry-to-sink taint prescan (neutral ToolFacts and navigation clues)
   -> optional legacy architecture/invariant stages
   -> deterministic supported fact queries
   -> planner reconnaissance -> source-grounded investigation

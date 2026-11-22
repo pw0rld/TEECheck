@@ -17,6 +17,26 @@ CodeQL 生成 `RepoFacts` 和中性 `ProjectMapV0`：仓库、模块与函数卡
 `EntrySurfaces`。入口特征包括外部链接函数、函数指针分发表目标、缓冲区/长度形参等。
 这些是浏览优先级线索，不能直接视为外部可达或安全结论。索引不完整时记录 coverage gap。
 
+`project_map` 后的 `taint_prescan` 阶段只在同一 CodeQL 数据库已就绪时运行一次静态
+`codeql/trustir/cpp/flow/EntrySurfaceToSink.ql`，不按入口循环调用 `trace_taint`，也不建第二个库。
+查询覆盖函数指针全局初始化、带指针及整型形参的外部接口，到内存操作、数组偏移和指针
+算术解引用的可能数据流；这些结构信号不证明输入不可信或缺少语义守卫。
+
+完整去重 witness 写为 `02_tool_facts/trustir/taint-prescan-<hash>.json`
+（`cpp.taint.prescan`）。排序按源函数、汇点函数和位置合并线索，并让同一源函数、汇点文件
+最多占两个摘要候选；跨函数/文件、分发表来源和内存操作优先，同文件底层密码库的数组
+查表降权但不删除证据。Planner 收到最多 10 条、每条最多 10 跳、合计至多 12 KiB 的摘要。
+这是已返回 witness 的排序，不是全程序最短路径或穷尽分析。
+
+预扫默认独立超时 5m，沿用 `TEECHECK_CODEQL_ANALYZE_THREADS` 和 `TEECHECK_CODEQL_RAM`。
+没有就绪数据库、查询失败或路径为空都保留覆盖说明，主流程继续。预扫不能直接生成
+CasePack 或 Finding；模型仍须读入口及汇点源码，再开 Lead、挂载真实 fact_ref 并形式化契约。
+摘要不获得源码阅读或广度侦察覆盖信用。多次采样和 Resume 复用同一份
+`01_context/taint_prescan.json` 上下文，恢复时校验引用，不重复执行预扫。
+
+已验证的预扫线索允许定向开 Lead：必须引用该事实，目标位于事实路径，且入口与汇点的
+真实源码已经读过。此入口不算作广度侦察达标，也不放宽零 Lead `done` 的全仓覆盖门控。
+
 ## Planner 的两个 pass
 
 Pass A 先理解项目，浏览入口和源码并打开 `AuditLead`；Pass B 注入紧凑 TWE 契约索引，
@@ -26,7 +46,7 @@ Pass A 先理解项目，浏览入口和源码并打开 `AuditLead`；Pass B 注
 Planner 的主要循环是：
 
 ```text
-list_entry_surfaces / 函数卡片
+PRE-SCANNED TAINT CANDIDATES / list_entry_surfaces / 函数卡片
   → read_file / 调用关系 / trace_taint
   → open_audit_lead
   → update_lead（源码、工具证据、下一步问题）
@@ -67,7 +87,7 @@ scope、内容哈希和 coverage gaps。引擎每个 alert 的路径数有上限
 | `--planner-max-recon-tokens` | 100,000 | Pass A 输入和输出合计；0 关闭本阶段上限 |
 | `--planner-max-investigation-tokens` | 140,000 | Pass B 输入和输出合计，内含 20,000 收口预留；0 关闭本阶段上限 |
 | 侦察 / 调查轮数 | 10 / 8 | 侦察额度追加于调查额度 |
-| `--planner-wall-clock` | 10m | 每个 pass 的上限 |
+| `--planner-wall-clock` | 10m | 每个 pass 的上限；显式 0 关闭总墙钟限制 |
 | 普通工具超时 | 30s | 不适用于独立污点查询 |
 | `--taint-query-timeout` | 5m | 同时受剩余墙钟预算约束 |
 | `--max-taint-queries` | 8 | 未缓存调用；0 表示无单独限次 |
@@ -85,6 +105,8 @@ teecheck run <input> --llm-model glm-5.3 --llm-stream \
 
 这不会关闭角色配置的单次 `max_output_tokens`（或 `--llm-max-tokens`）、轮数、墙钟和
 工具配额。已用 token 仍照常统计；解析后的上限写入 manifest 并参与 resume 一致性校验。
+需要关闭 Planner 总墙钟限制时可显式传 `--planner-wall-clock=0`；省略仍使用 10m。
+轮数、各次 HTTP 请求超时及预扫的独立超时仍然生效。
 
 开启累计上限时，输入采用近似估算：ASCII 约 3 字节/token，非 ASCII 按字符分别估算，
 再加消息封装余量。它不是精确 tokenizer，也不保证严格上界；实际费用与超额消耗仍按

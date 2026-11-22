@@ -98,6 +98,7 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 		"preprocess",
 		"repo_index",
 		"project_map",
+		"taint_prescan",
 		"architecture",
 		"invariants",
 		"l3_planner",

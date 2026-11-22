@@ -29,7 +29,7 @@ type ToolFinding struct {
 // formatter, which is how the message stayed dropped in every one of them at
 // once.
 func FormatToolFact(f ToolFact) string {
-	if f.Operation == TaintTraceOperation {
+	if IsTaintOperation(f.Operation) {
 		return formatTaintFact(f)
 	}
 	var b strings.Builder

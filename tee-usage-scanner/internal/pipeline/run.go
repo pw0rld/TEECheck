@@ -123,6 +123,7 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	}
 	var fetch repofetch.FetchResult
 	var resumeCP *planner.Checkpoint
+	var prescan *planner.PreScannedTaint
 	var unlock func()
 	defer func() {
 		if unlock != nil {
@@ -143,6 +144,10 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 			return cfg.RunDir, err
 		}
 		runDir = cfg.RunDir
+		prescan, err = loadPrescanContext(runDir)
+		if err != nil {
+			return runDir, err
+		}
 		// Inspect tool identity before changing any prior artifacts.
 		probe := codeql.New()
 		version := "unavailable"
@@ -430,6 +435,15 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 			return runDir, fmt.Errorf("project map: %w", err)
 		}
 
+		// One static, neutral entry-to-sink query before any Planner round.
+		// Its witnesses guide source inspection; no CasePack is promoted here.
+		_ = stage("taint_prescan", func() error {
+			prescanEngine := codeql.New()
+			prescanEngine.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: "taint-prescan"})
+			prescan = runEntryTaintPrescan(stageCfg, prescanEngine, codeDB, runDir, srcRoot)
+			return nil
+		})
+
 		// The old pre-investigation models have no source evidence in their
 		// prompts. Keep them explicitly opt-in during migration; ordinary runs
 		// proceed from the program map to grounded investigation instead.
@@ -461,7 +475,7 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(forRoleConfig(planner.DefaultPlannerAgentID), clients.forRole("planner"), codeDB, srcRoot, runDir, rec, blobs, exec)
+		return runL3Planner(forRoleConfig(planner.DefaultPlannerAgentID), clients.forRole("planner"), codeDB, srcRoot, runDir, rec, blobs, exec, prescan)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -649,7 +663,7 @@ func truncate(s string, n int) string {
 // Invoked unconditionally by pipeline.Run (M4: planner is the
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
-func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor) error {
+func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor, prescans ...*planner.PreScannedTaint) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -704,15 +718,18 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 
 	fmt.Printf("Registered planner actions: %v\n", registry.Names())
 
-	// Nothing is prefetched for the planner. The pipeline used to run the
-	// fact-layer queries the run's invariants called for and hand the
-	// resulting refs to planner.Run, which unioned them into every
-	// investigation it reported — so a lead the model reached on its own
-	// still shipped evidence the old invariant had selected, and the same
-	// facts were attached by path match to every Case Pack downstream.
-	// An unevidenced anchor is what that chain produces. The Planner now cites only
-	// what it executed itself; §6 says a lead's reasons must reference facts
-	// the Planner has seen, and a prefetched fact is not one of them.
+	// Only the explicitly observed, neutral L2 prescan is shared with all
+	// samples. It is not attached to every investigation or promoted to cases.
+	// The Planner must inspect source and deliberately cite the supplied fact.
+	var prescan *planner.PreScannedTaint
+	if len(prescans) > 0 {
+		prescan = prescans[0]
+	} else {
+		prescan, err = loadPrescanContext(runDir)
+		if err != nil {
+			return fmt.Errorf("load entry taint prescan: %w", err)
+		}
+	}
 
 	samples := cfg.Samples
 	if samples <= 0 {
@@ -821,6 +838,7 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 				Events:          rec,
 				Blobs:           blobs,
 				Model:           cfg.LLMModel,
+				PreScannedTaint: prescan,
 				MaxOutputTokens: cfg.LLMMaxTokens,
 				ReasoningEffort: cfg.LLMReasoningEffort,
 				Executor:        exec,

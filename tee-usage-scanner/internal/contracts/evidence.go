@@ -117,6 +117,9 @@ func readToolFact(ref string, ctx BindingContext) (artifacts.ToolFact, error) {
 	if err = artifacts.ValidateToolFactContent(fact); err != nil {
 		return fact, err
 	}
+	if artifacts.IsTaintOperation(fact.Operation) && (fact.Status != "success" || fact.Scope == nil) {
+		return fact, fmt.Errorf("taint evidence must name a successful scope-bound ToolFact")
+	}
 	if fact.Scope != nil {
 		if err = sameScope(*fact.Scope, ctx.Scope); err != nil {
 			return fact, err

@@ -12,8 +12,11 @@ import (
 func formatTaintFact(f ToolFact) string {
 	const maxBytes = 8192
 	var meta struct {
-		TotalPaths      int      `json:"total_paths"`
-		BarriersApplied []string `json:"barriers_applied"`
+		TotalPaths       int      `json:"total_paths"`
+		BarriersApplied  []string `json:"barriers_applied"`
+		RankedCandidates []struct {
+			PathIndex *int `json:"path_index"`
+		} `json:"ranked_candidates"`
 	}
 	_ = json.Unmarshal(f.Result, &meta)
 	var b strings.Builder
@@ -26,15 +29,35 @@ func formatTaintFact(f ToolFact) string {
 		fmt.Fprintf(&b, "Tool error: %s\n", reviewText(f.Error, 512))
 	}
 	shown := 0
-	for i, path := range f.Paths {
+	maxNodes := 12
+	if f.Operation == TaintPrescanOperation {
+		maxNodes = 10
+	}
+	paths := f.Paths
+	if f.Operation == TaintPrescanOperation && len(meta.RankedCandidates) > 0 {
+		paths = nil
+		seen := map[int]bool{}
+		for _, candidate := range meta.RankedCandidates {
+			if candidate.PathIndex == nil {
+				continue
+			}
+			index := *candidate.PathIndex
+			if index < 0 || index >= len(f.Paths) || seen[index] {
+				continue
+			}
+			seen[index] = true
+			paths = append(paths, f.Paths[index])
+		}
+	}
+	for i, path := range paths {
 		if i >= 5 {
 			break
 		}
 		var p strings.Builder
 		fmt.Fprintf(&p, "Witness %d (%d nodes):\n", i+1, len(path))
 		for j, node := range path {
-			if j >= 12 {
-				fmt.Fprintf(&p, "  ... %d additional nodes in artifact\n", len(path)-12)
+			if j >= maxNodes {
+				fmt.Fprintf(&p, "  ... %d additional nodes in artifact\n", len(path)-maxNodes)
 				break
 			}
 			fmt.Fprintf(&p, "  [%d] %s:%d %s :: %s\n", j, reviewText(node.Location.Path, 300), node.Location.StartLine, reviewText(node.Location.Symbol, 120), reviewText(node.Message, 180))

@@ -69,8 +69,8 @@ var actionArgSchemas = map[string]string{
 	"tree_sitter_outline":   `{"path": string (a source file: .c/.h/.rs/...)}`,
 	"reverse_trace":         `{"file": string (a source file where the symbol is defined), "symbol": string (function name), "depth": int (1-3, default 1)} — walks backward through source files, returns a tree of who calls the symbol and who calls THOSE callers up to depth levels; use this to ask "who calls X?" in one step instead of running many ripgreps`,
 	"repomix_summarize":     `{"path": string (repo-relative), "compress": bool (optional)}`,
-	"open_audit_lead":       `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (the ref=obs:... printed beside each observation that showed it)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened, and every reason must cite an observation ref, or the lead is refused`,
-	ActionUpdateLead:        `{"lead_id": string, "add_notes": [{"fact_ref": string, "summary": string (at most 240 UTF-8 bytes)}], "add_taint_fact_refs": [string (optional, successful cpp.taint.trace fact_ref from this sample)], "add_ruled_out": [string]} — retain important evidence across rounds; refs must be successful observations or executed ToolFacts from this sample. Summaries and ruled-out hypotheses remain your interpretations, not verified verdicts`,
+	"open_audit_lead":       `{"security_question": string, "target_symbol_ids": [string (symbol_ids you observed; in tree_only mode a successfully read path or path::symbol is accepted)], "reason": [string], "reason_fact_refs": [string (a successful ref=obs:... or the presented cpp.taint.prescan fact_ref after reading its entry and sink source)], "requested_context": [string (optional, e.g. "body:f", "callers:f", "def-use:a.x->b.y")], "uncertainty": "low"|"medium"|"high", "related_twes": [string (optional — leave it out; a question no catalog names is not a lesser question)]}` + ` — raise a question about this project's own code. Every target must be a definition you opened. Cite successful observation refs, or a presented prescan fact_ref with prior endpoint source reads; neither an unobserved path nor a bare entry signal grounds a lead`,
+	ActionUpdateLead:        `{"lead_id": string, "add_notes": [{"fact_ref": string, "summary": string (at most 240 UTF-8 bytes)}], "add_taint_fact_refs": [string (optional, successful cpp.taint.trace or cpp.taint.prescan fact_ref observed in this sample)], "add_ruled_out": [string]} — retain important evidence across rounds; refs must be successful observations or executed/presented ToolFacts from this sample. Summaries and ruled-out hypotheses remain your interpretations, not verified verdicts`,
 	ActionFormalizeContract: `{"lead_id": string, "contract": CaseInvariantV2 (see CASE CONTRACTS)} — bind a precise obligation to source you have read now. Correct any returned validation errors in a later round. Accepted contracts persist without being repeated in done`,
 	ActionCloseLead:         `{"lead_id": string, "reason": string, "fact_refs": [string]} — archive a question with at least one current-sample evidence reference. Closing is an investigation decision, not proof of safety and does not discard accepted contracts`,
 	"twe_playbook_detail":   `{"twe_id": string (e.g. "TWE-STATE-001")} — returns the FULL investigation method for one TWE: attacker capabilities, investigation steps, required evidence, common defenses, and common false positives. Your system prompt carries only the brief tier; pull the detail for any TWE you are actually investigating`,
@@ -113,6 +113,7 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 		b.WriteString("  - two implementations of the same thing that differ in a way nothing explains;\n")
 		b.WriteString("  - functions that are each fine and whose combined lifecycle is not.\n\n")
 		b.WriteString("These are directions to think in, not rules to match. When you can state one as a question about specific definitions, and cite the observations that raised it, call open_audit_lead.\n\n")
+		b.WriteString("If PRE-SCANNED TAINT CANDIDATES are present, prioritize their entry and sink files: use read_file on both endpoints, inspect length/bounds/permission checks and the critical hops, then open_audit_lead as soon as source supports a concrete question. The presented prescan fact_ref may ground that lead, but neither the path nor an entry signal proves external control or a vulnerability. A source-read targeted lead does not count as broad repository coverage. In Pass B attach the fact_ref with update_lead.add_taint_fact_refs and formalize_contract. Zero paths is not proof of safety.\n\n")
 	}
 
 	b.WriteString("CRITICAL RULES:\n")
@@ -207,6 +208,9 @@ const scrollbackBytes = 1500
 
 func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget, avoidPaths []string, reconnaissance ...*ReconState) string {
 	var b strings.Builder
+	if len(state.Rounds) == 0 {
+		b.WriteString(preScannedTaintBlock(state.PreScannedTaint))
+	}
 
 	if len(avoidPaths) > 0 {
 		b.WriteString("=== ALREADY COVERED BY PREVIOUS PASSES (must avoid) ===\n")

@@ -97,6 +97,8 @@ type RunConfig struct {
 	// Resolved role output limit; zero preserves the global per-call default.
 	MaxOutputTokens int
 	ReasoningEffort string
+	// PreScannedTaint is validated neutral L2 evidence, not source-read credit.
+	PreScannedTaint *PreScannedTaint
 
 	// Executor is the chokepoint for subprocess-class actions
 	// (currently ripgrep; future: semgrep, codeql, ...). It is
@@ -186,6 +188,18 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	}
 
 	minimumOutput := minimumRequestOutput(cfg)
+	prescan, prescanFact, prescanErr := validatePreScannedTaint(cfg)
+	if prescanErr != nil {
+		if cfg.Resume {
+			return failedResult(cfg, prescanErr.Error(), "resume_error")
+		}
+		gaps := []string{"Entry taint prescan evidence was not injected: " + prescanErr.Error()}
+		if cfg.PreScannedTaint != nil {
+			gaps = unionStrings(gaps, cfg.PreScannedTaint.CoverageGaps)
+		}
+		prescan = &PreScannedTaint{CoverageGaps: gaps}
+	}
+	cfg.PreScannedTaint = prescan
 
 	var resumed *Checkpoint
 	if cfg.Resume {
@@ -323,6 +337,12 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 		if err != nil {
 			return failedResult(cfg, err.Error(), "checkpoint_error")
 		}
+	}
+	// L2 evidence is explicitly presented, never credited as read_file source.
+	state.PreScannedTaint = cfg.PreScannedTaint
+	if cfg.PreScannedTaint != nil {
+		coverageGaps = unionStrings(coverageGaps, cfg.PreScannedTaint.CoverageGaps)
+		seedPreScannedTaint(cfg.PreScannedTaint, prescanFact, &observations, &executedToolFactRefs)
 	}
 	saveCommitted := func() error {
 		if !checkpointEnabled {
@@ -808,7 +828,7 @@ loop:
 				result = actions.ActionResult{Name: act.Name, Error: "final round permits only done; exploration would spend the convergence reserve"}
 			case act.Name == ActionOpenAuditLead:
 				var lead artifacts.AuditLead
-				lead, result = openLead(cfg, recon, observations, act.Args, roundNum)
+				lead, result = openLead(cfg, recon, observations, act.Args, roundNum, state)
 				if result.OK {
 					leads = append(leads, lead)
 					state.AuditLeads = append(state.AuditLeads, lead)
@@ -1240,7 +1260,16 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		// Keep the namespaces separate before filesystem validation and retain
 		// a diagnostic so an invalid citation cannot disappear silently.
 		var keptRefs []string
-		for _, ref := range unionStrings(wire.ToolFactRefs, executedToolFactRefs) {
+		var automaticRefs []string
+		for _, ref := range executedToolFactRefs {
+			// A presented batch prescan is a clue, not automatically evidence
+			// for every unrelated investigation. Attach it only when cited or
+			// explicitly bound to the investigation's lead/contract.
+			if cfg.PreScannedTaint == nil || ref != cfg.PreScannedTaint.FactRef {
+				automaticRefs = append(automaticRefs, ref)
+			}
+		}
+		for _, ref := range unionStrings(wire.ToolFactRefs, automaticRefs) {
 			if strings.HasPrefix(strings.TrimSpace(ref), "obs:") {
 				errs = append(errs, artifacts.RoundError{Round: -1, Action: fmt.Sprintf("done.investigations[%d].tool_fact_refs", i), Error: fmt.Sprintf("observation reference %q is not a ToolFact file; use reason_fact_refs for observations", ref)})
 				continue

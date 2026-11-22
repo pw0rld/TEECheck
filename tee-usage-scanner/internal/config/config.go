@@ -61,8 +61,9 @@ type Config struct {
 	// different ones; the union is deduped and fed to the 4-agent
 	// downstream pipeline as a single case set.
 	Samples int
-	// Zero uses the Planner's default wall-clock allowance for each pass.
-	PlannerWallClock time.Duration
+	// An omitted zero uses the default; an explicit zero disables the pass clock.
+	PlannerWallClock         time.Duration
+	PlannerWallClockExplicit bool
 	// Explicit zero disables only the corresponding token limit. An omitted
 	// programmatic value retains the default so older Config literals work.
 	PlannerMaxTokens                      int
@@ -562,7 +563,7 @@ func parseRun(args []string) (Config, error) {
 		CodeQLCacheDir:                firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
-	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")
+	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m); explicit 0 disables the pass clock")
 	fs.IntVar(&cfg.PlannerMaxTokens, "planner-max-tokens", cfg.PlannerMaxTokens, "Maximum input plus output tokens per planner pass; 0 disables the aggregate token cap")
 	fs.IntVar(&cfg.PlannerMaxReconTokens, "planner-max-recon-tokens", cfg.PlannerMaxReconTokens, "Maximum reconnaissance input plus output tokens per planner pass; 0 disables this phase token cap")
 	fs.IntVar(&cfg.PlannerMaxInvestigationTokens, "planner-max-investigation-tokens", cfg.PlannerMaxInvestigationTokens, "Maximum investigation input plus output tokens per planner pass; 0 disables this phase token cap")
@@ -632,6 +633,9 @@ func parseRun(args []string) (Config, error) {
 		if f.Name == "max-taint-queries" {
 			cfg.MaxTaintQueriesExplicit = true
 		}
+		if f.Name == "planner-wall-clock" {
+			cfg.PlannerWallClockExplicit = true
+		}
 		switch f.Name {
 		case "planner-max-tokens":
 			cfg.PlannerMaxTokensExplicit = true
@@ -660,16 +664,7 @@ func parseRun(args []string) (Config, error) {
 		return Config{}, fmt.Errorf("--taint-query-timeout must be positive")
 	}
 	if cfg.PlannerWallClock < 0 {
-		return Config{}, fmt.Errorf("--planner-wall-clock must be positive")
-	}
-	var plannerWallClockSet bool
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "planner-wall-clock" {
-			plannerWallClockSet = true
-		}
-	})
-	if plannerWallClockSet && cfg.PlannerWallClock == 0 {
-		return Config{}, fmt.Errorf("--planner-wall-clock must be positive")
+		return Config{}, fmt.Errorf("--planner-wall-clock must be zero or positive")
 	}
 	if os.Getenv("TEECHECK_LLM_TIMEOUT_SECONDS") != "" {
 		cfg.LLMTimeoutExplicit = true

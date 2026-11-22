@@ -55,8 +55,8 @@ func updateLead(cfg RunConfig, state *PlannerState, observed ObservationSet, exe
 		if err != nil {
 			return leadActionFailure(ActionUpdateLead, err)
 		}
-		if fact == nil || fact.Operation != artifacts.TaintTraceOperation {
-			return leadActionFailure(ActionUpdateLead, fmt.Errorf("taint reference must name a successful cpp.taint.trace ToolFact from this sample"))
+		if fact == nil || !artifacts.IsTaintOperation(fact.Operation) {
+			return leadActionFailure(ActionUpdateLead, fmt.Errorf("taint reference must name a successful cpp.taint.trace or cpp.taint.prescan ToolFact observed in this sample"))
 		}
 		lead.TaintFactRefs = unionStrings(lead.TaintFactRefs, []string{path})
 	}
@@ -199,6 +199,12 @@ func resolveLeadFactRef(cfg RunConfig, observed ObservationSet, executed []strin
 		var fact artifacts.ToolFact
 		if err := runfs.ReadJSON(full, &fact); err != nil || fact.Status != "success" {
 			continue
+		}
+		if fact.Operation == artifacts.TaintPrescanOperation {
+			context, verified, err := validatePreScannedTaint(cfg)
+			if err != nil || context == nil || verified == nil || !observed.Observed(context.FactRef) || filepath.Clean(full) != prescanFactPath(cfg) || fact.ContentSHA256 != verified.ContentSHA256 {
+				continue
+			}
 		}
 		if ref == path || (fact.FactID != "" && ref == fact.FactID) {
 			return &fact, full, nil

@@ -315,7 +315,8 @@ func checkpointConfigHash(cfg RunConfig) string {
 		MaxActions      int
 		AvoidPaths      []string
 		TWE             string
-	}{cfg.Profile, b, cfg.Model, cfg.MaxOutputTokens, cfg.ReasoningEffort, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext})
+		PreScannedTaint *PreScannedTaint
+	}{cfg.Profile, b, cfg.Model, cfg.MaxOutputTokens, cfg.ReasoningEffort, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext, cfg.PreScannedTaint})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
