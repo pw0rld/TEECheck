@@ -25,6 +25,7 @@ type LLMRoleOverride struct {
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 	Temperature     *float64 `json:"temperature,omitempty"`
 	ReasoningEffort *string  `json:"reasoning_effort,omitempty"`
+	Stream          *bool    `json:"stream,omitempty"`
 }
 
 var credentialEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -95,6 +96,9 @@ func (cfg Config) ResolveRoleConfigs() (map[string]Config, error) {
 		if current.LLMProvider != LLMProviderOpenAI && current.LLMProvider != LLMProviderGLM && current.LLMProvider != LLMProviderDeepSeek {
 			return nil, fmt.Errorf("%s role has unsupported provider %q", role, current.LLMProvider)
 		}
+		if err := validateStreamConfig(current); err != nil {
+			return nil, fmt.Errorf("%s role: %w", role, err)
+		}
 		resolved[role] = current
 	}
 	return resolved, nil
@@ -112,6 +116,9 @@ func applyRoleOverride(cfg Config, override LLMRoleOverride) (Config, error) {
 	}
 	if override.Transport != "" {
 		cfg.LLMTransport = override.Transport
+	}
+	if override.Stream != nil {
+		cfg.LLMStream = *override.Stream
 	}
 	if override.ReasoningEffort != nil {
 		cfg.LLMReasoningEffort = *override.ReasoningEffort

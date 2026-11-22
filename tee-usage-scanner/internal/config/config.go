@@ -43,6 +43,7 @@ type Config struct {
 	LLMMaxTokensExplicit  bool
 	llmMaxTokensDefaulted bool
 	LLMTemp               float64
+	LLMStream             bool
 	RoleConfigFile        string
 	RoleOverrides         map[string]LLMRoleOverride
 	LLMAPIKeyEnv          string
@@ -282,6 +283,7 @@ func parseExpert(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the expert agent")
+	registerStreamFlag(fs, &cfg)
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the expert agent")
 	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the expert agent")
@@ -291,6 +293,9 @@ func parseExpert(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("expert requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -314,6 +319,7 @@ func parseChallenge(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the challenger agent")
+	registerStreamFlag(fs, &cfg)
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the challenger agent")
 	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the challenger agent")
@@ -323,6 +329,9 @@ func parseChallenge(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("challenge requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -347,6 +356,7 @@ func parseVerifier(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the verifier agent")
+	registerStreamFlag(fs, &cfg)
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the verifier agent")
 	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the verifier agent")
@@ -357,6 +367,9 @@ func parseVerifier(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("verifier requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -382,6 +395,7 @@ func parseArbiter(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name for the arbiter agent")
+	registerStreamFlag(fs, &cfg)
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds for the arbiter agent")
 	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Completion token budget per LLM call")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature for the arbiter agent")
@@ -391,6 +405,9 @@ func parseArbiter(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("arbiter requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -420,6 +437,7 @@ func parseCurator(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "OpenAI-compatible base URL; glm/deepseek presets fill this automatically")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "OpenAI-compatible API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Model name")
+	registerStreamFlag(fs, &cfg)
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "HTTP timeout in seconds")
 	fs.Float64Var(&cfg.LLMTemp, "llm-temperature", cfg.LLMTemp, "Sampling temperature")
 	if err := fs.Parse(args); err != nil {
@@ -428,6 +446,9 @@ func parseCurator(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("curator requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -450,6 +471,7 @@ func parseReport(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	registerStreamFlag(fs, &cfg)
 	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport: chat_completions or responses")
 	fs.StringVar(&cfg.LLMReasoningEffort, "llm-reasoning-effort", cfg.LLMReasoningEffort, "Reasoning effort for Responses models")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
@@ -459,6 +481,9 @@ func parseReport(args []string) (Config, error) {
 	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
 	if cfg.RunDir == "" {
 		return Config{}, fmt.Errorf("report requires --run-dir")
+	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -553,6 +578,7 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "LLM base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "LLM API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "LLM model name")
+	registerStreamFlag(fs, &cfg)
 	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport: chat_completions or responses")
 	fs.StringVar(&cfg.LLMReasoningEffort, "llm-reasoning-effort", cfg.LLMReasoningEffort, "Reasoning effort for Responses models")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "LLM timeout")
@@ -672,6 +698,9 @@ func validateProviderConfig(cfg Config, context string) error {
 	if cfg.LLMTransport == LLMTransportResponses && cfg.LLMProvider != LLMProviderOpenAI {
 		return fmt.Errorf("%s transport responses requires provider openai", context)
 	}
+	if err := validateStreamConfig(cfg); err != nil {
+		return fmt.Errorf("%s: %w", context, err)
+	}
 	if cfg.LLMReasoningEffort != "" {
 		deepSeekChat := cfg.LLMProvider == LLMProviderDeepSeek && cfg.LLMTransport == LLMTransportChatCompletions && DeepSeekSupportsThinkingControl(cfg.LLMModel)
 		if cfg.LLMTransport != LLMTransportResponses && !deepSeekChat {
@@ -769,6 +798,31 @@ func (r redactedKey) String() string { return "" }
 func (r redactedKey) Set(v string) error {
 	if r.p != nil {
 		*r.p = v
+	}
+	return nil
+}
+
+// registerStreamFlag opts in without changing existing endpoint behavior.
+func registerStreamFlag(fs *flag.FlagSet, cfg *Config) {
+	cfg.LLMStream = envBool(false, "TEECHECK_LLM_STREAM")
+	fs.BoolVar(&cfg.LLMStream, "llm-stream", cfg.LLMStream, "Use SSE for OpenAI-compatible chat_completions; request final token usage")
+}
+
+func envBool(defaultValue bool, keys ...string) bool {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			if parsed, err := strconv.ParseBool(value); err == nil {
+				return parsed
+			}
+		}
+	}
+	return defaultValue
+}
+
+func validateStreamConfig(cfg Config) error {
+	if cfg.LLMStream && (cfg.LLMTransport != LLMTransportChatCompletions ||
+		(cfg.LLMProvider != LLMProviderOpenAI && cfg.LLMProvider != LLMProviderDeepSeek)) {
+		return fmt.Errorf("llm streaming requires an openai/deepseek provider with chat_completions transport")
 	}
 	return nil
 }

@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
+const defaultRetryAttempts = 5
+
 // RetryConfig controls the behavior of NewRetryingClient.
 type RetryConfig struct {
 	// MaxAttempts is the total number of attempts including the first
-	// one. Must be >= 1. Defaults to 3 if zero.
+	// one. Must be >= 1. Defaults to 5 if zero.
 	MaxAttempts int
 	// BaseDelay is the initial backoff duration before the first retry.
 	// Defaults to 5 seconds if zero.
@@ -32,14 +35,14 @@ type RetryConfig struct {
 // transient-error semantics. Non-transient errors (4xx except 429, policy refusals,
 // parse errors, context cancellation) short-circuit immediately. Transient errors
 // (429, rate limiting, 5xx, connection resets, i/o timeouts, request deadline exceeded)
-// retry with exponential backoff capped at MaxDelay.
+// retry with exponential backoff, 0–10% downward jitter, and a MaxDelay cap.
 //
 // This is the defense against GLM's intermittent 5xx responses and
 // network hiccups observed in v3 and v11 dogfood runs, where a single
 // transient failure killed the entire 8-round audit.
 func NewRetryingClient(inner Client, cfg RetryConfig) Client {
 	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 3
+		cfg.MaxAttempts = defaultRetryAttempts
 	}
 	if cfg.BaseDelay <= 0 {
 		cfg.BaseDelay = 5 * time.Second
@@ -57,7 +60,7 @@ type retryingClient struct {
 
 func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	// Refuse an impossible request before the first attempt, not after the
-	// third. An oversized prompt fails as a timeout waiting for response
+	// fifth. An oversized prompt fails as a timeout waiting for response
 	// headers, which IsTransient cannot tell from a network fault — so it
 	// gets retried, at full timeout each time, and the record blames the
 	// provider. See MaxRequestBytes.
@@ -66,11 +69,16 @@ func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (Gen
 	}
 	var lastErr error
 	var lastResponse GenerateResponse
+	var knownUsage Usage
 	for attempt := 1; attempt <= r.cfg.MaxAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return lastResponse, ctx.Err()
 		}
 		resp, err := r.inner.Generate(ctx, req)
+		// Failed streams can still carry a final usage chunk. Keep all known
+		// attempt costs while retaining the last attempt's wire evidence.
+		knownUsage = addKnownUsage(knownUsage, resp.Usage)
+		resp.Usage = knownUsage
 		if err == nil {
 			return resp, nil
 		}
@@ -82,31 +90,71 @@ func (r *retryingClient) Generate(ctx context.Context, req GenerateRequest) (Gen
 		if attempt == r.cfg.MaxAttempts {
 			break
 		}
-		wait := backoff(r.cfg.BaseDelay, r.cfg.MaxDelay, attempt)
+		wait := retryDelay(r.cfg.BaseDelay, r.cfg.MaxDelay, attempt)
 		if r.cfg.Logger != nil {
 			r.cfg.Logger(attempt, err, wait)
 		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return lastResponse, ctx.Err()
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 	return lastResponse, fmt.Errorf("llm retry exhausted after %d attempts: %w", r.cfg.MaxAttempts, lastErr)
+}
+
+func addKnownUsage(total, usage Usage) Usage {
+	if usage.PromptTokens > 0 {
+		total.PromptTokens += usage.PromptTokens
+	}
+	if usage.CompletionTokens > 0 {
+		total.CompletionTokens += usage.CompletionTokens
+	}
+	if usage.TotalTokens > 0 {
+		total.TotalTokens += usage.TotalTokens
+	} else {
+		// Derive a missing total only from measured component counts, never
+		// estimate the unreported cost of a failed attempt.
+		if usage.PromptTokens > 0 {
+			total.TotalTokens += usage.PromptTokens
+		}
+		if usage.CompletionTokens > 0 {
+			total.TotalTokens += usage.CompletionTokens
+		}
+	}
+	return total
 }
 
 // backoff returns the wait duration for the given attempt number
 // (1-indexed). attempt=1 returns base; attempt=2 returns 3*base;
 // attempt=3 returns 9*base; and so on, capped at max.
 func backoff(base, max time.Duration, attempt int) time.Duration {
+	if base >= max {
+		return max
+	}
 	d := base
 	for i := 1; i < attempt; i++ {
-		d *= 3
-		if d > max {
+		// Compare before multiplying to avoid duration overflow.
+		if d > max/3 {
 			return max
 		}
+		d *= 3
 	}
 	return d
+}
+
+// Small downward jitter spreads synchronized retries without exceeding either
+// the configured cap or the existing exponential schedule. Nanosecond delays
+// used by tests remain valid when the jitter window rounds down to zero.
+func retryDelay(base, max time.Duration, attempt int) time.Duration {
+	delay := backoff(base, max, attempt)
+	window := delay / 10
+	if window <= 0 {
+		return delay
+	}
+	return delay - time.Duration(rand.Int64N(int64(window)+1))
 }
 
 // IsPolicyRefusal identifies explicit upstream content/safety policy refusal

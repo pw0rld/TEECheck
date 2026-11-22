@@ -23,7 +23,7 @@ func NewClient(cfg config.Config) Client {
 		inner = NewOpenAIClient(cfg)
 	}
 	return NewRetryingClient(inner, RetryConfig{
-		MaxAttempts: 3,
+		MaxAttempts: defaultRetryAttempts,
 		BaseDelay:   5 * time.Second,
 		MaxDelay:    90 * time.Second,
 		Logger: func(attempt int, err error, wait time.Duration) {

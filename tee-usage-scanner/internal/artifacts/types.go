@@ -73,6 +73,7 @@ type LLMConfiguration struct {
 	MaxOutputTokens int     `json:"max_output_tokens,omitempty"`
 	Temperature     float64 `json:"temperature"`
 	APIKeyPresent   bool    `json:"api_key_present"`
+	Stream          bool    `json:"stream,omitempty"`
 }
 
 type PlannerLimits struct {

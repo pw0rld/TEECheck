@@ -18,6 +18,7 @@ func parseVerifyContract(args []string) (Config, error) {
 	fs.StringVar(&cfg.LLMBaseURL, "llm-base-url", cfg.LLMBaseURL, "Optional Verifier API base URL")
 	fs.Var(redactedKey{&cfg.LLMAPIKey}, "llm-api-key", "Optional Verifier API key")
 	fs.StringVar(&cfg.LLMModel, "llm-model", cfg.LLMModel, "Optional Verifier model")
+	registerStreamFlag(fs, &cfg)
 	fs.StringVar(&cfg.LLMTransport, "llm-transport", cfg.LLMTransport, "OpenAI transport")
 	fs.IntVar(&cfg.LLMTimeoutSec, "llm-timeout-seconds", cfg.LLMTimeoutSec, "Verifier request timeout")
 	fs.IntVar(&cfg.LLMMaxTokens, "llm-max-tokens", cfg.LLMMaxTokens, "Verifier completion budget")
@@ -37,5 +38,9 @@ func parseVerifyContract(args []string) (Config, error) {
 			cfg.LLMTimeoutExplicit = true
 		}
 	})
-	return recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults(), nil
+	cfg = recordLLMExplicitFlags(fs, cfg).WithLLMProviderDefaults()
+	if err := validateStreamConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }

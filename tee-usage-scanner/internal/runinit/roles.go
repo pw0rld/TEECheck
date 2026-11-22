@@ -19,6 +19,7 @@ type RoleLLMSnapshot struct {
 	TimeoutSeconds  int     `json:"timeout_seconds"`
 	MaxOutputTokens int     `json:"max_output_tokens"`
 	Temperature     float64 `json:"temperature"`
+	Stream          bool    `json:"stream,omitempty"`
 	APIKeyPresent   bool    `json:"api_key_present"`
 	APIKeyEnv       string  `json:"api_key_env,omitempty"`
 }
@@ -47,7 +48,7 @@ func RecordRoleConfigurations(runDir string, settings map[string]config.Config) 
 	snapshots := map[string]RoleLLMSnapshot{}
 	for _, role := range config.LLMRoles {
 		cfg := settings[role]
-		snapshots[role] = RoleLLMSnapshot{Provider: cfg.LLMProvider, BaseURL: config.RedactedEndpoint(cfg.LLMBaseURL), Model: cfg.LLMModel, Transport: cfg.LLMTransport, ReasoningEffort: cfg.LLMReasoningEffort, TimeoutSeconds: cfg.LLMTimeoutSec, MaxOutputTokens: cfg.LLMMaxTokens, Temperature: cfg.LLMTemp, APIKeyPresent: cfg.LLMAPIKey != "", APIKeyEnv: cfg.LLMAPIKeyEnv}
+		snapshots[role] = RoleLLMSnapshot{Provider: cfg.LLMProvider, BaseURL: config.RedactedEndpoint(cfg.LLMBaseURL), Model: cfg.LLMModel, Transport: cfg.LLMTransport, ReasoningEffort: cfg.LLMReasoningEffort, TimeoutSeconds: cfg.LLMTimeoutSec, MaxOutputTokens: cfg.LLMMaxTokens, Temperature: cfg.LLMTemp, Stream: cfg.LLMStream, APIKeyPresent: cfg.LLMAPIKey != "", APIKeyEnv: cfg.LLMAPIKeyEnv}
 	}
 	metadata["role_llm"] = snapshots
 	manifest["metadata"], err = json.Marshal(metadata)

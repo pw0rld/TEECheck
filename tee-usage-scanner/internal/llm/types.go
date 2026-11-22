@@ -40,7 +40,8 @@ type GenerateResponse struct {
 	Usage Usage
 }
 
-// Usage captures token accounting for a single LLM call. Fields are
+// Usage captures token accounting for a provider call. The retry wrapper
+// sums reported usage across attempts of the same logical request. Fields are
 // zero when the provider did not return usage information — callers
 // should treat zero as "unknown", not "free".
 type Usage struct {

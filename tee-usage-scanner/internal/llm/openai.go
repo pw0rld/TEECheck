@@ -1,9 +1,11 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +23,7 @@ type OpenAIClient struct {
 	maxTokens       int
 	transport       string
 	reasoningEffort string
+	stream          bool
 }
 
 func NewOpenAIClient(cfg config.Config) *OpenAIClient {
@@ -34,11 +37,15 @@ func NewOpenAIClient(cfg config.Config) *OpenAIClient {
 		maxTokens:       maxTokensOrDefault(cfg.LLMMaxTokens),
 		transport:       cfg.LLMTransport,
 		reasoningEffort: cfg.LLMReasoningEffort,
+		stream:          cfg.LLMStream,
 	}
 }
 
 func (c *OpenAIClient) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	if c.transport == config.LLMTransportResponses {
+		if c.stream {
+			return GenerateResponse{}, fmt.Errorf("--llm-stream is supported only with chat_completions transport")
+		}
 		return c.generateResponses(ctx, req)
 	}
 	return c.generateChatCompletions(ctx, req)
@@ -48,8 +55,11 @@ func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req Generate
 	body := openAIChatRequest{
 		Model:     c.model,
 		Messages:  buildMessages(req.SystemPrompt, req.Messages),
-		Stream:    false,
+		Stream:    c.stream,
 		MaxTokens: requestOutputLimit(c.maxTokens, req.MaxOutputTokens),
+	}
+	if c.stream {
+		body.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
 	}
 	// The legacy reasoner rejects/ignores sampling controls. Current DeepSeek
 	// thinking models likewise do not use temperature unless thinking is disabled.
@@ -95,6 +105,9 @@ func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req Generate
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	if c.stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -103,23 +116,55 @@ func (c *OpenAIClient) generateChatCompletions(ctx context.Context, req Generate
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	out.Raw = string(respBody)
-	if err != nil {
-		return out, fmt.Errorf("read llm response: %w", err)
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(resp.Body)
+		out.Raw = string(respBody)
+		if readErr != nil {
+			return out, fmt.Errorf("llm status %d: %s; read response: %w", resp.StatusCode, strings.TrimSpace(out.Raw), readErr)
+		}
 		return out, fmt.Errorf("llm status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	text, usage, err := parseOpenAIResponse(resp.Header.Get("Content-Type"), respBody)
-	if err != nil {
-		return out, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(string(respBody), 300))
+	// Consume frames while they arrive, including reasoning-only chunks. Stop
+	// at [DONE] rather than waiting for the gateway to close its connection.
+	// TeeReader retains the exact bytes consumed, including on partial failures.
+	var raw bytes.Buffer
+	reader := bufio.NewReader(io.TeeReader(resp.Body, &raw))
+	contentType := resp.Header.Get("Content-Type")
+	isStream := strings.Contains(strings.ToLower(contentType), "text/event-stream")
+	if !isStream && c.stream {
+		// Some compatible endpoints omit the SSE content type; others ignore
+		// stream:true and return a normal JSON object. Accept both wire formats.
+		for {
+			first, peekErr := reader.Peek(1)
+			if peekErr != nil {
+				isStream = true // An empty/interrupted stream is a transport failure.
+				break
+			}
+			if first[0] != ' ' && first[0] != '\t' && first[0] != '\r' && first[0] != '\n' {
+				isStream = first[0] != '{' && first[0] != '['
+				break
+			}
+			_, _ = reader.ReadByte()
+		}
 	}
-
-	out.Text = text
-	out.Usage = usage
+	var text string
+	var usage Usage
+	if isStream {
+		text, usage, err = parseOpenAIStreamReader(reader)
+	} else {
+		var respBody []byte
+		respBody, err = io.ReadAll(reader)
+		if err == nil {
+			text, usage, err = parseOpenAIResponse(contentType, respBody)
+		} else {
+			err = fmt.Errorf("read llm response: %w", err)
+		}
+	}
+	out.Raw, out.Text, out.Usage = raw.String(), text, usage
+	if err != nil {
+		return out, fmt.Errorf("parse llm response: %w | raw=%s", err, truncateForError(out.Raw, 300))
+	}
 	return out, nil
 }
 
@@ -201,8 +246,13 @@ type openAIChatRequest struct {
 	Temperature     *float64              `json:"temperature,omitempty"`
 	ReasoningEffort string                `json:"reasoning_effort,omitempty"`
 	Stream          bool                  `json:"stream"`
+	StreamOptions   *openAIStreamOptions  `json:"stream_options,omitempty"`
 	MaxTokens       int                   `json:"max_tokens,omitempty"`
 	ResponseFormat  *openAIResponseFormat `json:"response_format,omitempty"`
+}
+
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openAIResponseFormat struct {
@@ -308,17 +358,40 @@ type openAIChatResponse struct {
 		// yields finish_reason "length" with Content empty.
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-		// Reasoning models report how much of the completion budget went to
-		// thinking rather than to the answer. Only used to explain a
-		// budget-exhaustion failure to the operator.
-		CompletionTokensDetails struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"completion_tokens_details"`
-	} `json:"usage"`
+	Usage *openAIChatUsage `json:"usage"`
+	Error json.RawMessage  `json:"error"`
+}
+
+type openAIChatUsage struct {
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+func (u *openAIChatUsage) accounting() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	usage := Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	return usage
+}
+
+func completionBudgetError(text string, usage *openAIChatUsage) error {
+	completion, reasoning := 0, 0
+	if usage != nil {
+		completion, reasoning = usage.CompletionTokens, usage.CompletionTokensDetails.ReasoningTokens
+	}
+	when := "before emitting any content"
+	if strings.TrimSpace(text) != "" {
+		when = "before completing its content"
+	}
+	return fmt.Errorf("model exhausted its completion budget %s (finish_reason=length, %d completion tokens of which %d were reasoning); raise --llm-max-tokens or TEECHECK_LLM_MAX_TOKENS above the current limit", when, completion, reasoning)
 }
 
 func parseOpenAIResponse(contentType string, body []byte) (string, Usage, error) {
@@ -327,63 +400,156 @@ func parseOpenAIResponse(contentType string, body []byte) (string, Usage, error)
 		return "", Usage{}, fmt.Errorf("empty response body")
 	}
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") || strings.HasPrefix(trimmed, "data:") {
-		text, err := parseOpenAIStream(trimmed)
-		return text, Usage{}, err
+		return parseOpenAIStream(string(body))
 	}
-
 	var parsed openAIChatResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", Usage{}, fmt.Errorf("decode json response: %w", err)
 	}
-	text := extractOpenAIText(parsed)
+	text, usage := extractOpenAIText(parsed), parsed.Usage.accounting()
+	if len(parsed.Error) > 0 && string(parsed.Error) != "null" {
+		return text, usage, fmt.Errorf("upstream response error: %s", parsed.Error)
+	}
 	if strings.TrimSpace(text) == "" {
-		// Name the cause. A reasoning model that exhausts max_tokens on its
-		// own reasoning returns finish_reason "length" with empty content,
-		// which is indistinguishable from "said nothing" unless we look.
-		// Reported as "no text content found", it sent one debugging session
-		// looking for a parser bug that did not exist.
 		if len(parsed.Choices) > 0 && parsed.Choices[0].FinishReason == "length" {
-			return "", Usage{}, fmt.Errorf(
-				"model exhausted its completion budget before emitting any content "+
-					"(finish_reason=length, %d completion tokens of which %d were reasoning); "+
-					"raise --llm-max-tokens or TEECHECK_LLM_MAX_TOKENS above the current limit",
-				parsed.Usage.CompletionTokens, parsed.Usage.CompletionTokensDetails.ReasoningTokens)
+			return text, usage, completionBudgetError(text, parsed.Usage)
 		}
-		return "", Usage{}, fmt.Errorf("no text content found in response")
-	}
-	usage := Usage{
-		PromptTokens:     parsed.Usage.PromptTokens,
-		CompletionTokens: parsed.Usage.CompletionTokens,
-		TotalTokens:      parsed.Usage.TotalTokens,
-	}
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		return text, usage, fmt.Errorf("no text content found in response")
 	}
 	return text, usage, nil
 }
 
-func parseOpenAIStream(raw string) (string, error) {
-	var content strings.Builder
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
-			continue
-		}
+func parseOpenAIStream(raw string) (string, Usage, error) {
+	return parseOpenAIStreamReader(strings.NewReader(raw))
+}
 
-		var chunk openAIChatResponse
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+// parseOpenAIStreamReader follows SSE event boundaries instead of treating
+// each data line as independent JSON. Usage may arrive on its own after the
+// finish-reason chunk, so only [DONE] ends a successful Chat Completions stream.
+func parseOpenAIStreamReader(reader io.Reader) (string, Usage, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 32<<10), 16<<20)
+	scanner.Split(newSSELineSplitter())
+	var content, data strings.Builder
+	var lastUsage *openAIChatUsage
+	finishReason := ""
+	eventType := ""
+	firstLine := true
+	result := func(err error) (string, Usage, error) {
+		text, usage := content.String(), lastUsage.accounting()
+		if finishReason == "content_filter" {
+			return text, usage, fmt.Errorf("upstream policy refusal (finish_reason=content_filter)")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return text, usage, err
+		}
+		if finishReason == "length" {
+			return text, usage, completionBudgetError(text, lastUsage)
+		}
+		if err != nil {
+			return text, usage, err
+		}
+		if strings.TrimSpace(text) == "" {
+			return text, usage, fmt.Errorf("no text content found in stream response")
+		}
+		return text, usage, nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if firstLine {
+			line = strings.TrimPrefix(line, "\ufeff")
+			firstLine = false
+		}
+		if line == "" {
+			if data.Len() == 0 {
+				eventType = ""
+				continue
+			}
+			payload := strings.TrimSuffix(data.String(), "\n")
+			kind := eventType
+			eventType = ""
+			data.Reset()
+			if kind == "error" {
+				var chunk openAIChatResponse
+				if json.Unmarshal([]byte(payload), &chunk) == nil && chunk.Usage != nil {
+					lastUsage = chunk.Usage
+				}
+				return content.String(), lastUsage.accounting(), fmt.Errorf("upstream stream error: %s", payload)
+			}
+			if strings.TrimSpace(payload) == "[DONE]" {
+				return result(nil)
+			}
+			var chunk openAIChatResponse
+			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+				return result(fmt.Errorf("decode stream event: %w", err))
+			}
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
+			if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+				return result(fmt.Errorf("upstream stream error: %s", chunk.Error))
+			}
+			content.WriteString(extractOpenAIText(chunk))
+			for _, choice := range chunk.Choices {
+				if choice.FinishReason != "" {
+					finishReason = choice.FinishReason
+					break
+				}
+			}
 			continue
 		}
-		content.WriteString(extractOpenAIText(chunk))
+		if strings.HasPrefix(line, ":") {
+			continue
+		} // SSE heartbeat/comment.
+		field, value, _ := strings.Cut(line, ":")
+		if strings.HasPrefix(value, " ") {
+			value = value[1:]
+		}
+		if field == "data" {
+			if data.Len()+len(value)+1 > 16<<20 {
+				return result(fmt.Errorf("stream event exceeds 16 MiB"))
+			}
+			data.WriteString(value)
+			data.WriteByte('\n')
+		} else if field == "event" {
+			eventType = value
+		}
 	}
-	if content.Len() == 0 {
-		return "", fmt.Errorf("no text content found in stream response")
+	if err := scanner.Err(); err != nil {
+		return result(fmt.Errorf("read llm stream: %w", err))
 	}
-	return content.String(), nil
+	// An EOF, even after finish_reason, may have dropped the usage trailer or
+	// final content. Preserve evidence and let the caller handle the failure.
+	return result(fmt.Errorf("stream ended before [DONE]: %w", io.ErrUnexpectedEOF))
+}
+
+// Treat CR immediately as a delimiter, then ignore one optional LF. Waiting
+// for a following byte would stall a terminal event on an open bare-CR stream.
+func newSSELineSplitter() bufio.SplitFunc {
+	afterCR := false
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		skipped := 0
+		if afterCR && len(data) > 0 {
+			afterCR = false
+			if data[0] == '\n' {
+				data = data[1:]
+				skipped = 1
+			}
+		}
+		for i, b := range data {
+			if b == '\n' {
+				return skipped + i + 1, data[:i], nil
+			}
+			if b == '\r' {
+				afterCR = true
+				return skipped + i + 1, data[:i], nil
+			}
+		}
+		if atEOF && len(data) > 0 {
+			return skipped + len(data), data, nil
+		}
+		return skipped, nil, nil
+	}
 }
 
 func extractOpenAIText(resp openAIChatResponse) string {
@@ -394,7 +560,7 @@ func extractOpenAIText(resp openAIChatResponse) string {
 		if strings.TrimSpace(choice.Text) != "" {
 			return choice.Text
 		}
-		if strings.TrimSpace(choice.Delta.Content) != "" {
+		if choice.Delta.Content != "" {
 			return choice.Delta.Content
 		}
 	}

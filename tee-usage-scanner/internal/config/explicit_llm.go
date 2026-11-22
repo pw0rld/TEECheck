@@ -34,5 +34,6 @@ func (cfg Config) WithLLMSettingsFrom(role Config) Config {
 	cfg.LLMMaxTokensExplicit = role.LLMMaxTokensExplicit
 	cfg.llmMaxTokensDefaulted = role.llmMaxTokensDefaulted
 	cfg.LLMTemp = role.LLMTemp
+	cfg.LLMStream = role.LLMStream
 	return cfg
 }

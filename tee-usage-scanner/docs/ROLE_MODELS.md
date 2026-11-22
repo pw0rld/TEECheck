@@ -36,6 +36,27 @@ credential. Changing `provider` does not implicitly replace other inherited
 fields: set `base_url`, `transport`, and `reasoning_effort` together as needed;
 an explicit empty reasoning effort clears the inherited value.
 
+Streaming is opt-in: `--llm-stream` or `TEECHECK_LLM_STREAM=true` enables SSE
+for OpenAI-compatible Chat Completions (`provider: openai` or `deepseek`,
+`transport: chat_completions`). A role can set `"stream": true` or explicitly
+set `"stream": false` to override an inherited value. For example:
+
+```json
+{
+  "planner": { "transport": "chat_completions", "stream": true },
+  "verifier": { "stream": false }
+}
+```
+
+The default remains non-streaming. `responses` and the `glm` preset's
+Anthropic transport do not support this option; explicitly enabling it for
+those combinations is rejected. A GLM model exposed through an OpenAI-compatible
+Chat Completions gateway can use `provider: openai` with that gateway's base URL.
+Streaming requests include final usage statistics and preserve content whitespace.
+They can keep an idle gateway connection active once the provider sends chunks,
+but do not guarantee that the provider emits its first chunk before a gateway's
+timeout. The CLI still returns a complete model response to each agent.
+
 Each role's resolved settings appear under `metadata.role_llm` in the run
 manifest. Credential values and URL user-info/query parameters are omitted.
 LLM events record the configured model for the role that made the call,

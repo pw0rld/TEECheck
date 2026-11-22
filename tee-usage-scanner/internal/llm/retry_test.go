@@ -20,8 +20,10 @@ type fakeClient struct {
 }
 
 type fakeResponse struct {
-	text string
-	err  error
+	text  string
+	err   error
+	raw   string
+	usage llm.Usage
 }
 
 func (f *fakeClient) Generate(_ context.Context, _ llm.GenerateRequest) (llm.GenerateResponse, error) {
@@ -30,7 +32,7 @@ func (f *fakeClient) Generate(_ context.Context, _ llm.GenerateRequest) (llm.Gen
 		return llm.GenerateResponse{}, fmt.Errorf("fakeClient: out of scripted responses (call %d)", i+1)
 	}
 	r := f.responses[i]
-	return llm.GenerateResponse{Text: r.text}, r.err
+	return llm.GenerateResponse{Text: r.text, Raw: r.raw, Usage: r.usage}, r.err
 }
 
 func TestIsTransient(t *testing.T) {
@@ -45,6 +47,7 @@ func TestIsTransient(t *testing.T) {
 		{"anthropic 500", fmt.Errorf("anthropic status 500: internal error"), true},
 		{"ordinary 502", fmt.Errorf("openai status 502: bad gateway"), true},
 		{"anthropic 503", fmt.Errorf("openai status 503: service unavailable"), true},
+		{"gateway timeout", fmt.Errorf("openai status 504: gateway timeout"), true},
 		{"rate limited", errors.New("llm status 429: too many requests"), true},
 		{"http rate limited", errors.New("HTTP 429: try again later"), true},
 		{"structured rate limited", errors.New(`{"error":{"type":"rate_limit_error"}}`), true},
@@ -127,9 +130,8 @@ func TestIsTransient_PolicyRefusalShortCircuits(t *testing.T) {
 	}
 	logged := 0
 	client := llm.NewRetryingClient(inner, llm.RetryConfig{
-		MaxAttempts: 3,
-		BaseDelay:   time.Millisecond,
-		Logger:      func(int, error, time.Duration) { logged++ },
+		BaseDelay: time.Millisecond,
+		Logger:    func(int, error, time.Duration) { logged++ },
 	})
 	req := llm.GenerateRequest{
 		SystemPrompt: "Original defensive review request",
@@ -235,8 +237,120 @@ func TestRetryingClient_RateLimitBackoffThenSuccess(t *testing.T) {
 	if err != nil || resp.Text != "completed after rate limit" || fake.calls.Load() != 3 {
 		t.Fatalf("response=%+v err=%v calls=%d", resp, err, fake.calls.Load())
 	}
-	if !reflect.DeepEqual(delays, []time.Duration{time.Millisecond, 3 * time.Millisecond}) {
-		t.Fatalf("backoff delays=%v", delays)
+	for i, want := range []time.Duration{time.Millisecond, 3 * time.Millisecond} {
+		if delays[i] < want-want/10 || delays[i] > want {
+			t.Fatalf("jittered delay[%d]=%v, want [%v,%v]", i, delays[i], want-want/10, want)
+		}
+	}
+}
+
+func TestRetryingClient_DefaultFiveAttempts(t *testing.T) {
+	for _, status := range []int{429, 502, 503, 504} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			failure := fmt.Errorf("llm status %d: temporary failure", status)
+			inner := &refusalClient{err: failure, response: llm.GenerateResponse{Usage: llm.Usage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3}}}
+			var attempts []int
+			client := llm.NewRetryingClient(inner, llm.RetryConfig{
+				BaseDelay: time.Nanosecond,
+				MaxDelay:  time.Nanosecond,
+				Logger:    func(attempt int, _ error, _ time.Duration) { attempts = append(attempts, attempt) },
+			})
+			resp, err := client.Generate(context.Background(), llm.GenerateRequest{})
+			if !errors.Is(err, failure) || len(inner.requests) != 5 || !reflect.DeepEqual(attempts, []int{1, 2, 3, 4}) || resp.Usage != (llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}) {
+				t.Fatalf("err=%v calls=%d attempts=%v usage=%+v", err, len(inner.requests), attempts, resp.Usage)
+			}
+		})
+	}
+}
+
+func TestRetryingClient_JitterStaysWithinCap(t *testing.T) {
+	const base = 100 * time.Microsecond
+	const max = 500 * time.Microsecond
+	inner := &refusalClient{err: errors.New("llm status 503: unavailable")}
+	var delays []time.Duration
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{
+		BaseDelay: base, MaxDelay: max,
+		Logger: func(_ int, _ error, delay time.Duration) { delays = append(delays, delay) },
+	})
+	_, _ = client.Generate(context.Background(), llm.GenerateRequest{})
+	if len(delays) != 4 {
+		t.Fatalf("delays=%v", delays)
+	}
+	for i, cap := range []time.Duration{base, 3 * base, max, max} {
+		if delays[i] < cap-cap/10 || delays[i] > cap {
+			t.Fatalf("delay[%d]=%v outside [%v,%v]", i, delays[i], cap-cap/10, cap)
+		}
+	}
+}
+
+func TestRetryingClient_BaseDelayAlsoHonorsCap(t *testing.T) {
+	inner := &refusalClient{err: errors.New("llm status 503: unavailable")}
+	var delay time.Duration
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{
+		MaxAttempts: 2, BaseDelay: time.Hour, MaxDelay: time.Microsecond,
+		Logger: func(_ int, _ error, d time.Duration) { delay = d },
+	})
+	_, _ = client.Generate(context.Background(), llm.GenerateRequest{})
+	if delay < 900*time.Nanosecond || delay > time.Microsecond {
+		t.Fatalf("initial delay exceeded cap: %v", delay)
+	}
+}
+
+func TestRetryingClient_CancelStopsBeforeSecondAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inner := &refusalClient{err: errors.New("llm status 504: gateway timeout")}
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{
+		BaseDelay: time.Hour,
+		Logger:    func(_ int, _ error, _ time.Duration) { cancel() },
+	})
+	_, err := client.Generate(ctx, llm.GenerateRequest{})
+	if !errors.Is(err, context.Canceled) || len(inner.requests) != 1 {
+		t.Fatalf("err=%v calls=%d", err, len(inner.requests))
+	}
+}
+
+func TestRetryingClient_AccumulatesKnownUsageAcrossAttempts(t *testing.T) {
+	inner := &fakeClient{responses: []fakeResponse{
+		{err: errors.New("read stream: unexpected EOF"), raw: "failed stream", usage: llm.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14}},
+		{text: "complete", raw: "successful stream", usage: llm.Usage{PromptTokens: 11, CompletionTokens: 7, TotalTokens: 18}},
+	}}
+	client := llm.NewRetryingClient(inner, llm.RetryConfig{BaseDelay: time.Nanosecond, MaxDelay: time.Nanosecond})
+	resp, err := client.Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := llm.Usage{PromptTokens: 21, CompletionTokens: 11, TotalTokens: 32}
+	if resp.Usage != want || resp.Text != "complete" || resp.Raw != "successful stream" {
+		t.Fatalf("response=%+v", resp)
+	}
+}
+
+func TestRetryingClient_PreservesKnownUsageOnErrorAndCancel(t *testing.T) {
+	for _, cancelDuringBackoff := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelDuringBackoff), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			inner := &fakeClient{responses: []fakeResponse{
+				{err: errors.New("read stream: unexpected EOF"), usage: llm.Usage{PromptTokens: 10, CompletionTokens: 4}},
+				{err: errors.New("llm status 400: bad request"), usage: llm.Usage{PromptTokens: 3, TotalTokens: 3}},
+			}}
+			cfg := llm.RetryConfig{BaseDelay: time.Nanosecond, MaxDelay: time.Nanosecond}
+			if cancelDuringBackoff {
+				cfg.Logger = func(int, error, time.Duration) { cancel() }
+			}
+			resp, err := llm.NewRetryingClient(inner, cfg).Generate(ctx, llm.GenerateRequest{})
+			want := llm.Usage{PromptTokens: 13, CompletionTokens: 4, TotalTokens: 17}
+			if cancelDuringBackoff {
+				want = llm.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14}
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+			}
+			if err == nil || resp.Usage != want {
+				t.Fatalf("response=%+v err=%v", resp, err)
+			}
+		})
 	}
 }
 

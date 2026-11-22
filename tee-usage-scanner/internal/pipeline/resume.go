@@ -58,7 +58,7 @@ func resolvedResumeSettings(cfg config.Config, roles map[string]config.Config) (
 		c := roles[role]
 		s.Roles[role] = runinit.RoleLLMSnapshot{Provider: c.LLMProvider, BaseURL: config.RedactedEndpoint(c.LLMBaseURL),
 			Model: c.LLMModel, Transport: c.LLMTransport, ReasoningEffort: c.LLMReasoningEffort,
-			TimeoutSeconds: c.LLMTimeoutSec, MaxOutputTokens: c.LLMMaxTokens, Temperature: c.LLMTemp}
+			TimeoutSeconds: c.LLMTimeoutSec, MaxOutputTokens: c.LLMMaxTokens, Temperature: c.LLMTemp, Stream: c.LLMStream}
 	}
 	return s, nil
 }

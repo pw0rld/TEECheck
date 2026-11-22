@@ -27,6 +27,12 @@ export TEECHECK_LLM_API_KEY="your-key"
   --llm-reasoning-effort high
 ```
 
+For an OpenAI-compatible Chat Completions gateway, add `--llm-stream` (or set
+`TEECHECK_LLM_STREAM=true`) to opt into SSE and request final token usage.
+The default is off; this option does not apply to the `responses` transport or
+the `glm` preset's Anthropic endpoint. Per-role `"stream": true/false` overrides
+are documented in [ROLE_MODELS.md](docs/ROLE_MODELS.md).
+
 A Git URL may replace the local path. `teecheck plan` is an alias for `run`.
 All audit runs use the LLM pipeline; the old heuristic scanner was retired.
 

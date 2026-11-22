@@ -76,6 +76,15 @@ scope、内容哈希和 coverage gaps。引擎每个 alert 的路径数有上限
 `TEECHECK_CODEQL_ANALYZE_THREADS` 可单独覆盖查询线程数。建库遇到已识别的瞬态 JVM/TRAP
 错误会清理本次不完整数据库并以单线程重试一次；其他错误不盲目重试。
 
+OpenAI 兼容 Chat Completions 可用 `--llm-stream`（或
+`TEECHECK_LLM_STREAM=true`）启用 SSE；角色文件可单独设置 `"stream": true/false`。
+默认关闭，`responses` 与 `glm` 预设的 Anthropic 通道不支持此选项。SSE 开始发送数据后
+可以缓解网关空闲超时，但不能保证上游及时发送首个 chunk。最终内容仍完整交给 Agent，
+同时保留流末尾的 token usage；流式配置会记录在 manifest，并参与 resume 一致性校验。
+`--llm-timeout-seconds` 仍限制整次 HTTP 请求，收到 chunk 不会重置此上限。
+瞬态错误默认最多尝试 5 次（含首次），使用带轻微抖动的退避；已返回的各次尝试 usage
+会累计，未收到的 usage 不会被伪造为精确统计。策略拒绝与其他非瞬态错误立即停止。
+
 网络策略拒绝停止当前调查并保留 Lead 与覆盖缺口，不对同一拒绝连续重试，也不会自动
 改写提示或切换模型。角色路由在启动时通过配置明确指定。
 

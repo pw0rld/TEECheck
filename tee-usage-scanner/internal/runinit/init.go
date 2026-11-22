@@ -98,6 +98,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 				TimeoutSeconds:  cfg.LLMTimeoutSec,
 				MaxOutputTokens: cfg.LLMMaxTokens,
 				Temperature:     cfg.LLMTemp,
+				Stream:          cfg.LLMStream,
 				APIKeyPresent:   cfg.LLMAPIKey != "",
 			},
 		},
