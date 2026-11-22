@@ -249,7 +249,15 @@ func BuildRoundPrompt(state *PlannerState, profile PromptProfile, budget Budget,
 
 	b.WriteString("=== BUDGET ===\n")
 	fmt.Fprintf(&b, "rounds: %d/%d\n", budget.RoundsUsed, budget.TotalRounds())
-	fmt.Fprintf(&b, "tokens: %d/%d\n", budget.TokensUsed, budget.MaxTokens)
+	formatTokens := func(used, limit int) string {
+		if limit == 0 {
+			return fmt.Sprintf("%d/unlimited", used)
+		}
+		return fmt.Sprintf("%d/%d", used, limit)
+	}
+	fmt.Fprintf(&b, "tokens: %s\n", formatTokens(budget.TokensUsed, budget.MaxTokens))
+	fmt.Fprintf(&b, "reconnaissance tokens: %s\n", formatTokens(budget.ReconTokensUsed, budget.MaxReconTokens))
+	fmt.Fprintf(&b, "investigation tokens: %s\n", formatTokens(budget.InvestigationTokensUsed, budget.MaxInvestigationTokens))
 	taintLimit := fmt.Sprint(budget.MaxTaintQueries)
 	if budget.MaxTaintQueries == 0 {
 		taintLimit = "unlimited"

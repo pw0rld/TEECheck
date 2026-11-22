@@ -36,6 +36,12 @@ are documented in [ROLE_MODELS.md](docs/ROLE_MODELS.md).
 A Git URL may replace the local path. `teecheck plan` is an alias for `run`.
 All audit runs use the LLM pipeline; the old heuristic scanner was retired.
 
+Planner cumulative token limits can be configured independently with
+`--planner-max-tokens`, `--planner-max-recon-tokens`, and
+`--planner-max-investigation-tokens`. Set all three to `0` to disable those
+limits while retaining per-call model, round and wall-clock limits; see
+[HARNESS.md](docs/HARNESS.md#默认预算与资源).
+
 For a local fixture, set `TEECHECK_REPO_URL` and `TEECHECK_COMMIT` to identify the
 upstream source revision. `--repo-url` and `--commit` override these environment
 defaults; otherwise repository identity is detected from the input. The

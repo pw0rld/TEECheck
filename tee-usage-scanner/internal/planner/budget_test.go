@@ -149,3 +149,35 @@ func TestBudget_TerminationReason(t *testing.T) {
 		})
 	}
 }
+
+func TestBudget_OutputAllowanceIndependentTokenCaps(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		b     planner.Budget
+		input int
+		recon bool
+		final bool
+		want  int
+	}{
+		{name: "no caps", want: planner.UnlimitedOutputAllowance},
+		{name: "reserve alone is not a cap", b: planner.Budget{ConvergenceReserveTokens: 20000}, input: 35000, want: planner.UnlimitedOutputAllowance},
+		{name: "inactive phase does not cap recon", b: planner.Budget{MaxInvestigationTokens: 100}, recon: true, want: planner.UnlimitedOutputAllowance},
+		{name: "inactive phase does not cap investigation", b: planner.Budget{MaxReconTokens: 100}, want: planner.UnlimitedOutputAllowance},
+		{name: "total disabled recon enabled", b: planner.Budget{MaxReconTokens: 100, ReconTokensUsed: 25, ConvergenceReserveTokens: 20}, input: 10, recon: true, want: 65},
+		{name: "total disabled investigation enabled", b: planner.Budget{MaxInvestigationTokens: 100, InvestigationTokensUsed: 25, ConvergenceReserveTokens: 20}, input: 10, want: 45},
+		{name: "phase disabled total enabled", b: planner.Budget{MaxTokens: 100, TokensUsed: 25, ConvergenceReserveTokens: 20}, input: 10, want: 45},
+		{name: "final spends reserve", b: planner.Budget{MaxInvestigationTokens: 100, InvestigationTokensUsed: 25, ConvergenceReserveTokens: 20}, input: 10, final: true, want: 65},
+		{name: "tighter phase wins", b: planner.Budget{MaxTokens: 1000, TokensUsed: 200, MaxInvestigationTokens: 200, InvestigationTokensUsed: 50, ConvergenceReserveTokens: 20}, input: 10, want: 120},
+		{name: "tighter total wins", b: planner.Budget{MaxTokens: 100, TokensUsed: 25, MaxInvestigationTokens: 200, InvestigationTokensUsed: 50, ConvergenceReserveTokens: 20}, input: 10, want: 45},
+		{name: "finite exhausted is zero", b: planner.Budget{MaxTokens: 10, TokensUsed: 10}, want: 0},
+		{name: "input consumes remaining", b: planner.Budget{MaxTokens: 100}, input: 100, want: 0},
+		{name: "reserve consumes remaining", b: planner.Budget{MaxInvestigationTokens: 100, ConvergenceReserveTokens: 200}, want: 0},
+		{name: "provider overrun saturates", b: planner.Budget{MaxTokens: 100, TokensUsed: int(^uint(0) >> 1)}, input: 1000, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.b.OutputAllowance(tc.input, tc.recon, tc.final); got != tc.want {
+				t.Fatalf("OutputAllowance = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

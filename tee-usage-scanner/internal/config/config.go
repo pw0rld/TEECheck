@@ -63,6 +63,14 @@ type Config struct {
 	Samples int
 	// Zero uses the Planner's default wall-clock allowance for each pass.
 	PlannerWallClock time.Duration
+	// Explicit zero disables only the corresponding token limit. An omitted
+	// programmatic value retains the default so older Config literals work.
+	PlannerMaxTokens                      int
+	PlannerMaxTokensExplicit              bool
+	PlannerMaxReconTokens                 int
+	PlannerMaxReconTokensExplicit         bool
+	PlannerMaxInvestigationTokens         int
+	PlannerMaxInvestigationTokensExplicit bool
 	// Programmatic zero leaves the default quota intact unless explicitly
 	// requested. This distinguishes old Config literals from unlimited mode.
 	MaxTaintQueries         int
@@ -525,33 +533,39 @@ func parseFeedback(args []string) (Config, error) {
 func parseRun(args []string) (Config, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	cfg := Config{
-		Command:            "run",
-		RepoURL:            firstNonEmptyEnv("TEECHECK_REPO_URL"),
-		Commit:             firstNonEmptyEnv("TEECHECK_COMMIT"),
-		Focus:              "tee",
-		OutputDir:          filepath.Clean("runs"),
-		KnowledgeRoot:      filepath.Clean("knowledge"),
-		MaxHotspots:        12,
-		MaxCases:           12,
-		MaxDialogRounds:    DefaultMaxDialogRounds,
-		Mode:               "llm",
-		StaticTools:        "auto",
-		LLMProvider:        firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
-		LLMBaseURL:         firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
-		LLMAPIKey:          firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
-		LLMModel:           firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
-		LLMTransport:       firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
-		LLMReasoningEffort: firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
-		LLMTimeoutSec:      envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
-		LLMMaxTokens:       envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
-		LLMTemp:            envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
-		Samples:            1,
-		MaxTaintQueries:    8,
-		TaintQueryTimeout:  5 * time.Minute,
-		CodeQLCacheDir:     firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
+		Command:                       "run",
+		RepoURL:                       firstNonEmptyEnv("TEECHECK_REPO_URL"),
+		Commit:                        firstNonEmptyEnv("TEECHECK_COMMIT"),
+		Focus:                         "tee",
+		OutputDir:                     filepath.Clean("runs"),
+		KnowledgeRoot:                 filepath.Clean("knowledge"),
+		MaxHotspots:                   12,
+		MaxCases:                      12,
+		MaxDialogRounds:               DefaultMaxDialogRounds,
+		Mode:                          "llm",
+		StaticTools:                   "auto",
+		LLMProvider:                   firstNonEmptyEnv("TEECHECK_LLM_PROVIDER", "OPENAI_PROVIDER"),
+		LLMBaseURL:                    firstNonEmptyEnv("TEECHECK_LLM_BASE_URL", "OPENAI_BASE_URL"),
+		LLMAPIKey:                     firstNonEmptyEnv("TEECHECK_LLM_API_KEY", "OPENAI_API_KEY"),
+		LLMModel:                      firstNonEmptyEnv("TEECHECK_LLM_MODEL", "OPENAI_MODEL"),
+		LLMTransport:                  firstNonEmptyEnv("TEECHECK_LLM_TRANSPORT"),
+		LLMReasoningEffort:            firstNonEmptyEnv("TEECHECK_LLM_REASONING_EFFORT"),
+		LLMTimeoutSec:                 envInt(300, "TEECHECK_LLM_TIMEOUT_SECONDS"),
+		LLMMaxTokens:                  envInt(0, "TEECHECK_LLM_MAX_TOKENS"),
+		LLMTemp:                       envFloat(0.2, "TEECHECK_LLM_TEMPERATURE"),
+		Samples:                       1,
+		PlannerMaxTokens:              240000,
+		PlannerMaxReconTokens:         100000,
+		PlannerMaxInvestigationTokens: 140000,
+		MaxTaintQueries:               8,
+		TaintQueryTimeout:             5 * time.Minute,
+		CodeQLCacheDir:                firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m)")
+	fs.IntVar(&cfg.PlannerMaxTokens, "planner-max-tokens", cfg.PlannerMaxTokens, "Maximum input plus output tokens per planner pass; 0 disables the aggregate token cap")
+	fs.IntVar(&cfg.PlannerMaxReconTokens, "planner-max-recon-tokens", cfg.PlannerMaxReconTokens, "Maximum reconnaissance input plus output tokens per planner pass; 0 disables this phase token cap")
+	fs.IntVar(&cfg.PlannerMaxInvestigationTokens, "planner-max-investigation-tokens", cfg.PlannerMaxInvestigationTokens, "Maximum investigation input plus output tokens per planner pass; 0 disables this phase token cap")
 	fs.IntVar(&cfg.MaxTaintQueries, "max-taint-queries", cfg.MaxTaintQueries, "Maximum uncached taint queries per planner pass; 0 disables the separate query cap")
 	fs.DurationVar(&cfg.TaintQueryTimeout, "taint-query-timeout", cfg.TaintQueryTimeout, "Timeout for each uncached taint query")
 	fs.StringVar(&cfg.CodeQLCacheDir, "codeql-cache-dir", cfg.CodeQLCacheDir, "Optional shared immutable source/CodeQL database cache; queries use private run-local database copies")
@@ -618,7 +632,27 @@ func parseRun(args []string) (Config, error) {
 		if f.Name == "max-taint-queries" {
 			cfg.MaxTaintQueriesExplicit = true
 		}
+		switch f.Name {
+		case "planner-max-tokens":
+			cfg.PlannerMaxTokensExplicit = true
+		case "planner-max-recon-tokens":
+			cfg.PlannerMaxReconTokensExplicit = true
+		case "planner-max-investigation-tokens":
+			cfg.PlannerMaxInvestigationTokensExplicit = true
+		}
 	})
+	for _, limit := range []struct {
+		name  string
+		value int
+	}{
+		{"planner-max-tokens", cfg.PlannerMaxTokens},
+		{"planner-max-recon-tokens", cfg.PlannerMaxReconTokens},
+		{"planner-max-investigation-tokens", cfg.PlannerMaxInvestigationTokens},
+	} {
+		if limit.value < 0 {
+			return Config{}, fmt.Errorf("--%s must be zero or positive", limit.name)
+		}
+	}
 	if cfg.MaxTaintQueries < 0 {
 		return Config{}, fmt.Errorf("--max-taint-queries must be zero or positive")
 	}

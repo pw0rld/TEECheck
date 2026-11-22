@@ -72,9 +72,9 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 
 	sources := formalizationSources(state, observed)
 	input := formalizationInput{}
-	maxBytes := cfg.Budget.OutputAllowance(0, false, true) - minimumReplyTokens - len(formalizationSystem) - 256
-	if maxBytes > 14000 {
-		maxBytes = 14000
+	const maxBytes = 14000
+	fits := func(data []byte) bool {
+		return len(data) <= maxBytes && requestOutputBudget(cfg, estimateRequestInputTokens(formalizationSystem, string(data)), false, true) >= minimumRequestOutput(cfg)
 	}
 	for i, c := range candidates {
 		if len(out[i]) > 0 {
@@ -98,7 +98,7 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 		}
 		trial := formalizationInput{Candidates: append(append([]formalizationCandidate(nil), input.Candidates...), formalizationCandidate{Index: i, Candidate: c, Leads: leads}), Sources: appendFormalizationSources(input.Sources, windows...)}
 		data, _ := json.Marshal(trial)
-		if len(data) > maxBytes {
+		if !fits(data) {
 			gaps = append(gaps, fmt.Sprintf("Candidate %s remains unformalized: closing request cannot fit the remaining token budget.", c.ID))
 			continue
 		}
@@ -113,7 +113,7 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 		trial := input
 		trial.Sources = appendFormalizationSources(input.Sources, source)
 		data, _ := json.Marshal(trial)
-		if len(data) <= maxBytes {
+		if fits(data) {
 			input = trial
 		}
 	}

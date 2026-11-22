@@ -63,13 +63,38 @@ scope、内容哈希和 coverage gaps。引擎每个 alert 的路径数有上限
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| 总 token | 240,000 | 输入和输出合计 |
-| Pass A / Pass B token | 100,000 / 140,000 | Pass B 内含 20,000 收口预留 |
+| `--planner-max-tokens` | 240,000 | 每次 Planner pass 输入和输出合计；0 关闭总上限 |
+| `--planner-max-recon-tokens` | 100,000 | Pass A 输入和输出合计；0 关闭本阶段上限 |
+| `--planner-max-investigation-tokens` | 140,000 | Pass B 输入和输出合计，内含 20,000 收口预留；0 关闭本阶段上限 |
 | 侦察 / 调查轮数 | 10 / 8 | 侦察额度追加于调查额度 |
 | `--planner-wall-clock` | 10m | 每个 pass 的上限 |
 | 普通工具超时 | 30s | 不适用于独立污点查询 |
 | `--taint-query-timeout` | 5m | 同时受剩余墙钟预算约束 |
 | `--max-taint-queries` | 8 | 未缓存调用；0 表示无单独限次 |
+
+三个 token 上限独立生效：只将总上限设为 0 不会关闭 Pass A / Pass B 上限。
+需要禁用所有累计 token 限制时，必须同时传入三个 0，例如：
+
+```sh
+teecheck run <input> --llm-model glm-5.3 --llm-stream \
+  --planner-max-tokens=0 \
+  --planner-max-recon-tokens=0 \
+  --planner-max-investigation-tokens=0 \
+  --planner-wall-clock=40m
+```
+
+这不会关闭角色配置的单次 `max_output_tokens`（或 `--llm-max-tokens`）、轮数、墙钟和
+工具配额。已用 token 仍照常统计；解析后的上限写入 manifest 并参与 resume 一致性校验。
+
+开启累计上限时，输入采用近似估算：ASCII 约 3 字节/token，非 ASCII 按字符分别估算，
+再加消息封装余量。它不是精确 tokenizer，也不保证严格上界；实际费用与超额消耗仍按
+服务端 usage 记录。[常见英文估算](https://help.openai.com/en/articles/4936856-understanding-and-counting-tokens)
+不能直接用于所有语言或模型。
+
+已识别的推理模型（包括 GLM-5.x、GLM-4.7）通常至少保留 16,384 输出 token；若角色的
+单次上限更小，则尊重该上限。剩余预算不足时先切换阶段、压缩收口输入，仍不足就记录
+覆盖缺口并停止，不向模型发送过小的剩余额度。未知模型别名使用通用最低值。
+契约补全使用同一输出规则，不再另设 8,192 上限或提前扣除 8,192。
 
 全量 OP-TEE 等大库可显式使用 `--planner-wall-clock 40m`；这增加允许时间，不保证完成。
 `TEECHECK_CODEQL_RAM` / `TEECHECK_CODEQL_THREADS` 控制 CodeQL 资源，

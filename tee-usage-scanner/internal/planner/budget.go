@@ -10,13 +10,18 @@ package planner
 
 import "time"
 
+// UnlimitedOutputAllowance means no enabled token cap applies to this request.
+// Callers must still apply the selected role/model's per-request output limit.
+// Zero is reserved for a finite budget that has no output capacity remaining.
+const UnlimitedOutputAllowance = -1
+
 // Budget bounds the planner loop in four independent dimensions.
 // Any single dimension exhausting triggers termination.
 type Budget struct {
 	MaxRounds                int           // max investigation rounds
-	MaxTokens                int           // input + output tokens summed across all rounds
-	MaxReconTokens           int           // reconnaissance input + output allowance
-	MaxInvestigationTokens   int           // investigation allowance, including convergence
+	MaxTokens                int           // input + output tokens across all rounds; 0 disables this cap
+	MaxReconTokens           int           // reconnaissance allowance; 0 disables this cap
+	MaxInvestigationTokens   int           // investigation allowance including convergence; 0 disables this cap
 	ConvergenceReserveTokens int           // reserved inside total/investigation limits for final done
 	PerActionTimeout         time.Duration // single-action runaway guard
 	WallClock                time.Duration // end-to-end hard stop
@@ -182,35 +187,44 @@ func (b Budget) ReconTokenExhausted() bool {
 	return b.MaxReconTokens > 0 && b.ReconTokensUsed >= b.MaxReconTokens
 }
 
-// OutputAllowance bounds a request's output after conservatively reserving
-// its input and the final-answer reserve. A zero phase limit means unlimited
-// for compatibility with callers supplying older custom budgets.
+// OutputAllowance returns the tightest enabled total/active-phase token cap
+// after reserving the estimated input and final-answer reserve. Each zero cap
+// is independently disabled; a disabled total never bypasses an enabled phase.
+// UnlimitedOutputAllowance means neither applicable cap is enabled. Zero means
+// an enabled cap is exhausted and must not be interpreted as a model default.
 func (b Budget) OutputAllowance(input int, recon, final bool) int {
-	remaining := int(^uint(0) >> 1)
-	limit := func(max, used int) {
-		if max > 0 && max-used-input < remaining {
-			remaining = max - used - input
+	remaining := UnlimitedOutputAllowance
+	reserve := 0
+	if !final && b.ConvergenceReserveTokens > 0 {
+		reserve = b.ConvergenceReserveTokens
+	}
+	limit := func(max, used, reserved int) {
+		if max <= 0 {
+			return
+		}
+		available := max
+		// Saturating subtraction also handles a provider overrun without
+		// integer underflow making an exhausted budget appear available.
+		for _, spent := range []int{used, input, reserved} {
+			if spent <= 0 {
+				continue
+			}
+			if spent >= available {
+				available = 0
+				break
+			}
+			available -= spent
+		}
+		if remaining == UnlimitedOutputAllowance || available < remaining {
+			remaining = available
 		}
 	}
-	limit(b.MaxTokens, b.TokensUsed)
-	if !final {
-		remaining -= b.ConvergenceReserveTokens
-	}
+	limit(b.MaxTokens, b.TokensUsed, reserve)
 	if recon {
-		if b.MaxReconTokens > 0 && b.MaxReconTokens-b.ReconTokensUsed-input < remaining {
-			remaining = b.MaxReconTokens - b.ReconTokensUsed - input
-		}
-	} else if b.MaxInvestigationTokens > 0 {
-		phaseRemaining := b.MaxInvestigationTokens - b.InvestigationTokensUsed - input
-		if !final {
-			phaseRemaining -= b.ConvergenceReserveTokens
-		}
-		if phaseRemaining < remaining {
-			remaining = phaseRemaining
-		}
-	}
-	if remaining < 0 {
-		return 0
+		// Reconnaissance does not consume the investigation reserve.
+		limit(b.MaxReconTokens, b.ReconTokensUsed, 0)
+	} else {
+		limit(b.MaxInvestigationTokens, b.InvestigationTokensUsed, reserve)
 	}
 	return remaining
 }

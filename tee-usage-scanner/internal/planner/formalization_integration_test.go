@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/events/eventstest"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -98,7 +99,7 @@ func (c *closingIntegrationClient) Generate(_ context.Context, req llm.GenerateR
 	if len(input.Candidates[0].Leads) != 1 || input.Candidates[0].Leads[0].LeadID != "lead-s0-001" {
 		c.t.Fatalf("closing request lost the current lead: %+v", input.Candidates[0].Leads)
 	}
-	if req.MaxOutputTokens <= 0 || req.MaxOutputTokens > 8192 {
+	if req.MaxOutputTokens <= 0 || req.MaxOutputTokens > config.DefaultLLMMaxTokens {
 		c.t.Fatalf("unbounded closing reply: %d", req.MaxOutputTokens)
 	}
 	contract := closingTestContract()

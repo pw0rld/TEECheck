@@ -38,7 +38,7 @@ func TestConvergencePromptRetainsContractAndLeadBeforeNavigation(t *testing.T) {
 	if strings.Contains(prompt, "oversized navigation") {
 		t.Fatal("oversized navigation displaced bounded source context")
 	}
-	if got := requestInputUpperBound(system, prompt) + minimumReplyTokens; got > available {
+	if got := estimateRequestInputTokens(system, prompt) + minimumReplyTokens; got > available {
 		t.Fatalf("request and reply reservation use %d bytes, budget %d", got, available)
 	}
 }
@@ -55,8 +55,8 @@ func TestConvergencePromptBoundsTinyBudgetsWithoutCuttingRecords(t *testing.T) {
 			if strings.Contains(prompt, "lead-") {
 				t.Fatal("an oversized lead must be omitted whole")
 			}
-			minimum := requestInputUpperBound(system, "") + minimumReplyTokens
-			if available >= minimum && requestInputUpperBound(system, prompt)+minimumReplyTokens > available {
+			minimum := estimateRequestInputTokens(system, "") + minimumReplyTokens
+			if available >= minimum && estimateRequestInputTokens(system, prompt)+minimumReplyTokens > available {
 				t.Fatal("compact prompt spends its bounded reply reservation")
 			}
 			if available < minimum && prompt != "" {

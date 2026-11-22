@@ -118,6 +118,9 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	if cfg.TaintQueryTimeout < 0 {
 		return "", fmt.Errorf("taint query timeout must not be negative")
 	}
+	if cfg.PlannerMaxTokens < 0 || cfg.PlannerMaxReconTokens < 0 || cfg.PlannerMaxInvestigationTokens < 0 {
+		return "", fmt.Errorf("planner token limits must be zero or positive")
+	}
 	var fetch repofetch.FetchResult
 	var resumeCP *planner.Checkpoint
 	var unlock func()
@@ -807,18 +810,20 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 				// observation refs would collide with the last's — and a lead
 				// raised in pass 2 would cite pass 1's evidence, from a pass
 				// deliberately pointed at different code.
-				SampleIndex:   pass - 1,
-				Profile:       promptProfile,
-				Client:        client,
-				Registry:      registry,
-				Budget:        configuredPlannerBudget(cfg),
-				Temperature:   cfg.LLMTemp,
-				KnowledgeRoot: cfg.KnowledgeRoot,
-				AvoidPaths:    avoid,
-				Events:        rec,
-				Blobs:         blobs,
-				Model:         cfg.LLMModel,
-				Executor:      exec,
+				SampleIndex:     pass - 1,
+				Profile:         promptProfile,
+				Client:          client,
+				Registry:        registry,
+				Budget:          configuredPlannerBudget(cfg),
+				Temperature:     cfg.LLMTemp,
+				KnowledgeRoot:   cfg.KnowledgeRoot,
+				AvoidPaths:      avoid,
+				Events:          rec,
+				Blobs:           blobs,
+				Model:           cfg.LLMModel,
+				MaxOutputTokens: cfg.LLMMaxTokens,
+				ReasoningEffort: cfg.LLMReasoningEffort,
+				Executor:        exec,
 				// Project Understanding prior knowledge (§7.5): the planner
 				// investigates against these, and reaches the fact layer via
 				// the fact_layer_query action registered above.

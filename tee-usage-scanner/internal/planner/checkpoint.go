@@ -306,14 +306,16 @@ func checkpointConfigHash(cfg RunConfig) string {
 	b.InvestigationTokensUsed = 0
 	b.TaintQueriesUsed = 0
 	data, _ := json.Marshal(struct {
-		Profile     PromptProfile
-		Budget      Budget
-		Model       string
-		Temperature float64
-		MaxActions  int
-		AvoidPaths  []string
-		TWE         string
-	}{cfg.Profile, b, cfg.Model, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext})
+		Profile         PromptProfile
+		Budget          Budget
+		Model           string
+		MaxOutputTokens int
+		ReasoningEffort string
+		Temperature     float64
+		MaxActions      int
+		AvoidPaths      []string
+		TWE             string
+	}{cfg.Profile, b, cfg.Model, cfg.MaxOutputTokens, cfg.ReasoningEffort, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

@@ -12,6 +12,15 @@ func configuredPlannerBudget(cfg config.Config) planner.Budget {
 	if cfg.PlannerWallClock > 0 {
 		b.WallClock = cfg.PlannerWallClock
 	}
+	if cfg.PlannerMaxTokensExplicit || cfg.PlannerMaxTokens > 0 {
+		b.MaxTokens = cfg.PlannerMaxTokens
+	}
+	if cfg.PlannerMaxReconTokensExplicit || cfg.PlannerMaxReconTokens > 0 {
+		b.MaxReconTokens = cfg.PlannerMaxReconTokens
+	}
+	if cfg.PlannerMaxInvestigationTokensExplicit || cfg.PlannerMaxInvestigationTokens > 0 {
+		b.MaxInvestigationTokens = cfg.PlannerMaxInvestigationTokens
+	}
 	if cfg.MaxTaintQueriesExplicit || cfg.MaxTaintQueries > 0 {
 		b.MaxTaintQueries = cfg.MaxTaintQueries
 	}
