@@ -65,7 +65,7 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 
 	build := currentBuildProvenance()
 	manifest := artifacts.Manifest{
-		ExpectedStages:  runfs.ExpectedStages(cfg.EnableLegacyPrior),
+		ExpectedStages:  runfs.ExpectedStagesWithOptions(cfg.EnableLegacyPrior, cfg.EnableTaintPrescan),
 		SourceScopeMode: "local_fallback",
 		SchemaVersion:   "teecheck.manifest.v1",
 		RunID:           runID,
@@ -81,14 +81,15 @@ func Run(cfg config.Config, now time.Time) (string, error) {
 		},
 		Build: &build,
 		Configuration: &artifacts.RunConfiguration{
-			Command:           cfg.Command,
-			Mode:              cfg.Mode,
-			Samples:           cfg.Samples,
-			MaxCases:          cfg.MaxCases,
-			MaxHotspots:       cfg.MaxHotspots,
-			MaxDialogRounds:   cfg.MaxDialogRounds,
-			StaticTools:       cfg.StaticTools,
-			EnableLegacyPrior: cfg.EnableLegacyPrior,
+			Command:            cfg.Command,
+			Mode:               cfg.Mode,
+			Samples:            cfg.Samples,
+			MaxCases:           cfg.MaxCases,
+			MaxHotspots:        cfg.MaxHotspots,
+			MaxDialogRounds:    cfg.MaxDialogRounds,
+			StaticTools:        cfg.StaticTools,
+			EnableLegacyPrior:  cfg.EnableLegacyPrior,
+			EnableTaintPrescan: cfg.EnableTaintPrescan,
 			LLM: artifacts.LLMConfiguration{
 				Provider:        cfg.LLMProvider,
 				BaseURL:         config.RedactedEndpoint(cfg.LLMBaseURL),

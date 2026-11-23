@@ -98,7 +98,6 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 		"preprocess",
 		"repo_index",
 		"project_map",
-		"taint_prescan",
 		"architecture",
 		"invariants",
 		"l3_planner",
@@ -107,6 +106,9 @@ func TestPipeline_EveryStageLeavesStageEvents(t *testing.T) {
 		"challenger",
 		"verifier",
 		"arbiter",
+	}
+	if byStage["taint_prescan"] != nil {
+		t.Fatalf("taint_prescan must not run unless --enable-taint-prescan is set; saw %v", stageNames(byStage))
 	}
 	for _, stage := range wantStages {
 		evs := byStage[stage]

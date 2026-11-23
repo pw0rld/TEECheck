@@ -435,14 +435,16 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 			return runDir, fmt.Errorf("project map: %w", err)
 		}
 
-		// One static, neutral entry-to-sink query before any Planner round.
-		// Its witnesses guide source inspection; no CasePack is promoted here.
-		_ = stage("taint_prescan", func() error {
-			prescanEngine := codeql.New()
-			prescanEngine.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: "taint-prescan"})
-			prescan = runEntryTaintPrescan(stageCfg, prescanEngine, codeDB, runDir, srcRoot)
-			return nil
-		})
+		// Optional L2 global taint prescan (--enable-taint-prescan). Disabled by
+		// default in v2 so whole-repo cartesian taint queries never block planning.
+		if stageCfg.EnableTaintPrescan {
+			_ = stage("taint_prescan", func() error {
+				prescanEngine := codeql.New()
+				prescanEngine.Exec = executor.Bind(exec, executor.Binding{RunID: runID, Agent: "taint-prescan"})
+				prescan = runEntryTaintPrescan(stageCfg, prescanEngine, codeDB, runDir, srcRoot)
+				return nil
+			})
+		}
 
 		// The old pre-investigation models have no source evidence in their
 		// prompts. Keep them explicitly opt-in during migration; ordinary runs
@@ -465,6 +467,13 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 		}
 	} else {
 		stageCfg.LocalPath = srcRoot
+		manifest, err := runfs.LoadManifest(runDir)
+		if err != nil {
+			return runDir, fmt.Errorf("resume database scope: %w", err)
+		}
+		if err := restoreFailedDatabase(runDir, manifest, codeDB); err != nil {
+			return runDir, err
+		}
 	}
 
 	// === Agent 1: L3 Planner ===
@@ -827,21 +836,22 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 				// observation refs would collide with the last's — and a lead
 				// raised in pass 2 would cite pass 1's evidence, from a pass
 				// deliberately pointed at different code.
-				SampleIndex:     pass - 1,
-				Profile:         promptProfile,
-				Client:          client,
-				Registry:        registry,
-				Budget:          configuredPlannerBudget(cfg),
-				Temperature:     cfg.LLMTemp,
-				KnowledgeRoot:   cfg.KnowledgeRoot,
-				AvoidPaths:      avoid,
-				Events:          rec,
-				Blobs:           blobs,
-				Model:           cfg.LLMModel,
-				PreScannedTaint: prescan,
-				MaxOutputTokens: cfg.LLMMaxTokens,
-				ReasoningEffort: cfg.LLMReasoningEffort,
-				Executor:        exec,
+				SampleIndex:        pass - 1,
+				Profile:            promptProfile,
+				Client:             client,
+				Registry:           registry,
+				Budget:             configuredPlannerBudget(cfg),
+				Temperature:        cfg.LLMTemp,
+				KnowledgeRoot:      cfg.KnowledgeRoot,
+				AvoidPaths:         avoid,
+				Events:             rec,
+				Blobs:              blobs,
+				Model:              cfg.LLMModel,
+				PreScannedTaint:    prescan,
+				StrictContractExit: !cfg.AllowUncontractedCases,
+				MaxOutputTokens:    cfg.LLMMaxTokens,
+				ReasoningEffort:    cfg.LLMReasoningEffort,
+				Executor:           exec,
 				// Project Understanding prior knowledge (§7.5): the planner
 				// investigates against these, and reaches the fact layer via
 				// the fact_layer_query action registered above.

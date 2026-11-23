@@ -25,6 +25,7 @@ type Budget struct {
 	ConvergenceReserveTokens int           // reserved inside total/investigation limits for final done
 	PerActionTimeout         time.Duration // single-action runaway guard
 	WallClock                time.Duration // end-to-end hard stop
+	SoftWallClock            time.Duration // optional convergence watermark (e.g. 65% of outer run clock)
 	// Taint queries use their own timeout and quota because a global query
 	// can legitimately take longer than a source browsing action. Zero quota
 	// means no separate cap; ordinary run budgets still apply.
@@ -130,6 +131,30 @@ func (b *Budget) ReconExhausted() bool {
 // and stops growing at MaxRounds + MaxReconRounds.
 func (b *Budget) TotalRounds() int {
 	return b.MaxRounds + b.ReconRoundsUsed
+}
+
+// RemainingRounds returns how many rounds remain after the current consumed round.
+func (b *Budget) RemainingRounds() int {
+	if b.MaxRounds <= 0 {
+		return 999
+	}
+	rem := b.TotalRounds() - b.RoundsUsed
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
+// InConvergenceWindow reports whether the loop should freeze broad exploration
+// and force open leads toward formalize_contract or close_lead.
+func (b *Budget) InConvergenceWindow() bool {
+	if b.MaxRounds > 0 && b.RemainingRounds() <= 1 {
+		return true
+	}
+	if b.SoftWallClock > 0 && !b.startedAt.IsZero() && time.Since(b.startedAt) >= b.SoftWallClock {
+		return true
+	}
+	return false
 }
 
 // IsFinalRound reports whether the round just consumed is the last one. The

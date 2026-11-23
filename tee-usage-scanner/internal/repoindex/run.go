@@ -209,10 +209,16 @@ func ensureDatabase(ctx context.Context, db codedb.DatabaseProvider, runDir stri
 	if manifest.RepoURL == "" || manifest.Commit == "" {
 		return "", "no pinned repository@commit; the program index needs one to build a database"
 	}
-	dbPath, err := db.Ensure(ctx, codedb.Scope{
+	scope := codedb.Scope{
 		RunDir: runDir, Repository: manifest.RepoURL, Commit: manifest.Commit,
-	})
+	}
+	dbPath, err := db.Ensure(ctx, scope)
 	if err != nil {
+		if freezer, ok := db.(interface {
+			FreezeFailedScope(codedb.Scope, error)
+		}); ok {
+			freezer.FreezeFailedScope(scope, err)
+		}
 		return "", "codeql database: " + err.Error()
 	}
 	return dbPath, ""

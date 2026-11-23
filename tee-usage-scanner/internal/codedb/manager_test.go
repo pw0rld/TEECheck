@@ -80,7 +80,7 @@ func setupRetryBuild(t *testing.T, engine *retryBuildEngine) (*Manager, Scope) {
 
 func TestEnsureDatabase_TransientFailureRetriesOnce(t *testing.T) {
 	for _, marker := range []string{
-		"exit status 100", "java.lang.InternalError", "MMapPage", "DiskWritableStringStore", "SIGBUS",
+		"exit status 100", "exit status 2", "java.lang.InternalError", "MMapPage", "DiskWritableStringStore", "SIGBUS",
 		"exit status 2: OpenJDK 64-Bit Server VM: SIGSEGV; Problematic frame: ~StubRoutines::updateBytesCRC32",
 		"Problematic frame: ~StubRoutines::updateBytesCRC32",
 		"An error report file is saved as hs_err_pid123.log",
@@ -103,6 +103,18 @@ func TestEnsureDatabase_TransientFailureRetriesOnce(t *testing.T) {
 				t.Fatal("successful retry was not cached")
 			}
 		})
+	}
+}
+
+func TestFreezeFailedScopeBlocksSubsequentRebuildInSameRun(t *testing.T) {
+	e := &retryBuildEngine{}
+	m, scope := setupRetryBuild(t, e)
+	m.FreezeFailedScope(scope, errors.New("initial extraction failed"))
+	if _, err := m.Ensure(context.Background(), scope); err == nil {
+		t.Fatal("expected frozen scope to reject subsequent rebuild")
+	}
+	if len(e.calls) != 0 {
+		t.Fatalf("expected 0 CreateDatabase calls after freeze, got %d", len(e.calls))
 	}
 }
 

@@ -44,7 +44,8 @@ limits while retaining per-call model, round and wall-clock limits; see
 An explicit `--planner-wall-clock=0` also disables the Planner's pass clock;
 omitting it keeps the 10m default and individual request timeouts still apply.
 
-With a ready CodeQL database, an L2 batch entry-to-sink prescan supplies up to
+With `--enable-taint-prescan` and a ready CodeQL database, an L2 batch
+entry-to-sink prescan supplies up to
 10 neutral path clues to the Planner before its first request. It shares the
 existing database, preserves immutable ToolFacts, and never directly promotes
 a finding. Details and coverage limits are in [HARNESS.md](docs/HARNESS.md).
@@ -60,8 +61,8 @@ benchmark runner supplies both variables separately for each case variant.
 source acquisition and common revision/root
   -> preprocess
   -> program index (CodeQL when available)
-  -> project map (repository, module, and function cards)
-  -> one batch entry-to-sink taint prescan (neutral ToolFacts and navigation clues)
+  -> project map (cards, entry call closures, and structural field-access bridges)
+  -> optional batch entry-to-sink taint prescan (--enable-taint-prescan)
   -> optional legacy architecture/invariant stages
   -> deterministic supported fact queries
   -> planner reconnaissance -> source-grounded investigation
@@ -210,12 +211,18 @@ safety or a violation.
 
 The compact final-round prompt retains this contract format and the current
 sample's lead IDs. If `done` still returns legacy candidates, the planner makes
-at most one closing request within the same round, token budget, and deadline
-(at most 8,192 output tokens). It supplies successful source reads and matching
+at most one closing request within the same round, token budget, and deadline,
+using the selected role's output limit. It supplies successful source reads and matching
 leads from that sample, then binds accepted contracts directly to the original
 candidate's CasePack. Missing leads, unread or unknown symbols, invalid replies,
-and insufficient budget leave explicit gaps and an unformalized candidate.
+and insufficient budget leave explicit gaps. Uncontracted candidates remain in
+the evidence bundle and do not advance to downstream review by default.
 An upstream policy refusal stops this request without a prompt or model retry.
+
+`done` is accepted after contracts are validated, persisted, and attached to the
+sample's leads. Unresolved leads reject an early `done`; budget exhaustion keeps
+their state and marks coverage incomplete. Contracts already accepted by the
+scanner survive later closing failures and are not re-grounded as new drafts.
 
 The lead controls support an incremental workflow:
 
@@ -232,7 +239,7 @@ The lead controls support an incremental workflow:
   It does not assert safety or remove accepted contracts. Lead revisions are
   appended to `audit_leads.jsonl`; the last revision for each lead is current.
 
-Cross-process resume still requires separate source-freshness validation.
+Resume validates source contents and restores a consistent committed journal boundary.
 The taint action supplies review evidence; it does not add an automatic
 `satisfied` or `violated` contract query.
 
@@ -320,6 +327,7 @@ Common run controls:
 | `--output-dir DIR`, `--run-id ID` | Choose artifact destination and identity |
 | `--knowledge-root DIR` | Select the knowledge tree |
 | `--enable-legacy-prior` | Opt into old pre-investigation model stages |
+| `--enable-taint-prescan` | Opt into the L2 batch taint query; disabled by default |
 | `--llm-provider glm\|openai\|deepseek` | Select provider preset |
 | `--llm-base-url`, `--llm-model` | Select endpoint/model |
 | `--llm-transport chat_completions\|responses` | OpenAI transport |

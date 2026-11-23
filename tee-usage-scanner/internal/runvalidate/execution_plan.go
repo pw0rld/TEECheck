@@ -31,10 +31,15 @@ func validateExecutionPlan(runDir string, m artifacts.Manifest, all []events.Eve
 		expected[s] = true
 	}
 	legacy := false
+	prescan := false
 	if m.Configuration != nil {
 		legacy = m.Configuration.EnableLegacyPrior
+		prescan = m.Configuration.EnableTaintPrescan
+	} else {
+		// Backward compatibility for pre-v2 manifests that explicitly listed taint_prescan.
+		prescan = expected["taint_prescan"]
 	}
-	for _, s := range runfs.ExpectedStages(legacy) {
+	for _, s := range runfs.ExpectedStagesWithOptions(legacy, prescan) {
 		if !expected[s] {
 			add("execution_plan_missing_stage", path, "required audit stage %q is absent from expected_stages", s)
 		}

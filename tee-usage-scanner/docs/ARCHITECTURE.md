@@ -9,8 +9,8 @@
 ```text
 固定源码与 ScannedScope
   → 预处理与确定性程序索引（RepoFacts）
-  → 中性 ProjectMapV0 / EntrySurfaces
-  → L2 批量入口污点预扫：中性路径 ToolFact / Top-10 浏览线索
+  → 中性 ProjectMapV0 / EntrySurfaces / 3 跳入口闭包与字段访问桥
+  → 可选 L2 批量入口污点预扫（--enable-taint-prescan）：中性路径 ToolFact / Top-10 浏览线索
   → Planner Pass A：项目侦察、边界入口、按需取证、AuditLead
   → Planner Pass B：TWE 补覆盖、扩展 Lead、CaseInvariantV2
   → CasePack + 独立 Expert / Challenger 源码复核

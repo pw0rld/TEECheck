@@ -82,9 +82,16 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 		}
 		var leads []artifacts.AuditLead
 		for _, lead := range state.AuditLeads {
-			if lead.RunID == cfg.RunID && lead.SampleIndex == cfg.SampleIndex && lead.State != artifacts.LeadStateClosed && candidateSharesLead(c, lead) {
+			if lead.RunID != cfg.RunID || lead.SampleIndex != cfg.SampleIndex || !candidateSharesLead(c, lead) {
+				continue
+			}
+			if lead.State == artifacts.LeadStateOpen || lead.State == artifacts.LeadStateExpanded ||
+				(lead.State == artifacts.LeadStateFormalized && !leadBackedByAcceptedContract(lead, state.Contracts)) {
 				leads = append(leads, lead)
 			}
+		}
+		if len(leads) == 0 && state != nil && candidateCoveredByAcceptedContract(c, state.Contracts) {
+			continue
 		}
 		var windows []formalizationSource
 		for _, source := range sources {

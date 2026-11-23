@@ -10,6 +10,10 @@ JSON Schema 位于 `schemas/`。
 Lead 从 `open` 进入 `expanded`、`formalized` 或 `closed`，持久化当前问题、下一步动作、
 源码和工具引用。关闭 Lead 只是结束调查，不证明安全。
 `formalize_contract` 校验通过后，契约才进入案例；旧式自由文本候选不会绕过契约门控。
+`done` 中的契约草稿也须先完成同样的绑定。只有所有当前 sample 的 Lead 均已形式化或
+关闭时才正常完成；预算耗尽仍有未决 Lead 的运行保留不完整覆盖状态。已接受契约与模型
+新草稿分开保存，后续失败不会删除已接受项。最终调查包只消费机器接受过的契约，不能
+凭模型提供的 grounding、ID 或 hash 声明跳过校验。
 
 契约的主要字段：
 
@@ -31,7 +35,8 @@ Lead 从 `open` 进入 `expanded`、`formalized` 或 `closed`，持久化当前�
 ## ToolFact 与查询能力
 
 工具输出保留操作名、参数、scope、状态、来源和 coverage gaps；引用必须属于本次运行，
-内容哈希一致。`cpp.taint.trace` 事实可以附到 Lead 和契约，并交给独立复核者阅读。
+内容哈希一致。`cpp.taint.trace` 和显式开启预扫得到的 `cpp.taint.prescan` 事实可以附到
+Lead 和契约，并交给独立复核者阅读。
 查询事实不能被 Planner 文本改成更强的结论。
 
 当前注册的契约查询 `cpp.contract.direct_struct_field_assignment` 核查指定函数内的直接

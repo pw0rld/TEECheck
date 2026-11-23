@@ -51,16 +51,17 @@ type BuildProvenance struct {
 // RunConfiguration records the resolved, secret-free controls that materially
 // affect pipeline output.
 type RunConfiguration struct {
-	EnableLegacyPrior bool             `json:"enable_legacy_prior"`
-	Command           string           `json:"command"`
-	Mode              string           `json:"mode,omitempty"`
-	Samples           int              `json:"samples,omitempty"`
-	MaxCases          int              `json:"max_cases,omitempty"`
-	MaxHotspots       int              `json:"max_hotspots,omitempty"`
-	MaxDialogRounds   int              `json:"max_dialog_rounds,omitempty"`
-	StaticTools       string           `json:"static_tools,omitempty"`
-	LLM               LLMConfiguration `json:"llm"`
-	Planner           *PlannerLimits   `json:"planner,omitempty"`
+	EnableLegacyPrior  bool             `json:"enable_legacy_prior"`
+	EnableTaintPrescan bool             `json:"enable_taint_prescan,omitempty"`
+	Command            string           `json:"command"`
+	Mode               string           `json:"mode,omitempty"`
+	Samples            int              `json:"samples,omitempty"`
+	MaxCases           int              `json:"max_cases,omitempty"`
+	MaxHotspots        int              `json:"max_hotspots,omitempty"`
+	MaxDialogRounds    int              `json:"max_dialog_rounds,omitempty"`
+	StaticTools        string           `json:"static_tools,omitempty"`
+	LLM                LLMConfiguration `json:"llm"`
+	Planner            *PlannerLimits   `json:"planner,omitempty"`
 }
 
 type LLMConfiguration struct {

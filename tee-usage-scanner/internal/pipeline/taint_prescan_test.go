@@ -70,6 +70,12 @@ func TestConfiguredPlannerWallClockExplicitZero(t *testing.T) {
 		if b.WallClock != tc.want || b.MaxRounds != 8 || b.MaxReconRounds != 10 {
 			t.Fatalf("budget=%+v", b)
 		}
+		if tc.want == 0 && b.SoftWallClock != 0 {
+			t.Fatal("unlimited pass clock still has a timed convergence window")
+		}
+		if tc.want > 0 && (b.SoftWallClock <= 0 || b.SoftWallClock >= b.WallClock) {
+			t.Fatal("convergence window must leave time before the hard pass deadline")
+		}
 	}
 }
 

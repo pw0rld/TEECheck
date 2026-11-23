@@ -20,6 +20,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/schema"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/topology"
 )
 
 // skipDirs are excluded from the per-module file counts: they hold no
@@ -93,6 +94,18 @@ func Run(cfg config.Config) error {
 		m.CoverageStatus = artifacts.CapabilityPartial
 	}
 	m.EntrySurfaces, m.Capabilities.EntrySurfaces, m.EntrySurfaceNote = entrySurfacesForMap(facts, m.Capabilities.Symbols)
+	if len(m.EntrySurfaces) > 0 && m.Capabilities.Symbols != artifacts.CapabilityUnavailable {
+		topo := topology.Build(manifest.RunID, manifest.Scope, facts, m.EntrySurfaces)
+		if err := runfs.WriteJSON(runfs.BoundaryTopologyPath(cfg.RunDir), topo); err != nil {
+			return fmt.Errorf("write boundary topology: %w", err)
+		}
+		m.TopologyPath = "01_context/boundary_topology.v1.json"
+		m.SurfacePartitions = make([]artifacts.SurfacePartition, 0, len(topo.SurfacePartitions))
+		for _, p := range topo.SurfacePartitions {
+			p.RootSymbolIDs = nil
+			m.SurfacePartitions = append(m.SurfacePartitions, p)
+		}
+	}
 
 	data, err := json.Marshal(m)
 	if err != nil {

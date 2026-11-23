@@ -18,7 +18,10 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runvalidate"
 )
 
-type sourceLeadClient struct{ calls int }
+type sourceLeadClient struct {
+	calls     int
+	sourceRef string
+}
 
 func (c *sourceLeadClient) Generate(_ context.Context, req llm.GenerateRequest) (llm.GenerateResponse, error) {
 	c.calls++
@@ -30,6 +33,7 @@ func (c *sourceLeadClient) Generate(_ context.Context, req llm.GenerateRequest) 
 		if len(match) != 2 {
 			return llm.GenerateResponse{}, fmt.Errorf("successful source observation was not exposed")
 		}
+		c.sourceRef = match[1]
 		payload := map[string]any{"actions": []any{map[string]any{
 			"name": "open_audit_lead", "args": map[string]any{
 				"security_question": "Does verify reject non-positive input?",
@@ -44,7 +48,19 @@ func (c *sourceLeadClient) Generate(_ context.Context, req llm.GenerateRequest) 
 		if !strings.Contains(req.SystemPrompt, "Investigator") {
 			return llm.GenerateResponse{}, fmt.Errorf("source lead did not enter investigation")
 		}
-		return llm.GenerateResponse{Text: plannerDoneJSON}, nil
+		lead := regexp.MustCompile(`"lead_id"\s*:\s*"([^"]+)"`).FindStringSubmatch(req.Messages[0].Content)
+		if len(lead) != 2 {
+			return llm.GenerateResponse{}, fmt.Errorf("lead_id was not exposed in prompt")
+		}
+		body, _ := json.Marshal(map[string]any{"actions": []any{
+			map[string]any{"name": "close_lead", "args": map[string]any{
+				"lead_id":   lead[1],
+				"reason":    "verify returns value > 0 directly in demo.c",
+				"fact_refs": []string{c.sourceRef},
+			}},
+			map[string]any{"name": "done", "args": map[string]any{"summary": "verified safe guard", "candidates": []any{}}},
+		}})
+		return llm.GenerateResponse{Text: string(body)}, nil
 	default:
 		return llm.GenerateResponse{}, fmt.Errorf("unexpected additional model call %d", c.calls)
 	}

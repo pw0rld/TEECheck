@@ -97,6 +97,9 @@ type RunConfig struct {
 	// Resolved role output limit; zero preserves the global per-call default.
 	MaxOutputTokens int
 	ReasoningEffort string
+	// StrictContractExit refuses premature done while leads remain open/expanded,
+	// freezes exploration in the convergence window, and drops uncontracted thin CasePacks.
+	StrictContractExit bool
 	// PreScannedTaint is validated neutral L2 evidence, not source-read credit.
 	PreScannedTaint *PreScannedTaint
 
@@ -272,6 +275,7 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 
 	var donePayload actions.DonePayload
 	var doneAccepted bool
+	var doneContractsBound bool
 	// Closing contracts are linked to the converted candidate index, so a
 	// successful formalization replaces that candidate's thin pack instead of
 	// leaving a second, unformalized copy beside it.
@@ -445,6 +449,14 @@ loop:
 		roundPrompt += reconStatusBlock(recon)
 
 		isFinalRound := cfg.Budget.IsFinalRound()
+		unresolvedLeads := unresolvedSampleLeads(state, cfg.RunID, cfg.SampleIndex)
+		inConvergenceFreeze := cfg.StrictContractExit && !inRecon && !isFinalRound && cfg.Budget.InConvergenceWindow() && len(unresolvedLeads) > 0
+		if inConvergenceFreeze {
+			roundPrompt += "\n=== CONVERGENCE WINDOW — RESOLVE OPEN LEADS NOW ===\n"
+			roundPrompt += "Broad exploration actions are frozen because budget is nearly exhausted.\n"
+			roundPrompt += "Unresolved open/expanded lead(s): " + strings.Join(unresolvedLeads, ", ") + "\n"
+			roundPrompt += "You may ONLY call `read_file` (to confirm an anchor), `update_lead`, `formalize_contract`, `close_lead`, or `done` (after leads are resolved).\n"
+		}
 
 		// Inject the list of paths the LLM has actually observed so
 		// far in every round after the first. The wording is soft in
@@ -822,10 +834,17 @@ loop:
 			// the flip.
 			phaseAtAction := recon.Phase()
 
+			currentUnresolved := unresolvedSampleLeads(state, cfg.RunID, cfg.SampleIndex)
 			var result actions.ActionResult
 			switch {
 			case isFinalRound && act.Name != "done":
 				result = actions.ActionResult{Name: act.Name, Error: "final round permits only done; exploration would spend the convergence reserve"}
+			case inConvergenceFreeze && !allowedInConvergenceFreeze(act.Name):
+				result = actions.ActionResult{
+					Name:  act.Name,
+					OK:    false,
+					Error: "convergence freeze: broad exploration is disabled; call formalize_contract or close_lead for unresolved lead(s): " + strings.Join(currentUnresolved, ", "),
+				}
 			case act.Name == ActionOpenAuditLead:
 				var lead artifacts.AuditLead
 				lead, result = openLead(cfg, recon, observations, act.Args, roundNum, state)
@@ -835,10 +854,19 @@ loop:
 				}
 			case act.Name == ActionUpdateLead:
 				result = updateLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
+				if result.OK {
+					leads = cloneLeadsSlice(state.AuditLeads)
+				}
 			case act.Name == ActionFormalizeContract:
 				result = formalizeContract(cfg, state, observations, executedToolFactRefs, roundRec, act.Args)
+				if result.OK {
+					leads = cloneLeadsSlice(state.AuditLeads)
+				}
 			case act.Name == ActionCloseLead:
 				result = closeLead(cfg, state, observations, executedToolFactRefs, act.Args, roundNum)
+				if result.OK {
+					leads = cloneLeadsSlice(state.AuditLeads)
+				}
 			case act.Name == "done" && !recon.AllowDone(isFinalRound):
 				result = actions.ActionResult{
 					Name: "done",
@@ -898,39 +926,130 @@ loop:
 					result = registry.Run(ctx, request)
 				}()
 			}
+			// Validate, bind, and persist NEW closing drafts while keeping already
+			// machine-accepted contracts in state.Contracts intact, then verify real
+			// AuditLead state transitions BEFORE committing `done`.
+			var finishLoopAfterObservation bool
+			if result.Name == "done" && result.OK {
+				var trialPayload actions.DonePayload
+				if uerr := json.Unmarshal([]byte(result.Output), &trialPayload); uerr != nil {
+					result = actions.ActionResult{Name: "done", OK: false, Error: "invalid done payload: " + uerr.Error()}
+				} else {
+					acceptedSnapshot := cloneContractsSlice(state.Contracts)
+					trialPayload.CaseInvariants = filterOutAcceptedDrafts(trialPayload.CaseInvariants, acceptedSnapshot)
+					closingState := *state
+					closingState.Rounds = append(append([]artifacts.RoundRecord(nil), state.Rounds...), roundRec)
+					trialClosing, closeErrors, closeGaps, closeErr := formalizeCandidates(ctx, cfg, &trialPayload, &closingState, observations, func(system, prompt string) (llm.GenerateResponse, error) {
+						savedSystem, savedInRecon, savedFinal := systemPrompt, inRecon, isFinalRound
+						systemPrompt = system
+						inRecon, isFinalRound = false, true
+						defer func() {
+							systemPrompt, inRecon, isFinalRound = savedSystem, savedInRecon, savedFinal
+						}()
+						return askOnce(prompt)
+					})
+					roundRec.TokensIn, roundRec.TokensOut = tokensIn, tokensOut
+					runErrors = append(runErrors, closeErrors...)
+					coverageGaps = append(coverageGaps, closeGaps...)
+					roundRec.CoverageGaps = append(roundRec.CoverageGaps, closeGaps...)
+
+					if closeErr != nil {
+						convertedCands, _ := convertCandidates(trialPayload.Candidates, cfg.RepoRoot)
+						acceptedClosing, acceptedStandalone := partitionAcceptedContracts(acceptedSnapshot, convertedCands)
+						trialPayload.CaseInvariants = acceptedStandalone
+						donePayload = trialPayload
+						doneAccepted = true
+						doneContractsBound = true
+						closingContracts = acceptedClosing
+						if errors.Is(closeErr, errReplyBudget) {
+							terminationReason = "token_budget_insufficient"
+						} else {
+							runErr = fmt.Errorf("round %d: contract formalization: %w", roundNum, closeErr)
+							terminationReason = "llm_error"
+							if cfg.Budget.WallClock > 0 && time.Since(cfg.Budget.startedAt) >= cfg.Budget.WallClock {
+								terminationReason = "wall_clock"
+							}
+							if llm.IsPolicyRefusal(closeErr) {
+								terminationReason = "policy_refusal"
+								coverageGaps = append(coverageGaps, policyRefusalCoverageGap)
+								roundRec.CoverageGaps = append(roundRec.CoverageGaps, policyRefusalCoverageGap)
+							}
+						}
+						finishLoopAfterObservation = true
+					} else {
+						convertedCands, _ := convertCandidates(trialPayload.Candidates, cfg.RepoRoot)
+						acceptedClosing, acceptedStandalone := partitionAcceptedContracts(acceptedSnapshot, convertedCands)
+						var bindErrors []artifacts.RoundError
+						boundClosing := make(map[int][]artifacts.CaseInvariantV2, len(trialClosing)+len(acceptedClosing))
+						for idx, accList := range acceptedClosing {
+							boundClosing[idx] = cloneContractsSlice(accList)
+						}
+						candIndices := make([]int, 0, len(trialClosing))
+						for idx := range trialClosing {
+							candIndices = append(candIndices, idx)
+						}
+						sort.Ints(candIndices)
+						for _, idx := range candIndices {
+							boundList, errs := bindPlannerContractsWithState(trialClosing[idx], cfg, state, &observations, executedToolFactRefs, &roundRec)
+							boundClosing[idx] = contracts.MergeAll(boundClosing[idx], boundList)
+							bindErrors = append(bindErrors, errs...)
+						}
+						boundStandalone, standaloneErrs := bindPlannerContractsWithState(trialPayload.CaseInvariants, cfg, state, &observations, executedToolFactRefs, &roundRec)
+						trialPayload.CaseInvariants = contracts.MergeAll(acceptedStandalone, boundStandalone)
+						bindErrors = append(bindErrors, standaloneErrs...)
+						invBindErrs := bindInvestigationContracts(trialPayload.Investigations, cfg, state, &observations, executedToolFactRefs, &roundRec)
+						bindErrors = append(bindErrors, invBindErrs...)
+						runErrors = append(runErrors, bindErrors...)
+						leads = cloneLeadsSlice(state.AuditLeads)
+
+						stillUnresolved := unresolvedSampleLeads(state, cfg.RunID, cfg.SampleIndex)
+						if cfg.StrictContractExit && !isFinalRound && len(stillUnresolved) > 0 {
+							var diag []string
+							for _, e := range append(closeErrors, bindErrors...) {
+								diag = append(diag, e.Error)
+							}
+							for _, g := range closeGaps {
+								diag = append(diag, g)
+							}
+							msg := "done refused: unresolved audit lead(s) " + strings.Join(stillUnresolved, ", ") +
+								" remain open after contract validation/formalization; bind each lead with a valid CaseInvariantV2 (formalize_contract) or archive it with close_lead before concluding"
+							if len(diag) > 0 {
+								msg += ". Diagnostics: " + strings.Join(diag, "; ")
+							}
+							result = actions.ActionResult{
+								Name:  "done",
+								OK:    false,
+								Error: msg,
+							}
+						} else {
+							donePayload = trialPayload
+							doneAccepted = true
+							doneContractsBound = true
+							closingContracts = boundClosing
+							if cfg.StrictContractExit && len(stillUnresolved) > 0 {
+								terminationReason = "unresolved_leads_incomplete"
+								gap := "Planner stopped at budget exhaustion with unresolved audit lead(s): " + strings.Join(stillUnresolved, ", ")
+								coverageGaps = unionStrings(coverageGaps, []string{gap})
+								roundRec.CoverageGaps = unionStrings(roundRec.CoverageGaps, []string{gap})
+							} else {
+								terminationReason = "llm_done"
+							}
+							finishLoopAfterObservation = true
+						}
+					}
+				}
+			}
+
 			loopDet.Record(act.Name, argsStr)
-			// Source coverage comes from the actual bounded response below,
-			// never a requested line range or an outline without source text.
 			if act.Name != "read_file" && act.Name != "tree_sitter_outline" {
 				recon.ObserveAction(act.Name, act.Args, result.OK)
 			}
 
-			// The blob carries the UNTRUNCATED output. The round
-			// observation below keeps an excerpt so the next prompt
-			// stays affordable; that excerpt is what used to be the
-			// only surviving copy, which is how "the truncated read
-			// from round 5 didn't show lines 35-80" became an
-			// unanswerable question. Output is blobbed on the failure
-			// path too — a tool that errored is the one someone will
-			// be diagnosing.
-			//
-			// It is written whoever emits the tool events: the ref is
-			// derived from it, so an executor-backed action needs it
-			// here too. The store is content-addressed, so writing a
-			// body the executor already wrote costs a hash, not a copy.
 			outputBlob := events.BestEffortRef(cfg.Blobs, []byte(result.Output))
 			if !executorBacked {
 				_ = cfg.Events.Emit(events.ToolCallCompleted(cfg.RunID, cfg.AgentID, result.Name, roundNum, result.OK, result.DurationMs, outputBlob, result.Error))
 			}
 
-			// Everything the model reads passes through one cap, and a
-			// cut says so. The 4000-character truncate that used to
-			// stand here had no marker at all, so a 32 KB page arrived
-			// as 4 KB that looked like the whole answer — and a model
-			// cannot ask for the rest of something it does not know was
-			// cut. Truncated is an OR: a handler may already have
-			// bounded its own output, and losing that flag here would
-			// report a doubly-cut observation as complete.
 			body, cutHere := excerpt(result.Output, outputBlob)
 			recon.ObserveSourceOutput(act.Name, act.Args, body, result.OK)
 
@@ -953,19 +1072,10 @@ loop:
 				DurationMs:  result.DurationMs,
 			})
 
-			// Track any repo-relative path the LLM has inspected, so
-			// the force-done prompt can constrain candidates[].paths.
 			if result.OK {
 				trackObservedPaths(act.Name, act.Args, result.Output, cfg.RepoRoot, observedPaths)
 			}
 
-			// Keep a pulled TWE playbook detail alive for the rest of the
-			// loop: BuildRoundPrompt's RECENT ROUNDS window truncates and
-			// scrolls out actions' Output far too aggressively for the
-			// detail tier's 3000-token budget (see PlaybookDetails' doc
-			// comment on PlannerState). Recording it here means the sticky
-			// "TWE PLAYBOOK DETAIL" section renders it in full every round
-			// from here on.
 			if (result.Name == "fact_layer_query" || result.Name == actions.TraceTaintAction) && result.OK {
 				if ref := toolFactRefFrom(result.Output); ref != "" {
 					executedToolFactRefs = append(executedToolFactRefs, ref)
@@ -981,53 +1091,19 @@ loop:
 				}
 			}
 
-			if result.Name == "done" && result.OK {
-				if err := json.Unmarshal([]byte(result.Output), &donePayload); err == nil {
-					doneAccepted = true
-					donePayload.CaseInvariants = contracts.MergeAll(donePayload.CaseInvariants, state.Contracts)
-					terminationReason = "llm_done"
-					closingState := *state
-					closingState.Rounds = append(append([]artifacts.RoundRecord(nil), state.Rounds...), roundRec)
-					var closeErrors []artifacts.RoundError
-					var closeGaps []string
-					closingContracts, closeErrors, closeGaps, err = formalizeCandidates(ctx, cfg, &donePayload, &closingState, observations, func(system, prompt string) (llm.GenerateResponse, error) {
-						// A single bounded closing call shares this round's trace and
-						// accounting and can use the convergence reserve.
-						systemPrompt = system
-						inRecon, isFinalRound = false, true
-						return askOnce(prompt)
-					})
-					runErrors = append(runErrors, closeErrors...)
-					coverageGaps = append(coverageGaps, closeGaps...)
-					roundRec.CoverageGaps = append(roundRec.CoverageGaps, closeGaps...)
-					roundRec.TokensIn, roundRec.TokensOut = tokensIn, tokensOut
-					if errors.Is(err, errReplyBudget) {
-						terminationReason = "token_budget_insufficient"
-					} else if err != nil {
-						runErr = fmt.Errorf("round %d: contract formalization: %w", roundNum, err)
-						terminationReason = "llm_error"
-						if cfg.Budget.WallClock > 0 && time.Since(cfg.Budget.startedAt) >= cfg.Budget.WallClock {
-							terminationReason = "wall_clock"
-						}
-						if llm.IsPolicyRefusal(err) {
-							terminationReason = "policy_refusal"
-							coverageGaps = append(coverageGaps, policyRefusalCoverageGap)
-							roundRec.CoverageGaps = append(roundRec.CoverageGaps, policyRefusalCoverageGap)
-						}
-					}
-					if err := state.AppendRoundAndPersist(roundRec, roundsLog); err != nil {
-						runErr = fmt.Errorf("round %d: persist: %w", roundNum, err)
-						terminationReason = "persist_error"
-						emitRoundDone()
-						break loop
-					}
+			if finishLoopAfterObservation {
+				if err := state.AppendRoundAndPersist(roundRec, roundsLog); err != nil {
+					runErr = fmt.Errorf("round %d: persist: %w", roundNum, err)
+					terminationReason = "persist_error"
 					emitRoundDone()
-					if err := saveCommitted(); err != nil {
-						runErr = fmt.Errorf("persist checkpoint: %w", err)
-						terminationReason = "checkpoint_error"
-					}
 					break loop
 				}
+				emitRoundDone()
+				if err := saveCommitted(); err != nil {
+					runErr = fmt.Errorf("persist checkpoint: %w", err)
+					terminationReason = "checkpoint_error"
+				}
+				break loop
 			}
 		}
 
@@ -1045,27 +1121,33 @@ loop:
 		}
 	}
 
+	leads = cloneLeadsSlice(state.AuditLeads)
 	if terminationReason == "" {
 		terminationReason = cfg.Budget.TerminationReason()
 	}
 	// A later cancellation/refusal must not erase contracts already accepted
 	// by formalize_contract in earlier rounds.
 	if !doneAccepted {
-		donePayload.CaseInvariants = contracts.MergeAll(donePayload.CaseInvariants, state.Contracts)
+		donePayload.CaseInvariants = cloneContractsSlice(state.Contracts)
+		doneContractsBound = true
 	}
 	if terminationReason == "" {
 		terminationReason = "unknown"
 	}
-	// A run whose `done` was allowed only because the final round forced it
-	// did not conclude — it ran out. Recording "llm_done" here would make
-	// the two indistinguishable, and the acceptance criterion for the
-	// reconnaissance budget is precisely that this reason never appears: a
-	// run that reaches it is evidence the budget is too small.
-	if runErr == nil && terminationReason != "token_budget_insufficient" && recon.TerminationReason(true) == terminationReconIncomplete {
+	if cfg.StrictContractExit {
+		if unresolvedEnd := unresolvedSampleLeads(state, cfg.RunID, cfg.SampleIndex); len(unresolvedEnd) > 0 {
+			if runErr == nil && (terminationReason == "llm_done" || terminationReason == "unknown") {
+				terminationReason = "unresolved_leads_incomplete"
+			}
+			gap := "Planner stopped with unresolved audit lead(s): " + strings.Join(unresolvedEnd, ", ")
+			coverageGaps = unionStrings(coverageGaps, []string{gap})
+		}
+	}
+	if runErr == nil && terminationReason != "token_budget_insufficient" && terminationReason != "unresolved_leads_incomplete" && recon.TerminationReason(true) == terminationReconIncomplete {
 		terminationReason = terminationReconIncomplete
 	}
 	if runErr == nil && recon.DoneCoverageIncomplete() {
-		if terminationReason != "token_budget_insufficient" {
+		if terminationReason != "token_budget_insufficient" && terminationReason != "unresolved_leads_incomplete" {
 			terminationReason = terminationReconIncomplete
 			if entry := recon.EntryCoverage(); entry.GateApplies && len(recon.EntryCoverageGaps()) > 0 {
 				terminationReason = "entry_coverage_incomplete"
@@ -1075,7 +1157,7 @@ loop:
 		coverageGaps = append(coverageGaps, gap)
 	}
 
-	if err := writeCoverageLedger(cfg, recon, projectMap, len(leads)); err != nil {
+	if err := writeCoverageLedger(cfg, recon, projectMap, len(leads), state); err != nil {
 		fmt.Fprintf(os.Stdout, "[planner] coverage ledger not written: %v\n", err)
 	}
 
@@ -1145,8 +1227,12 @@ loop:
 	} else {
 		for i, cand := range bundle.Candidates {
 			pack := BuildFromCandidate(cand, manifest, i)
-			bound, errs := bindPlannerContracts(closingContracts[i], cfg)
-			bundle.Errors = append(bundle.Errors, errs...)
+			bound := closingContracts[i]
+			if !doneContractsBound && runErr == nil && len(bound) > 0 {
+				var errs []artifacts.RoundError
+				bound, errs = bindPlannerContractsWithState(bound, cfg, state, &observations, executedToolFactRefs, nil)
+				bundle.Errors = append(bundle.Errors, errs...)
+			}
 			for _, c := range bound {
 				if c.Grounding != "source_bound" {
 					continue
@@ -1166,17 +1252,29 @@ loop:
 			thin = append(thin, pack)
 		}
 	}
-	// Nothing is written to 03_cases/ here. Run is invoked once per
-	// --samples pass, so a per-pass Write would renumber case-*.json from
-	// 001 on every pass and leave the higher-numbered files of an earlier
-	// pass orphaned in place. The caller accumulates CasePacks across
-	// passes, dedupes and caps them, and calls Write exactly once.
 	merged := Merge(packs, thin)
-	contractPacks, contractErrors := plannerContractPacks(donePayload.CaseInvariants, cfg)
+	var contractPacks []artifacts.CasePack
+	if doneContractsBound || runErr != nil {
+		contractPacks = plannerBoundContractPacks(donePayload.CaseInvariants, cfg)
+	} else {
+		boundStandalone, contractErrors := bindPlannerContractsWithState(donePayload.CaseInvariants, cfg, state, &observations, executedToolFactRefs, nil)
+		contractPacks = plannerBoundContractPacks(boundStandalone, cfg)
+		bundle.Errors = append(bundle.Errors, contractErrors...)
+	}
 	merged = Merge(merged, contractPacks)
-	bundle.Errors = append(bundle.Errors, contractErrors...)
 	for i := range merged {
 		merged[i].ContractRequired = true
+	}
+	if cfg.StrictContractExit {
+		var contracted []artifacts.CasePack
+		for _, p := range merged {
+			if len(p.CaseInvariants) > 0 {
+				contracted = append(contracted, p)
+				continue
+			}
+			bundle.CoverageGaps = append(bundle.CoverageGaps, fmt.Sprintf("Dropped uncontracted candidate case %s under strict contract-exit gate; only formalized CaseInvariantV2 obligations advance to downstream review.", p.CaseID))
+		}
+		merged = contracted
 	}
 
 	// Post-processing can add citation diagnostics; persist those as well.
@@ -1199,6 +1297,8 @@ loop:
 		if err == nil {
 			cp.TerminationReason = terminationReason
 			if runErr == nil {
+				cp.CoverageGaps = bundle.CoverageGaps
+				cp.RunErrors = bundle.Errors
 				cp.Completed = true
 				cp.CachedResult = &CheckpointResult{Bundle: bundle, Investigations: invs, CasePacks: merged}
 			}
@@ -1278,9 +1378,15 @@ func processInvestigations(raw []map[string]any, cfg RunConfig, state *PlannerSt
 		}
 		wire.ToolFactRefs = keptRefs
 		if len(wire.CaseInvariants) > 0 {
-			bound, contractErrors := bindPlannerContracts(wire.CaseInvariants, cfg)
-			wire.CaseInvariants = bound
-			errs = append(errs, contractErrors...)
+			var accepted []artifacts.CaseInvariantV2
+			if state != nil {
+				accepted = state.Contracts
+			}
+			var rejected int
+			wire.CaseInvariants, rejected = acceptedContractCopies(wire.CaseInvariants, accepted)
+			if rejected > 0 {
+				errs = append(errs, artifacts.RoundError{Round: -1, Action: fmt.Sprintf("done.investigations[%d].case_invariants", i), Error: fmt.Sprintf("omitted %d contract draft(s) that were not accepted during the planner loop", rejected)})
+			}
 		}
 		inv := investigations.Build(wire)
 		// Union before Validate so an executed ref is subject to the same
@@ -1521,5 +1627,46 @@ func failedResult(cfg RunConfig, msg, reason string) RunResult {
 			},
 		},
 		Err: fmt.Errorf("%s", msg),
+	}
+}
+
+func unresolvedSampleLeads(state *PlannerState, runID string, sampleIndex int) []string {
+	if state == nil {
+		return nil
+	}
+	var out []string
+	for _, lead := range state.AuditLeads {
+		if lead.RunID != runID || lead.SampleIndex != sampleIndex {
+			continue
+		}
+		switch lead.State {
+		case artifacts.LeadStateOpen, artifacts.LeadStateExpanded:
+			out = append(out, lead.LeadID)
+		case artifacts.LeadStateFormalized:
+			if !leadBackedByAcceptedContract(lead, state.Contracts) {
+				out = append(out, lead.LeadID)
+			}
+		}
+	}
+	return out
+}
+
+func cloneLeadsSlice(in []artifacts.AuditLead) []artifacts.AuditLead {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]artifacts.AuditLead, len(in))
+	for i := range in {
+		out[i] = cloneLead(in[i])
+	}
+	return out
+}
+
+func allowedInConvergenceFreeze(action string) bool {
+	switch action {
+	case "read_file", ActionUpdateLead, ActionFormalizeContract, ActionCloseLead, "done":
+		return true
+	default:
+		return false
 	}
 }

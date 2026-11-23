@@ -17,7 +17,16 @@ CodeQL 生成 `RepoFacts` 和中性 `ProjectMapV0`：仓库、模块与函数卡
 `EntrySurfaces`。入口特征包括外部链接函数、函数指针分发表目标、缓冲区/长度形参等。
 这些是浏览优先级线索，不能直接视为外部可达或安全结论。索引不完整时记录 coverage gap。
 
-`project_map` 后的 `taint_prescan` 阶段只在同一 CodeQL 数据库已就绪时运行一次静态
+项目图还提供 `list_boundary_closures` 和 `get_struct_flows`：前者浏览入口的 0..3 跳
+已解析调用闭包，后者浏览字段直接赋值与词法触达关系。闭包按分发表、根入口、字段桥和
+共享状态访问结构分桶，并在模块与文件间轮转，保留静态 helper 的关联。
+`DirectWriters`、`NonWriteAccessors`、`Accessors` 不构成完整的语义读写或生产消费证明；
+非写触达先按单函数计算，再聚合到闭包。CodeQL 建库失败后冻结本次运行的失败作用域，
+避免后续阶段重新建库却继续使用已经降级的空索引。
+
+默认关闭全局污点预扫。显式设置 `--enable-taint-prescan`（或
+`TEECHECK_ENABLE_TAINT_PRESCAN=true`）时，`project_map` 后的 `taint_prescan` 阶段
+只在同一 CodeQL 数据库已就绪时运行一次静态
 `codeql/trustir/cpp/flow/EntrySurfaceToSink.ql`，不按入口循环调用 `trace_taint`，也不建第二个库。
 查询覆盖函数指针全局初始化、带指针及整型形参的外部接口，到内存操作、数组偏移和指针
 算术解引用的可能数据流；这些结构信号不证明输入不可信或缺少语义守卫。
@@ -63,6 +72,12 @@ PRE-SCANNED TAINT CANDIDATES / list_entry_surfaces / 函数卡片
 `update_lead` 将短笔记和证据持久化；`formalize_contract` 即时校验 scope、真实源码锚点
 与注册查询参数。校验失败反馈给 Planner 修正，不把失败的契约升级为已形式化。
 收口时允许一次受预算限制的契约补全请求，仍需绑定真实 Lead 和已读源码。
+默认在真正验证、绑定和持久化后检查每条 Lead；仍有未决 Lead 且预算可用时拒绝 `done`，
+预算耗尽则记录未完成原因并将覆盖账本标为 `incomplete`。无契约候选保留在证据 bundle
+供诊断，默认不进入下游复核。已接受契约从机器状态取回，避免重新绑定时丢失；调查包的
+最终组装不会补绑新草稿，也不会信任模型自行填写的 `source_bound` 标记。
+有限 pass 墙钟预算的 65% 为软收敛水位线：已有未决 Lead 时冻结广度探索，保留源码核查、
+Lead 更新、形式化和关闭动作。显式关闭 pass 墙钟时也关闭这个时间水位线。
 
 ## 污点查询与负面证据
 

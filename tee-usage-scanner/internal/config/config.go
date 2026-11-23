@@ -54,6 +54,12 @@ type Config struct {
 	// EnableLegacyPrior opts into the old architecture/invariant model stages.
 	// The default pipeline grounds investigation in the project map and code.
 	EnableLegacyPrior bool
+	// EnableTaintPrescan opts into the legacy L2 EntrySurfaceToSink.ql global query.
+	// Default false: v2 uses deterministic 3-hop entry closures and struct-field bridges.
+	EnableTaintPrescan bool
+	// AllowUncontractedCases is a test-only escape hatch for legacy candidate plumbing tests.
+	// Production runs leave this false so StrictContractExit is enabled by default.
+	AllowUncontractedCases bool
 	// Samples is the number of independent planner passes to run
 	// per pipeline invocation. Default 1 = the legacy behavior.
 	// With samples > 1, each pass after the first is told which
@@ -561,6 +567,7 @@ func parseRun(args []string) (Config, error) {
 		MaxTaintQueries:               8,
 		TaintQueryTimeout:             5 * time.Minute,
 		CodeQLCacheDir:                firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
+		EnableTaintPrescan:            envBool(false, "TEECHECK_ENABLE_TAINT_PRESCAN"),
 	}
 	fs.IntVar(&cfg.Samples, "samples", cfg.Samples, "Number of independent planner passes (LLM mode only); each pass avoids files+symbols from previous passes; downstream 4-agent pipeline runs once on the union")
 	fs.DurationVar(&cfg.PlannerWallClock, "planner-wall-clock", 0, "Planner time allowance per pass, e.g. 10m or 30m (default 10m); explicit 0 disables the pass clock")
@@ -574,6 +581,7 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.Focus, "focus", cfg.Focus, "Audit focus area")
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.BoolVar(&cfg.EnableLegacyPrior, "enable-legacy-prior", false, "Run legacy pre-investigation architecture and invariant model stages")
+	fs.BoolVar(&cfg.EnableTaintPrescan, "enable-taint-prescan", cfg.EnableTaintPrescan, "Run optional L2 EntrySurfaceToSink.ql global taint prescan before planning")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	fs.BoolVar(&cfg.Resume, "resume", false, "Resume a checkpoint in --run-dir; repeat the original scan/model settings")
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Existing run directory for --resume")

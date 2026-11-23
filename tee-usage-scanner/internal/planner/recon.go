@@ -184,11 +184,13 @@ func (r *ReconState) Observe(action, key string, ok bool) {
 				r.symbolSpread[mod] = true
 			}
 		}
-	case "get_callers":
-		// The only action today that states how the code connects.
-		// find_symbols resolves a name to candidate ids — that is
-		// disambiguation, not a relation.
+	case "get_callers", "list_boundary_closures", "get_struct_flows":
+		// Structural connection queries across call edges, 3-hop entry closures,
+		// or cross-function struct-field producer/consumer links.
 		r.relationQueries++
+		if action == "list_boundary_closures" && key != "" {
+			r.modulesViewed[key] = true
+		}
 	case "list_dir":
 		if key == "" || key == "." || key == "/" {
 			r.rootListed = true
@@ -248,7 +250,7 @@ func reconKeyFor(action string, args json.RawMessage) string {
 		_ = json.Unmarshal(args, &a)
 	}
 	switch action {
-	case "list_functions":
+	case "list_functions", "list_boundary_closures":
 		return a.Module
 	case "get_function_card", "get_callers":
 		return a.SymbolID

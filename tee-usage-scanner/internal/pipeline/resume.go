@@ -28,6 +28,8 @@ type resumeSettings struct {
 	Hint                                            string `json:"hint"`
 	Samples, MaxCases, MaxHotspots, MaxDialogRounds int
 	Legacy                                          bool
+	TaintPrescan                                    bool `json:"taint_prescan,omitempty"`
+	StrictContractExit                              bool `json:"strict_contract_exit,omitempty"`
 	StaticTools                                     string
 	Budget                                          planner.Budget
 	Roles                                           map[string]runinit.RoleLLMSnapshot
@@ -47,7 +49,9 @@ func resolvedResumeSettings(cfg config.Config, roles map[string]config.Config) (
 	}
 	s := resumeSettings{Version: "teecheck.resume_settings.v1", Focus: cfg.Focus, Hint: cfg.Hint,
 		Samples: cfg.Samples, MaxCases: cfg.MaxCases, MaxHotspots: cfg.MaxHotspots, MaxDialogRounds: cfg.MaxDialogRounds,
-		Legacy: cfg.EnableLegacyPrior, StaticTools: cfg.StaticTools, Budget: configuredPlannerBudget(cfg),
+		Legacy: cfg.EnableLegacyPrior, TaintPrescan: cfg.EnableTaintPrescan,
+		StrictContractExit: !cfg.AllowUncontractedCases,
+		StaticTools:        cfg.StaticTools, Budget: configuredPlannerBudget(cfg),
 		KnowledgeRoot: root, KnowledgeHash: digest, Roles: map[string]runinit.RoleLLMSnapshot{}}
 	if cfg.CodeQLCacheDir != "" {
 		s.CacheDir, err = filepath.Abs(cfg.CodeQLCacheDir)

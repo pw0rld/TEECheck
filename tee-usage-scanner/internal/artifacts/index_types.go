@@ -210,6 +210,15 @@ type RepoFacts struct {
 	EntrySurfaceNote    string           `json:"entry_surface_note,omitempty"`
 }
 
+const (
+	SchemaVersionBoundaryTopologyV1 = "teecheck.boundary_topology.v1"
+
+	SurfaceBucketDispatchTables       = "dispatch_tables"
+	SurfaceBucketRootBoundaries       = "root_boundaries"
+	SurfaceBucketStructBridges        = "struct_bridges"
+	SurfaceBucketSharedStateLifecycle = "shared_state_lifecycles"
+)
+
 // ProjectMap is the navigation view the planner browses.
 //
 // It never holds the capsules themselves: the full set is 6.36 MB on
@@ -222,11 +231,84 @@ type ProjectMap struct {
 	Scope          ScannedScope      `json:"scope"`
 	Capabilities   IndexCapabilities `json:"capabilities"`
 
-	Repository       RepositoryCard        `json:"repository"`
-	Modules          []ModuleCard          `json:"modules,omitempty"`
-	FunctionPages    []FunctionCardPageRef `json:"function_pages,omitempty"`
-	EntrySurfaces    []EntrySurface        `json:"entry_surfaces,omitempty"`
-	EntrySurfaceNote string                `json:"entry_surface_note,omitempty"`
+	Repository        RepositoryCard        `json:"repository"`
+	Modules           []ModuleCard          `json:"modules,omitempty"`
+	FunctionPages     []FunctionCardPageRef `json:"function_pages,omitempty"`
+	EntrySurfaces     []EntrySurface        `json:"entry_surfaces,omitempty"`
+	EntrySurfaceNote  string                `json:"entry_surface_note,omitempty"`
+	SurfacePartitions []SurfacePartition    `json:"surface_partitions,omitempty"`
+	TopologyPath      string                `json:"topology_path,omitempty"`
+}
+
+// SurfacePartition summarizes one neutral structural bucket derived from
+// resolved call closures and struct-field producer/consumer links.
+type SurfacePartition struct {
+	Bucket        string     `json:"bucket"`
+	Description   string     `json:"description"`
+	ClosureCount  int        `json:"closure_count"`
+	ModuleCount   int        `json:"module_count"`
+	RootSymbolIDs []SymbolID `json:"root_symbol_ids,omitempty"`
+}
+
+// ClosureMember is one function reachable within N resolved call hops of an
+// entry-surface definition.
+type ClosureMember struct {
+	SymbolID              SymbolID `json:"symbol_id"`
+	Name                  string   `json:"name"`
+	Path                  string   `json:"path"`
+	Module                string   `json:"module,omitempty"`
+	Line                  int      `json:"line"`
+	Hop                   int      `json:"hop"`
+	DirectFieldWrites     []string `json:"direct_field_writes,omitempty"`
+	NonWriteFieldAccesses []string `json:"non_write_field_accesses,omitempty"`
+	FieldAccesses         []string `json:"field_accesses,omitempty"`
+}
+
+// EntryClosure records the bounded resolved call closure (depth 0..3) of one
+// entry-surface candidate so static protocol-unpacking helpers (such as
+// set_rmem_param under tee_entry_std) remain attached to their root surface.
+type EntryClosure struct {
+	RootSymbolID          SymbolID        `json:"root_symbol_id"`
+	RootName              string          `json:"root_name"`
+	RootPath              string          `json:"root_path"`
+	RootModule            string          `json:"root_module,omitempty"`
+	RootStartLine         int             `json:"root_start_line"`
+	RootEndLine           int             `json:"root_end_line"`
+	Signals               []string        `json:"signals"`
+	Buckets               []string        `json:"buckets,omitempty"`
+	MaxDepth              int             `json:"max_depth"`
+	MembersTruncated      bool            `json:"members_truncated,omitempty"`
+	Members               []ClosureMember `json:"members,omitempty"`
+	DirectFieldWrites     []string        `json:"direct_field_writes,omitempty"`
+	NonWriteFieldAccesses []string        `json:"non_write_field_accesses,omitempty"`
+	FieldAccesses         []string        `json:"field_accesses,omitempty"`
+}
+
+// StructFieldBridge connects indexed definitions that directly assign a
+// "Type.field" with definitions that touch the same field. Because CodeQL's
+// FieldAccess AST node includes assignment LHS expressions, Accessors names all
+// functions touching the field, DirectWriters names functions with a direct
+// assignment, and NonWriteAccessors names functions that touch the field
+// without a recorded direct assignment in that function. Neither list is a
+// complete read/write alias proof.
+type StructFieldBridge struct {
+	Field             string     `json:"field"`
+	DirectWriters     []SymbolID `json:"direct_writers"`
+	NonWriteAccessors []SymbolID `json:"non_write_accessors,omitempty"`
+	Accessors         []SymbolID `json:"accessors"`
+	CrossModule       bool       `json:"cross_module"`
+}
+
+// BoundaryTopology persists the detailed 3-hop entry closures and struct-field
+// bridges outside project_map.v1.json so paged navigation stays compact.
+type BoundaryTopology struct {
+	SchemaVersion      string              `json:"schema_version"`
+	RunID              string              `json:"run_id"`
+	Scope              ScannedScope        `json:"scope"`
+	MaxClosureDepth    int                 `json:"max_closure_depth"`
+	SurfacePartitions  []SurfacePartition  `json:"surface_partitions,omitempty"`
+	EntryClosures      []EntryClosure      `json:"entry_closures,omitempty"`
+	StructFieldBridges []StructFieldBridge `json:"struct_field_bridges,omitempty"`
 }
 
 // RepositoryCard is the top-level orientation: what the project says it is,

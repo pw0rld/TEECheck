@@ -137,10 +137,11 @@ func TestRunL3Planner_MultiSample_WritesDedupedUnionOnce(t *testing.T) {
 	}
 
 	cfg := config.Config{
-		Focus:         "tee",
-		RunDir:        runDir,
-		KnowledgeRoot: t.TempDir(),
-		Samples:       2,
+		Focus:                  "tee",
+		RunDir:                 runDir,
+		KnowledgeRoot:          t.TempDir(),
+		Samples:                2,
+		AllowUncontractedCases: true,
 	}
 	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
@@ -178,11 +179,12 @@ func TestRunL3Planner_MaxCasesCapsWrittenPacks(t *testing.T) {
 	}
 
 	cfg := config.Config{
-		Focus:         "tee",
-		RunDir:        runDir,
-		KnowledgeRoot: t.TempDir(),
-		Samples:       2,
-		MaxCases:      2,
+		Focus:                  "tee",
+		RunDir:                 runDir,
+		KnowledgeRoot:          t.TempDir(),
+		Samples:                2,
+		MaxCases:               2,
+		AllowUncontractedCases: true,
 	}
 	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
@@ -207,7 +209,7 @@ func TestRunL3Planner_SingleSampleWritesAllPacks(t *testing.T) {
 		Responses: []string{donePass(t, "src/a.c", "src/b.c")},
 		Default:   donePass(t),
 	}
-	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1, MaxCases: 12}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1, MaxCases: 12, AllowUncontractedCases: true}
 	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatalf("runL3Planner: %v", err)
 	}
@@ -231,7 +233,7 @@ func TestRunL3Planner_WriteFailureAbortsTheRun(t *testing.T) {
 		Responses: []string{donePass(t, "src/a.c")},
 		Default:   donePass(t),
 	}
-	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1, AllowUncontractedCases: true}
 	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err == nil {
 		t.Fatal("a failure to persist case packs must abort the run, not be swallowed into bundle.Errors")
 	}
@@ -291,5 +293,20 @@ func TestRunL3Planner_Pass1ErrorProceedsOnDeterministic(t *testing.T) {
 	}
 	if bundle.PlannerMeta.TerminationReason != "deterministic_only_planner_no_bundle" {
 		t.Errorf("TerminationReason = %q, want deterministic_only_planner_no_bundle", bundle.PlannerMeta.TerminationReason)
+	}
+}
+
+func TestRunL3Planner_DefaultStrictContractExitDropsUncontractedThinPacks(t *testing.T) {
+	repoRoot, runDir := setupPlannerRun(t, "src/a.c")
+	client := &llmtest.FakeClient{
+		Responses: []string{donePass(t, "src/a.c")},
+		Default:   donePass(t),
+	}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 1}
+	if err := runL3Planner(cfg, client, nil, repoRoot, runDir, events.Nop{}, nil, nil); err != nil {
+		t.Fatalf("runL3Planner: %v", err)
+	}
+	if packs := readWrittenPacks(t, runDir); len(packs) != 0 {
+		t.Fatalf("default StrictContractExit must drop uncontracted thin packs, got %d", len(packs))
 	}
 }

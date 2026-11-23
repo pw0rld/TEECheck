@@ -94,12 +94,13 @@ type Manager struct {
 	ex  executor.Executor
 	// extraPATH is prepended to PATH for the CodeQL subprocess. Normally
 	// unnecessary; it exists for a future build mode that needs a compiler.
-	extraPATH string
-	cacheDir  string
+	extraPATH    string
+	cacheDir     string
+	frozenErrors map[string]error
 }
 
 func New(eng Engine, ex executor.Executor) *Manager {
-	return &Manager{eng: eng, ex: ex}
+	return &Manager{eng: eng, ex: ex, frozenErrors: map[string]error{}}
 }
 
 // WithExtraPATH returns a copy that prepends dir to the CodeQL subprocess's
@@ -107,6 +108,9 @@ func New(eng Engine, ex executor.Executor) *Manager {
 func (m *Manager) WithExtraPATH(dir string) *Manager {
 	out := *m
 	out.extraPATH = dir
+	if out.frozenErrors == nil {
+		out.frozenErrors = map[string]error{}
+	}
 	return &out
 }
 
@@ -118,7 +122,23 @@ func (m *Manager) WithCacheDir(dir string) *Manager {
 	if strings.TrimSpace(dir) != "" {
 		out.cacheDir = absolute(dir)
 	}
+	if out.frozenErrors == nil {
+		out.frozenErrors = map[string]error{}
+	}
 	return &out
+}
+
+// FreezeFailedScope pins a terminal build failure for one run scope so later
+// stages in the same run cannot silently construct a database after repo_index
+// already degraded to tree_only mode.
+func (m *Manager) FreezeFailedScope(scope Scope, err error) {
+	if m == nil || err == nil {
+		return
+	}
+	if m.frozenErrors == nil {
+		m.frozenErrors = map[string]error{}
+	}
+	m.frozenErrors[m.Path(scope)] = err
 }
 
 // NormalizeRepo collapses scheme, trailing slash, and ".git" suffix
@@ -299,6 +319,11 @@ func (m *Manager) EnsureSource(ctx context.Context, scope Scope) (string, error)
 // CreateDatabase with BuildMode "none" (§23.3 — the only build mode the
 // spike proved works for C without a project build system).
 func (m *Manager) Ensure(ctx context.Context, scope Scope) (string, error) {
+	if m.frozenErrors != nil {
+		if frozen, ok := m.frozenErrors[m.Path(scope)]; ok {
+			return "", fmt.Errorf("database unavailable for this run (prior build failed): %w", frozen)
+		}
+	}
 	if m.cacheDir != "" {
 		return m.ensureSharedDatabase(ctx, scope)
 	}
@@ -334,7 +359,7 @@ func (m *Manager) buildDatabase(ctx context.Context, tree, dbPath string) error 
 		if ctx.Err() != nil || !isTransientBuildFailure(err) {
 			return fmt.Errorf("create database: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "CodeQL database creation hit an internal JVM/TRAP failure; clearing partial database and retrying once with --threads=1: %v\n", err)
+		fmt.Fprintf(os.Stderr, "CodeQL database creation hit a transient extractor/JVM failure; clearing partial database and retrying once with --threads=1: %v\n", err)
 		if cleanupErr := os.RemoveAll(dbPath); cleanupErr != nil {
 			return fmt.Errorf("clear partial database after transient failure (%v): %w", err, cleanupErr)
 		}
@@ -352,18 +377,30 @@ func (m *Manager) buildDatabase(ctx context.Context, tree, dbPath string) error 
 	return nil
 }
 
-var internalExit100 = regexp.MustCompile(`\bexit status 100\b`)
+var (
+	internalExit100 = regexp.MustCompile(`\bexit status 100\b`)
+	extractorExit2  = regexp.MustCompile(`\bexit status 2\b`)
+)
 
-// CodeQL uses exit 100 for internal errors. JVM/TRAP mmap markers and native
-// JVM crash reports also occur in wrappers that omit the process exit code.
-// Retrying is bounded to once; ordinary build, configuration and extractor
-// errors are unchanged.
+// CodeQL uses exit 100 for internal errors and exit 2 under buildless C/C++
+// extraction when concurrent clang fallback workers race or exhaust memory.
+// JVM/TRAP mmap markers and native JVM crash reports also occur in wrappers
+// that omit the process exit code. Retrying is bounded to once; ordinary build
+// errors (exit 1) and CLI argument errors are unchanged.
 func isTransientBuildFailure(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	message := strings.ToLower(err.Error())
 	if internalExit100.MatchString(message) {
+		return true
+	}
+	if extractorExit2.MatchString(message) {
+		for _, permanent := range []string{"unknown option", "unrecognized option", "invalid argument", "missing required", "no source code was seen"} {
+			if strings.Contains(message, permanent) {
+				return false
+			}
+		}
 		return true
 	}
 	for _, marker := range []string{"internalerror", "mmappage", "diskwritablestringstore", "sigbus"} {

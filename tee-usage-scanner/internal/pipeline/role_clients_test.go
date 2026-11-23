@@ -85,7 +85,9 @@ func TestPipeline_RoleClientRoutingAndManifestRedaction(t *testing.T) {
 		clients[role] = &roleClient{role: role}
 		overrides[role] = config.LLMRoleOverride{Model: role + "-model"}
 	}
-	dir, err := pipeline.RunWithClients(config.Config{Command: "run", Target: root, Mode: "llm", Focus: "tee", RunID: "role-routing", OutputDir: out, KnowledgeRoot: filepath.Join(out, "knowledge"), LLMModel: "global-model", LLMBaseURL: "https://user:never-persist@example.invalid/api?key=never-persist", LLMAPIKey: "never-persist", RoleOverrides: overrides}, pipeline.RoleClients{Planner: clients["planner"], Expert: clients["expert"], Challenger: clients["challenger"], Verifier: clients["verifier"], Arbiter: clients["arbiter"]})
+	// This fixture exercises role routing with legacy candidate packs; strict
+	// contract acceptance has separate end-to-end coverage.
+	dir, err := pipeline.RunWithClients(config.Config{AllowUncontractedCases: true, Command: "run", Target: root, Mode: "llm", Focus: "tee", RunID: "role-routing", OutputDir: out, KnowledgeRoot: filepath.Join(out, "knowledge"), LLMModel: "global-model", LLMBaseURL: "https://user:never-persist@example.invalid/api?key=never-persist", LLMAPIKey: "never-persist", RoleOverrides: overrides}, pipeline.RoleClients{Planner: clients["planner"], Expert: clients["expert"], Challenger: clients["challenger"], Verifier: clients["verifier"], Arbiter: clients["arbiter"]})
 	if err != nil {
 		t.Fatal(err)
 	}

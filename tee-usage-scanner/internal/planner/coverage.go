@@ -188,7 +188,7 @@ func appendAuditLead(path string, lead artifacts.AuditLead) error {
 // unions recomputed. A file per sample would make every downstream consumer
 // re-aggregate, and the totals are unions rather than sums — two passes
 // that opened the same module reviewed one module, not two.
-func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMap, leadsOpen int) error {
+func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMap, leadsOpen int, states ...*PlannerState) error {
 	if cfg.RunDir == "" {
 		return nil
 	}
@@ -202,10 +202,14 @@ func writeCoverageLedger(cfg RunConfig, recon *ReconState, m artifacts.ProjectMa
 	ledger.ModulesTotal = len(m.Modules)
 	ledger.FunctionCapsulesTotal = totalFunctions(m)
 
+	reconStatus := recon.Status()
+	if cfg.StrictContractExit && len(states) > 0 && states[0] != nil && len(unresolvedSampleLeads(states[0], cfg.RunID, cfg.SampleIndex)) > 0 {
+		reconStatus = reconStatusIncomplete
+	}
 	entry := artifacts.SampleCoverage{
 		SampleIndex:        cfg.SampleIndex,
 		ReconMode:          string(recon.Mode),
-		ReconStatus:        recon.Status(),
+		ReconStatus:        reconStatus,
 		ModulesReviewed:    recon.ModulesReviewed(),
 		CapsulesReviewed:   recon.DistinctSymbolsViewed(),
 		FilesRead:          recon.DistinctFilesRead(),

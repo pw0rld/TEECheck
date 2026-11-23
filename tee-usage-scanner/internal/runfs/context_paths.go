@@ -33,6 +33,10 @@ func TWEAgentContextPath(runDir string) string {
 	return filepath.Join(ContextDir(runDir), "twe_agent_context.txt")
 }
 
+func BoundaryTopologyPath(runDir string) string {
+	return filepath.Join(ContextDir(runDir), "boundary_topology.v1.json")
+}
+
 func ToolFactsDir(runDir string) string {
 	return filepath.Join(runDir, "02_tool_facts")
 }
