@@ -477,8 +477,16 @@ func structuralRichness(c artifacts.EntryClosure) int {
 }
 
 func isUtilityModulePath(mod string) bool {
-	first, _, _ := strings.Cut(strings.TrimPrefix(mod, "/"), "/")
-	return first == "lib" || first == "third_party" || first == "vendor" || first == "external"
+	// Library and vendored roots may sit below a first-party module (for
+	// example core/lib/libtomcrypt). Match whole directory segments so names
+	// such as library_service or third_party_api retain their normal priority.
+	for _, segment := range strings.Split(mod, "/") {
+		switch segment {
+		case "lib", "third_party", "vendor", "external":
+			return true
+		}
+	}
+	return false
 }
 
 func hasSignal(signals []string, want string) bool {

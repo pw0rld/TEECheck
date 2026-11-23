@@ -13,12 +13,33 @@
     "coverage_status": { "enum": ["partial"] },
     "entry_surfaces": { "type": "array", "items": { "$ref": "#/$defs/entrySurface" } },
     "entry_surface_note": { "type": "string" },
+    "surface_partitions": { "type": "array", "items": { "$ref": "#/$defs/surfacePartition" } },
+    "topology_path": { "type": "string" },
     "repository": { "$ref": "#/$defs/repositoryCard" },
     "modules": { "type": "array", "items": { "$ref": "#/$defs/moduleCard" } },
     "function_pages": { "type": "array", "items": { "$ref": "#/$defs/functionCardPageRef" } }
   },
   "additionalProperties": false,
   "$defs": {
+    "surfacePartition": {
+      "type": "object",
+      "required": ["bucket", "description", "closure_count", "module_count"],
+      "properties": {
+        "bucket": {
+          "enum": [
+            "dispatch_tables",
+            "root_boundaries",
+            "struct_bridges",
+            "shared_state_lifecycles"
+          ]
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "closure_count": { "type": "integer", "minimum": 0 },
+        "module_count": { "type": "integer", "minimum": 0 },
+        "root_symbol_ids": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "additionalProperties": false
+    },
     "scannedScope": {
       "type": "object",
       "properties": {

@@ -85,8 +85,8 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 			if lead.RunID != cfg.RunID || lead.SampleIndex != cfg.SampleIndex || !candidateSharesLead(c, lead) {
 				continue
 			}
-			if lead.State == artifacts.LeadStateOpen || lead.State == artifacts.LeadStateExpanded ||
-				(lead.State == artifacts.LeadStateFormalized && !leadBackedByAcceptedContract(lead, state.Contracts)) {
+			if lead.State != artifacts.LeadStateClosed &&
+				!(lead.State == artifacts.LeadStateFormalized && leadBackedByAcceptedContract(lead, state.Contracts)) {
 				leads = append(leads, lead)
 			}
 		}

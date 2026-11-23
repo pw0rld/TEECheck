@@ -27,7 +27,7 @@ func (c *interruptedSecondPass) Generate(_ context.Context, _ llm.GenerateReques
 
 func TestResumeMultiSampleKeepsEarlierPacks(t *testing.T) {
 	repo, runDir := setupPlannerRun(t, "src/first.c", "src/second.c")
-	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 2}
+	cfg := config.Config{Focus: "tee", RunDir: runDir, KnowledgeRoot: t.TempDir(), Samples: 2, AllowUncontractedCases: true}
 	first := &interruptedSecondPass{first: donePass(t, "src/first.c")}
 	if err := runL3Planner(cfg, first, nil, repo, runDir, events.Nop{}, nil, nil); err != nil {
 		t.Fatal(err)

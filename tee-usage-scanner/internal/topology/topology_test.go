@@ -189,3 +189,48 @@ func TestDiversifyClosures_StrictPerFileCapEvenWithinSameModule(t *testing.T) {
 		}
 	}
 }
+
+func TestDiversifyClosures_DeprioritizesNestedLibraryDirectories(t *testing.T) {
+	modules := []string{
+		"core/lib/libtomcrypt", "core/third_party/crypto", "core/vendor/math", "core/external/parser",
+		"lib/crypto", "third_party/math", "vendor/parser", "external/compression",
+		"core/tee", "core/kernel", "core/library_service", "core/third_party_api",
+	}
+	var input []artifacts.EntryClosure
+	for i, module := range modules {
+		closure := artifacts.EntryClosure{
+			RootSymbolID: artifacts.SymbolID(module),
+			RootModule:   module,
+			RootPath:     module + "/entry.c",
+		}
+		if i < 8 {
+			// Even structurally richer library closures should yield the
+			// first wave's initial slots to first-party boundary modules.
+			closure.Members = make([]artifacts.ClosureMember, 2)
+			closure.DirectFieldWrites = []string{"ctx.state"}
+		}
+		input = append(input, closure)
+	}
+	got := DiversifyClosures(input, 2)
+	if len(got) != len(input) {
+		t.Fatalf("lost closures: got %d, want %d", len(got), len(input))
+	}
+	firstParty := map[string]bool{
+		"core/tee": true, "core/kernel": true, "core/library_service": true, "core/third_party_api": true,
+	}
+	seen := map[artifacts.SymbolID]bool{}
+	for i, closure := range got {
+		if firstParty[closure.RootModule] != (i < len(firstParty)) {
+			t.Fatalf("unexpected boundary/library order at %d: %+v", i, got)
+		}
+		if seen[closure.RootSymbolID] {
+			t.Fatalf("duplicate closure %s", closure.RootSymbolID)
+		}
+		seen[closure.RootSymbolID] = true
+	}
+	for i, closure := range input {
+		if closure.RootModule != modules[i] || !seen[closure.RootSymbolID] {
+			t.Fatalf("original closure changed or disappeared at %d: %+v", i, closure)
+		}
+	}
+}

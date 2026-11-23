@@ -57,6 +57,7 @@ func TestAcceptedContractCopiesRejectsModelGroundingClaims(t *testing.T) {
 
 func TestAcceptedContractCopiesRestoresMachineAnchors(t *testing.T) {
 	cfg, _, _, _, raw := closingContractFixture(t)
+	raw.Origin = "planner"
 	accepted, diagnostics, err := contracts.Bind(raw, contracts.BindingContext{
 		RepoRoot: cfg.RepoRoot, Scope: runfs.BuildScope("fixture", "rev", cfg.RepoRoot),
 	})
