@@ -76,3 +76,25 @@ func TestRedactedEndpointDropsCredentialsAndQuery(t *testing.T) {
 		t.Fatalf("not redacted: %q", got)
 	}
 }
+
+func TestScoutOverrideInheritsResolvedPlannerSettings(t *testing.T) {
+	cfg := Config{LLMProvider: LLMProviderOpenAI, LLMBaseURL: "https://global.invalid/v1", LLMAPIKey: "global-key", LLMModel: "global-model",
+		RoleOverrides: map[string]LLMRoleOverride{
+			"planner": {BaseURL: "https://planner.invalid/v1", Model: "planner-model"},
+			"scout":   {Model: "scout-model"},
+		},
+	}
+	roles, err := cfg.ResolveRoleConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scout := roles["scout"]; scout.LLMModel != "scout-model" || scout.LLMBaseURL != roles["planner"].LLMBaseURL || scout.LLMAPIKey != roles["planner"].LLMAPIKey {
+		t.Fatal("partial scout override did not inherit the resolved planner endpoint and credentials")
+	}
+	scout := roles["scout"]
+	scout.LLMModel = ""
+	roles["scout"] = scout
+	if err := ValidateResolvedRoles(roles); err == nil || !strings.Contains(err.Error(), "scout role") {
+		t.Fatalf("invalid scout route was not validated: %v", err)
+	}
+}

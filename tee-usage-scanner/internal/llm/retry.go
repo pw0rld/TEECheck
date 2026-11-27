@@ -234,7 +234,8 @@ func IsTransient(err error) bool {
 		strings.Contains(msg, "i/o timeout") ||
 		strings.Contains(msg, "no such host") ||
 		strings.Contains(msg, "eof") ||
-		strings.Contains(msg, "client.timeout") {
+		strings.Contains(msg, "client.timeout") ||
+		strings.Contains(msg, "no text content found in stream response") {
 		return true
 	}
 	return false

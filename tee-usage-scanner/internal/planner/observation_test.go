@@ -122,3 +122,24 @@ func TestObservationSet_OnlySuccessfulActionsGround(t *testing.T) {
 		t.Errorf("recorded %d refs, want both the success and the failure", s.Len())
 	}
 }
+
+func TestObservationSetResolveRequiresUniqueSuccessfulCurrentSampleRef(t *testing.T) {
+	var observed ObservationSet
+	observed.Record("obs:2:3:0:aaa", true)
+	observed.Record("obs:2:3:1:bbb", false)
+	if full, ok := observed.Resolve("obs:2:3:0"); !ok || full != "obs:2:3:0:aaa" {
+		t.Fatalf("unique shortened ref did not resolve: %q, %v", full, ok)
+	}
+	for _, ref := range []string{"obs:2:3:1", "obs:1:3:0", "obs:2:3", "obs:2:3:0:wrong"} {
+		if full, ok := observed.Resolve(ref); ok {
+			t.Fatalf("failed, other-sample or malformed ref resolved: %q -> %q", ref, full)
+		}
+	}
+	observed.Record("obs:2:3:0:ccc", true)
+	if full, ok := observed.Resolve("obs:2:3:0"); ok {
+		t.Fatalf("ambiguous ref resolved: %q", full)
+	}
+	if full, ok := observed.Resolve("obs:2:3:0:aaa"); !ok || full != "obs:2:3:0:aaa" {
+		t.Fatal("exact ref was rejected after an ambiguity in the shortened form")
+	}
+}

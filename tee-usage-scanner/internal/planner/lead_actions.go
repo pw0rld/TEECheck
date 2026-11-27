@@ -65,9 +65,11 @@ func updateLead(cfg RunConfig, state *PlannerState, observed ObservationSet, exe
 		if note.Summary == "" || len(note.Summary) > maxLeadNoteBytes || !utf8.ValidString(note.Summary) {
 			return leadActionFailure(ActionUpdateLead, fmt.Errorf("note summary must contain 1–240 UTF-8 bytes"))
 		}
-		if _, err := validateLeadFactRef(cfg, observed, executedToolFactRefs, note.FactRef); err != nil {
+		_, canonicalRef, err := resolveLeadFactRef(cfg, observed, executedToolFactRefs, note.FactRef)
+		if err != nil {
 			return leadActionFailure(ActionUpdateLead, err)
 		}
+		note.FactRef = canonicalRef
 		duplicate := false
 		for _, old := range lead.EvidenceNotes {
 			if old.FactRef == note.FactRef && old.Summary == note.Summary {
@@ -117,15 +119,18 @@ func closeLead(cfg RunConfig, state *PlannerState, observed ObservationSet, exec
 	if len(payload.FactRefs) == 0 || len(payload.FactRefs) > maxLeadRefs {
 		return leadActionFailure(ActionCloseLead, fmt.Errorf("closing requires 1–32 current-pass evidence references"))
 	}
+	resolvedCloseRefs := make([]string, 0, len(payload.FactRefs))
 	for _, ref := range payload.FactRefs {
-		if _, err := validateLeadFactRef(cfg, observed, executedToolFactRefs, ref); err != nil {
+		_, canonicalRef, err := resolveLeadFactRef(cfg, observed, executedToolFactRefs, ref)
+		if err != nil {
 			return leadActionFailure(ActionCloseLead, err)
 		}
+		resolvedCloseRefs = append(resolvedCloseRefs, canonicalRef)
 	}
 	lead := cloneLead(state.AuditLeads[index])
 	lead.State = artifacts.LeadStateClosed
 	lead.CloseReason = payload.Reason
-	lead.CloseFactRefs = unionStrings(nil, payload.FactRefs)
+	lead.CloseFactRefs = unionStrings(nil, resolvedCloseRefs)
 	if err := saveLeadRevision(cfg, state, index, lead); err != nil {
 		return leadActionFailure(ActionCloseLead, err)
 	}
@@ -169,10 +174,11 @@ func validateLeadFactRef(cfg RunConfig, observed ObservationSet, executed []stri
 
 func resolveLeadFactRef(cfg RunConfig, observed ObservationSet, executed []string, ref string) (*artifacts.ToolFact, string, error) {
 	if strings.HasPrefix(ref, "obs:") {
-		if !observed.Observed(ref) {
-			return nil, "", fmt.Errorf("reference %q is not a successful observation in this sample", ref)
+		full, ok := observed.Resolve(ref)
+		if !ok {
+			return nil, "", fmt.Errorf("reference %q is not a unique successful observation in this sample", ref)
 		}
-		return nil, ref, nil
+		return nil, full, nil
 	}
 	binding := contracts.BindingContext{RunDir: cfg.RunDir, Scope: artifacts.ScannedScope{Commit: cfg.Profile.Commit}}
 	if manifest, err := runfs.LoadManifest(cfg.RunDir); err == nil {

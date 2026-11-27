@@ -29,6 +29,9 @@ type resumeSettings struct {
 	Samples, MaxCases, MaxHotspots, MaxDialogRounds int
 	Legacy                                          bool
 	TaintPrescan                                    bool `json:"taint_prescan,omitempty"`
+	FormalVerify                                    bool `json:"formal_verify,omitempty"`
+	MonolithicPlanner                               bool `json:"monolithic_planner,omitempty"`
+	PlannerWorkers                                  int  `json:"planner_workers,omitempty"`
 	StrictContractExit                              bool `json:"strict_contract_exit,omitempty"`
 	StaticTools                                     string
 	Budget                                          planner.Budget
@@ -50,6 +53,7 @@ func resolvedResumeSettings(cfg config.Config, roles map[string]config.Config) (
 	s := resumeSettings{Version: "teecheck.resume_settings.v1", Focus: cfg.Focus, Hint: cfg.Hint,
 		Samples: cfg.Samples, MaxCases: cfg.MaxCases, MaxHotspots: cfg.MaxHotspots, MaxDialogRounds: cfg.MaxDialogRounds,
 		Legacy: cfg.EnableLegacyPrior, TaintPrescan: cfg.EnableTaintPrescan,
+		FormalVerify: cfg.EnableFormalVerify, MonolithicPlanner: cfg.UseMonolithicPlanner, PlannerWorkers: cfg.PlannerWorkers,
 		StrictContractExit: !cfg.AllowUncontractedCases,
 		StaticTools:        cfg.StaticTools, Budget: configuredPlannerBudget(cfg),
 		KnowledgeRoot: root, KnowledgeHash: digest, Roles: map[string]runinit.RoleLLMSnapshot{}}
@@ -59,8 +63,7 @@ func resolvedResumeSettings(cfg config.Config, roles map[string]config.Config) (
 			return s, err
 		}
 	}
-	for _, role := range config.LLMRoles {
-		c := roles[role]
+	for role, c := range roles {
 		s.Roles[role] = runinit.RoleLLMSnapshot{Provider: c.LLMProvider, BaseURL: config.RedactedEndpoint(c.LLMBaseURL),
 			Model: c.LLMModel, Transport: c.LLMTransport, ReasoningEffort: c.LLMReasoningEffort,
 			TimeoutSeconds: c.LLMTimeoutSec, MaxOutputTokens: c.LLMMaxTokens, Temperature: c.LLMTemp, Stream: c.LLMStream}

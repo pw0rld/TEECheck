@@ -164,12 +164,12 @@ func BuildSystemPrompt(availableActions []string, obligationsBlock string, knowl
 		b.WriteString("  5. Call update_lead to keep short cited evidence notes and ruled-out hypotheses available across rounds. Use formalize_contract as soon as a precise obligation has source anchors; correct validation errors while investigation time remains.\n")
 		b.WriteString("  6. Close answered leads with cited reasons, then call done. Accepted contracts already persist; include any remaining candidates or investigations and explain missing evidence.\n\n")
 	} else {
-		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, and what the index can and cannot answer.\n")
-		b.WriteString("  2. list_modules — the parts, with their sizes. Sizes are how you tell the project's own code from vendored dependencies.\n")
-		b.WriteString("     list_entry_surfaces — inspect structural entry candidates across modules, then read_file their source definitions. Cards and repeated reads do not satisfy source coverage.\n")
+		b.WriteString("  1. get_repository_card — what this project says it is, how it builds, its boundary topology buckets, and what the index can and cannot answer.\n")
+		b.WriteString("  2. list_boundary_closures (by bucket such as struct_bridges, dispatch_tables, root_boundaries, shared_state_lifecycles, or by core module) and get_struct_flows — start from 3-hop entry closures and cross-module struct-field writers/accessors rather than browsing flat module lists blindly.\n")
+		b.WriteString("     list_modules and list_entry_surfaces — check module sizes and entry candidates across modules, then read_file their source definitions. Cards and repeated reads do not satisfy source coverage.\n")
 		b.WriteString("     Once a source or sink definition has been observed, trace_taint can follow its cross-function flow before a lead exists. Use the resulting facts to decide whether to open_audit_lead; do not keep rereading unrelated files or invent a lead when evidence is insufficient.\n")
-		b.WriteString("  3. list_functions on several modules, and get_function_card on the definitions that look load-bearing. Cover more than one part of the project: what you never open, you cannot have an opinion about.\n")
-		b.WriteString("  4. get_callers to ask how something is reached. find_symbols resolves a name to candidate ids when more than one definition shares it — pick by id, never by name.\n")
+		b.WriteString("  3. list_functions / get_function_card on load-bearing definitions across multiple core modules. Cover more than one part of the project: what you never open, you cannot have an opinion about.\n")
+		b.WriteString("  4. get_callers or get_struct_flows to trace how state and control connect. find_symbols resolves a name to candidate ids when more than one definition shares it — pick by id, never by name.\n")
 		b.WriteString("  5. read_file and ripgrep when the index cannot answer, or to see the code behind a card.\n")
 		b.WriteString("  6. open_audit_lead when you can state a question about specific definitions and cite the observations that raised it.\n\n")
 	}

@@ -47,10 +47,11 @@ func formalizeContract(cfg RunConfig, state *PlannerState, observed ObservationS
 			if !strings.HasPrefix(ref.Ref, "obs:") {
 				return fail(fmt.Errorf("ToolFact paths and IDs must use evidence kind tool_fact, not observation"))
 			}
-			if !observed.Observed(ref.Ref) {
-				return fail(fmt.Errorf("reference %q is not a successful observation in this sample", ref.Ref))
+			full, ok := observed.Resolve(ref.Ref)
+			if !ok {
+				return fail(fmt.Errorf("reference %q is not a unique successful observation in this sample", ref.Ref))
 			}
-			extraRefs = append(extraRefs, artifacts.ContractEvidenceRef{Kind: "observation", Ref: ref.Ref})
+			extraRefs = append(extraRefs, artifacts.ContractEvidenceRef{Kind: "observation", Ref: full})
 			continue
 		}
 		if ref.Kind != "tool_fact" {

@@ -123,12 +123,13 @@ func bindPlannerContractsWithState(
 			for _, ref := range c.EvidenceRefs {
 				switch ref.Kind {
 				case "observation":
-					if !strings.HasPrefix(ref.Ref, "obs:") || !observed.Observed(ref.Ref) {
+					full, ok := observed.Resolve(ref.Ref)
+					if !strings.HasPrefix(ref.Ref, "obs:") || !ok {
 						problem(c.InvariantID, fmt.Errorf("reference %q is not a successful observation in this sample", ref.Ref))
 						refFailed = true
 						break
 					}
-					observationRefs = appendUniqueEvidenceRef(observationRefs, artifacts.ContractEvidenceRef{Kind: "observation", Ref: ref.Ref})
+					observationRefs = appendUniqueEvidenceRef(observationRefs, artifacts.ContractEvidenceRef{Kind: "observation", Ref: full})
 				case "tool_fact":
 					fact, path, ferr := resolveLeadFactRef(cfg, *observed, executedToolFactRefs, ref.Ref)
 					if ferr != nil || fact == nil {
@@ -174,7 +175,8 @@ func bindPlannerContractsWithState(
 		} else if observed != nil {
 			var nonObs []artifacts.ContractEvidenceRef
 			for _, ref := range c.EvidenceRefs {
-				if ref.Kind == "observation" && observed.Observed(ref.Ref) {
+				if full, ok := observed.Resolve(ref.Ref); ref.Kind == "observation" && ok {
+					ref.Ref = full
 					observationRefs = appendUniqueEvidenceRef(observationRefs, ref)
 				} else {
 					nonObs = append(nonObs, ref)

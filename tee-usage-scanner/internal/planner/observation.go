@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/observationlimits"
@@ -79,7 +80,36 @@ func (s *ObservationSet) Record(ref string, ok bool) {
 // Observed reports whether this ref came from a successful action. A refused
 // or errored action observed nothing, so it grounds nothing.
 func (s ObservationSet) Observed(ref string) bool {
-	return s.ok[ref]
+	_, ok := s.Resolve(ref)
+	return ok
+}
+
+// Resolve checks whether ref matches a successful observation verbatim, or
+// unambiguously matches a recorded obs:<sample>:<round>:<idx>:<hash> ref when
+// the model omitted the trailing :<hash> suffix.
+func (s ObservationSet) Resolve(ref string) (string, bool) {
+	if ref == "" {
+		return "", false
+	}
+	if s.ok[ref] {
+		return ref, true
+	}
+	if strings.HasPrefix(ref, "obs:") && strings.Count(ref, ":") == 3 {
+		prefix := ref + ":"
+		matched := ""
+		for k, ok := range s.ok {
+			if ok && strings.HasPrefix(k, prefix) {
+				if matched != "" {
+					return "", false // ambiguous
+				}
+				matched = k
+			}
+		}
+		if matched != "" {
+			return matched, true
+		}
+	}
+	return "", false
 }
 
 // Len is the number of distinct refs recorded, successful or not.

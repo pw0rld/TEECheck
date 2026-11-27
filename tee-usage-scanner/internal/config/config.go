@@ -57,6 +57,8 @@ type Config struct {
 	// EnableTaintPrescan opts into the legacy L2 EntrySurfaceToSink.ql global query.
 	// Default false: v2 uses deterministic 3-hop entry closures and struct-field bridges.
 	EnableTaintPrescan bool
+	// EnableFormalVerify records bounded model translations; execution needs an isolated backend.
+	EnableFormalVerify bool
 	// AllowUncontractedCases is a test-only escape hatch for legacy candidate plumbing tests.
 	// Production runs leave this false so StrictContractExit is enabled by default.
 	AllowUncontractedCases bool
@@ -78,6 +80,9 @@ type Config struct {
 	PlannerMaxReconTokensExplicit         bool
 	PlannerMaxInvestigationTokens         int
 	PlannerMaxInvestigationTokensExplicit bool
+	// Sharded Stage-2 planner controls. PlannerWorkers defaults to 4 when <= 0.
+	PlannerWorkers       int
+	UseMonolithicPlanner bool
 	// Programmatic zero leaves the default quota intact unless explicitly
 	// requested. This distinguishes old Config literals from unlimited mode.
 	MaxTaintQueries         int
@@ -564,6 +569,8 @@ func parseRun(args []string) (Config, error) {
 		PlannerMaxTokens:              240000,
 		PlannerMaxReconTokens:         100000,
 		PlannerMaxInvestigationTokens: 140000,
+		PlannerWorkers:                envInt(4, "TEECHECK_PLANNER_WORKERS"),
+		UseMonolithicPlanner:          envBool(false, "TEECHECK_MONOLITHIC_PLANNER"),
 		MaxTaintQueries:               8,
 		TaintQueryTimeout:             5 * time.Minute,
 		CodeQLCacheDir:                firstNonEmptyEnv("TEECHECK_CODEQL_CACHE_DIR"),
@@ -574,6 +581,8 @@ func parseRun(args []string) (Config, error) {
 	fs.IntVar(&cfg.PlannerMaxTokens, "planner-max-tokens", cfg.PlannerMaxTokens, "Maximum input plus output tokens per planner pass; 0 disables the aggregate token cap")
 	fs.IntVar(&cfg.PlannerMaxReconTokens, "planner-max-recon-tokens", cfg.PlannerMaxReconTokens, "Maximum reconnaissance input plus output tokens per planner pass; 0 disables this phase token cap")
 	fs.IntVar(&cfg.PlannerMaxInvestigationTokens, "planner-max-investigation-tokens", cfg.PlannerMaxInvestigationTokens, "Maximum investigation input plus output tokens per planner pass; 0 disables this phase token cap")
+	fs.IntVar(&cfg.PlannerWorkers, "planner-workers", cfg.PlannerWorkers, "Maximum concurrent scout/investigator workers for sharded planning (capped at 4; 0 uses 4)")
+	fs.BoolVar(&cfg.UseMonolithicPlanner, "monolithic-planner", cfg.UseMonolithicPlanner, "Disable sharded BoundaryScout + LeadInvestigator planning and run the legacy monolithic planner")
 	fs.IntVar(&cfg.MaxTaintQueries, "max-taint-queries", cfg.MaxTaintQueries, "Maximum uncached taint queries per planner pass; 0 disables the separate query cap")
 	fs.DurationVar(&cfg.TaintQueryTimeout, "taint-query-timeout", cfg.TaintQueryTimeout, "Timeout for each uncached taint query")
 	fs.StringVar(&cfg.CodeQLCacheDir, "codeql-cache-dir", cfg.CodeQLCacheDir, "Optional shared immutable source/CodeQL database cache; queries use private run-local database copies")
@@ -582,6 +591,7 @@ func parseRun(args []string) (Config, error) {
 	fs.StringVar(&cfg.Hint, "hint", "", "Free-text concern to prioritise during planning, e.g. \"I suspect the TA loading path\"; does not narrow the scan")
 	fs.BoolVar(&cfg.EnableLegacyPrior, "enable-legacy-prior", false, "Run legacy pre-investigation architecture and invariant model stages")
 	fs.BoolVar(&cfg.EnableTaintPrescan, "enable-taint-prescan", cfg.EnableTaintPrescan, "Run optional L2 EntrySurfaceToSink.ql global taint prescan before planning")
+	fs.BoolVar(&cfg.EnableFormalVerify, "enable-formal-verify", cfg.EnableFormalVerify, "Record bounded C property translation in Verifier; execution requires an isolated backend")
 	fs.StringVar(&cfg.RunID, "run-id", "", "Stable run identifier")
 	fs.BoolVar(&cfg.Resume, "resume", false, "Resume a checkpoint in --run-dir; repeat the original scan/model settings")
 	fs.StringVar(&cfg.RunDir, "run-dir", "", "Existing run directory for --resume")
@@ -673,6 +683,9 @@ func parseRun(args []string) (Config, error) {
 	}
 	if cfg.PlannerWallClock < 0 {
 		return Config{}, fmt.Errorf("--planner-wall-clock must be zero or positive")
+	}
+	if cfg.PlannerWorkers < 0 {
+		return Config{}, fmt.Errorf("--planner-workers must be zero or positive")
 	}
 	if os.Getenv("TEECHECK_LLM_TIMEOUT_SECONDS") != "" {
 		cfg.LLMTimeoutExplicit = true

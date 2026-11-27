@@ -11,6 +11,7 @@ import (
 
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/config"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contractformal"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contractreview"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
@@ -64,11 +65,37 @@ func buildContractMemo(ctx context.Context, cfg config.Config, client llm.Client
 		if r, ok := contractreview.Find(challenge.ContractReviews, c.InvariantID); ok {
 			peers = append(peers, r)
 		}
+		var formalEvidence *artifacts.ToolFact
+		if cfg.EnableFormalVerify && operation == "" && client != nil && contractformal.ShouldAttempt(c) {
+			formalFact, _ := contractformal.VerifyContract(ctx, client, binding, c, cfg.LLMTemp)
+			// A translation or unavailable sandbox is an observation and coverage
+			// gap, never a registered query result or source-code proof.
+			formalEvidence = &formalFact
+			facts = append(facts, formalFact)
+		}
 		v, err := contractreview.Review(ctx, client, "verifier", binding, c, peers, cfg.LLMTemp, facts...)
 		if err != nil {
 			return memo, err
 		}
 		a := AssessContract(c, binding, h.ContractReviews, challenge.ContractReviews, v, query)
+		if formalEvidence != nil {
+			// Optional translation coverage does not add a prerequisite to an
+			// independently source-corroborated assessment.
+			for _, gap := range formalEvidence.CoverageGaps {
+				memo.Notes = append(memo.Notes, "formal verification "+c.InvariantID+": "+gap)
+			}
+			if formalEvidence.Error != "" {
+				memo.Notes = append(memo.Notes, "formal verification "+c.InvariantID+": "+formalEvidence.Error)
+			}
+			ref := filepath.Join(runfs.VerifierDir(cfg.RunDir), "formal_facts", formalEvidence.FactID+".json")
+			if cfg.RunDir != "" && formalEvidence.FactID != "" {
+				if resolved, err := contracts.ResolveEvidence(artifacts.ContractEvidenceRef{Kind: "tool_fact", Ref: ref}, binding); err == nil {
+					a.EvidenceRefs = append(a.EvidenceRefs, resolved)
+				} else {
+					memo.Notes = append(memo.Notes, "formal verification evidence unavailable: "+err.Error())
+				}
+			}
+		}
 		a.QueryOperation = operation
 		if err := contracts.ValidateAssessment(a, c, binding); err != nil {
 			return memo, fmt.Errorf("invalid assessment %s: %w", c.InvariantID, err)

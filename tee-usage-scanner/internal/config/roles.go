@@ -13,6 +13,9 @@ import (
 // LLMRoles are fixed at startup. Policy refusals never change their routing.
 var LLMRoles = []string{"planner", "expert", "challenger", "verifier", "arbiter"}
 
+// OptionalLLMRoles inherit the resolved planner settings before their own overrides.
+var OptionalLLMRoles = []string{"scout"}
+
 // LLMRoleOverride has no credential value: api_key_env is an environment
 // reference. Omitted fields inherit globals; pointers preserve explicit zero.
 type LLMRoleOverride struct {
@@ -32,6 +35,11 @@ var credentialEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func knownRole(role string) bool {
 	for _, candidate := range LLMRoles {
+		if role == candidate {
+			return true
+		}
+	}
+	for _, candidate := range OptionalLLMRoles {
 		if role == candidate {
 			return true
 		}
@@ -86,6 +94,29 @@ func (cfg Config) ResolveRoleConfigs() (map[string]Config, error) {
 	resolved := make(map[string]Config, len(LLMRoles))
 	for _, role := range LLMRoles {
 		current := base
+		for _, override := range []LLMRoleOverride{file[role], cfg.RoleOverrides[role]} {
+			current, err = applyRoleOverride(current, override)
+			if err != nil {
+				return nil, fmt.Errorf("%s role: %w", role, err)
+			}
+		}
+		current = current.WithLLMProviderDefaults()
+		if current.LLMProvider != LLMProviderOpenAI && current.LLMProvider != LLMProviderGLM && current.LLMProvider != LLMProviderDeepSeek {
+			return nil, fmt.Errorf("%s role has unsupported provider %q", role, current.LLMProvider)
+		}
+		if err := validateStreamConfig(current); err != nil {
+			return nil, fmt.Errorf("%s role: %w", role, err)
+		}
+		resolved[role] = current
+	}
+	for _, role := range OptionalLLMRoles {
+		_, inFile := file[role]
+		_, inMem := cfg.RoleOverrides[role]
+		if !inFile && !inMem {
+			resolved[role] = resolved["planner"]
+			continue
+		}
+		current := resolved["planner"]
 		for _, override := range []LLMRoleOverride{file[role], cfg.RoleOverrides[role]} {
 			current, err = applyRoleOverride(current, override)
 			if err != nil {
@@ -170,6 +201,13 @@ func ValidateResolvedRoles(roles map[string]Config) error {
 	for _, role := range LLMRoles {
 		if err := validateProviderConfig(roles[role], role+" role"); err != nil {
 			return err
+		}
+	}
+	for _, role := range OptionalLLMRoles {
+		if current, ok := roles[role]; ok {
+			if err := validateProviderConfig(current, role+" role"); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

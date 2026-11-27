@@ -14,6 +14,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/artifacts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/contracts"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/llm"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 )
 
 // Review never accepts a model-supplied assessment or tool result. Peer reviews
@@ -57,9 +58,12 @@ func Review(ctx context.Context, client llm.Client, role string, binding contrac
 	system := `You review a defensive source-code contract for TEECheck. Evaluate only the supplied contract and code, without inventing tool executions or drawing conclusions about other contracts.
 Return one JSON object with fields: invariant_id, position (supported|contradicted|unresolved), reason, preconditions_satisfied (boolean), attack_chain_complete (boolean), witness (array of {path,symbol,start_line,end_line}), counter_evidence (array of strings).
 "supported" means the source supports a security-relevant violation of the required property under its preconditions, not that the code satisfies the property. Explain how it affects the stated security decision. A syntactic difference alone does not establish a security issue. "contradicted" means the proposed violation has contrary evidence. These are source-review opinions, not deterministic proof.
-Set preconditions_satisfied only when every necessary precondition has source support. Set attack_chain_complete only when the relevant input, property violation and security effect are connected by evidence; do not infer completeness from missing objections. Identify each unresolved relation explicitly. A witness must cite actual lines within this contract's supplied source anchors. Do not use a conclusion about another contract as evidence.`
+Set preconditions_satisfied only when every necessary precondition has source support. Set attack_chain_complete only when the relevant input, property violation and security effect are connected by evidence; do not infer completeness from missing objections. Identify each unresolved relation explicitly. A witness must cite actual lines within this contract's supplied source anchors. Put ONLY concrete source code that contradicts or mitigates the claimed violation into counter_evidence; when position is "supported" and no contradicting guard exists, leave counter_evidence as an empty array [] (do NOT put supporting observations or generic disclaimers in counter_evidence). Do not use a conclusion about another contract as evidence.`
 	system += "\nThe query parameters identify the local property target; the other subjects provide consumer/caller context for preconditions and effects. Judge the property separately from missing runtime context. A successful registered local query is not invalidated merely because cross-function preconditions are unproved; record those gaps honestly."
 	user := fmt.Sprintf("Role: %s\nContract:\n%s\nSource anchors:\n%s", role, definition, source)
+	if extra := surroundingSourceContext(binding, c); extra != "" {
+		user += "\nAdditional verified repository context (use this to check callers, callees, and preconditions; cite ONLY Source anchors above in witness):\n" + extra
+	}
 	factsOmitted := false
 	if len(peers) > 0 {
 		user += "\nIndependent per-contract review opinions (check against the code):\n" + string(peerJSON)
@@ -189,4 +193,300 @@ func Find(reviews []artifacts.ContractReview, id string) (artifacts.ContractRevi
 		}
 	}
 	return found, count == 1
+}
+
+// surroundingSourceContext attaches verified surrounding file lines (±100 lines
+// around each subject) and up to 6 1-hop caller/callee definitions from the
+// repository index so Expert, Challenger, and Verifier can evaluate cross-function
+// preconditions and downstream guards without being blinded by narrow 5-line
+// subject anchors. Witnesses are still strictly restricted to c.Subjects.
+func surroundingSourceContext(binding contracts.BindingContext, c artifacts.CaseInvariantV2) string {
+	if binding.RepoRoot == "" || len(c.Subjects) == 0 {
+		return ""
+	}
+	const maxExtraBytes = 32 * 1024
+	var out strings.Builder
+	includedSpans := map[string][][2]int{}
+	for _, s := range c.Subjects {
+		p := filepath.ToSlash(s.Path)
+		includedSpans[p] = append(includedSpans[p], [2]int{s.StartLine, s.EndLine})
+	}
+
+	appendSpan := func(header, relPath string, startLine, endLine int) {
+		if out.Len() >= maxExtraBytes || relPath == "" {
+			return
+		}
+		full, err := contextSourcePath(binding.RepoRoot, relPath)
+		if err != nil {
+			return
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(data), "\n")
+		if len(lines) == 0 {
+			return
+		}
+		if startLine < 1 {
+			startLine = 1
+		}
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+		if endLine < startLine {
+			return
+		}
+		// Avoid duplicating exact lines already shown in anchors or earlier context.
+		p := filepath.ToSlash(relPath)
+		for _, sp := range includedSpans[p] {
+			if startLine >= sp[0] && endLine <= sp[1] {
+				return
+			}
+		}
+		const omittedNotice = "[additional context omitted by byte budget; absence proves nothing]\n"
+		// Reserve the full header and an explicit omission note before adding
+		// whole source lines. Never claim a range whose tail was not rendered.
+		headerBudget := len(fmt.Sprintf("\n%s (%s:%d-%d)\n", header, relPath, startLine, endLine))
+		var body strings.Builder
+		lastLine := startLine - 1
+		for n := startLine; n <= endLine; n++ {
+			line := fmt.Sprintf("%d: %s\n", n, lines[n-1])
+			if out.Len()+headerBudget+body.Len()+len(line)+len(omittedNotice) > maxExtraBytes {
+				break
+			}
+			body.WriteString(line)
+			lastLine = n
+		}
+		if lastLine < startLine {
+			return
+		}
+		fmt.Fprintf(&out, "\n%s (%s:%d-%d)\n", header, relPath, startLine, lastLine)
+		out.WriteString(body.String())
+		if lastLine < endLine {
+			out.WriteString(omittedNotice)
+		}
+		includedSpans[p] = append(includedSpans[p], [2]int{startLine, lastLine})
+	}
+
+	// 1. Surrounding lines in each subject file. For compact files (<= 650 lines),
+	// include the full file so entry points and same-file callers (e.g. SMC/syscall
+	// dispatchers further down the file) are visible when checking preconditions.
+	seenFile := map[string]bool{}
+	for _, s := range c.Subjects {
+		p := filepath.ToSlash(s.Path)
+		if seenFile[p] {
+			continue
+		}
+		seenFile[p] = true
+		lo := s.StartLine - 100
+		hi := s.EndLine + 160
+		if full, err := contextSourcePath(binding.RepoRoot, s.Path); err == nil {
+			if data, err := os.ReadFile(full); err == nil {
+				lineCount := strings.Count(string(data), "\n") + 1
+				if lineCount <= 650 && len(data) <= 20*1024 {
+					lo = 1
+					hi = lineCount
+				}
+			}
+		}
+		appendSpan("Surrounding file context", s.Path, lo, hi)
+	}
+
+	// 2. Exact SymbolID-based 1-hop callers/callees from RepoFacts when RunDir is present.
+	// Locate subjects strictly by (path, symbol, overlapping line range) so same-name static
+	// functions in different files never cross-contaminate CallEdges or StructFieldBridges.
+	if binding.RunDir != "" && out.Len() < maxExtraBytes {
+		var facts artifacts.RepoFacts
+		manifest, manifestErr := runfs.LoadManifest(binding.RunDir)
+		if err := runfs.ReadJSON(runfs.RepoFactsPath(binding.RunDir), &facts); err == nil &&
+			manifestErr == nil && manifest.RunID != "" && facts.RunID == manifest.RunID &&
+			facts.SchemaVersion == artifacts.SchemaVersionRepoFactsV1 && binding.Scope.Hash != "" &&
+			facts.Scope == binding.Scope && manifest.Scope == binding.Scope && len(facts.Symbols) > 0 {
+			symByID := make(map[artifacts.SymbolID]artifacts.Symbol, len(facts.Symbols))
+			for _, sym := range facts.Symbols {
+				symByID[sym.SymbolID] = sym
+			}
+			contextBinding := binding
+			contextBinding.RepoFacts = &facts
+			appendSymbol := func(header string, sym artifacts.Symbol, maxLines int) {
+				bound, err := contracts.BindSubject(artifacts.ContractSubject{
+					Path: sym.File, Symbol: sym.Name, SymbolID: sym.SymbolID,
+				}, contextBinding)
+				if err != nil {
+					return
+				}
+				appendSpan(header, bound.Path, bound.StartLine, min(bound.EndLine, bound.StartLine+maxLines-1))
+			}
+			subjectIDs := resolveContractSubjectSymbolIDs(c.Subjects, facts.Symbols)
+			if len(subjectIDs) == 0 {
+				return out.String()
+			}
+			callerIDs := map[artifacts.SymbolID]bool{}
+			calleeIDs := map[artifacts.SymbolID]bool{}
+			for _, edge := range facts.CallEdges {
+				if subjectIDs[edge.CalleeID] && !subjectIDs[edge.CallerID] {
+					callerIDs[edge.CallerID] = true
+				}
+				if subjectIDs[edge.CallerID] && !subjectIDs[edge.CalleeID] {
+					calleeIDs[edge.CalleeID] = true
+				}
+			}
+			added := 0
+			// Pass A: direct callers first (establishes reachability/entry preconditions).
+			for _, sym := range facts.Symbols {
+				if added >= 3 || out.Len() >= maxExtraBytes {
+					break
+				}
+				if sym.File == "" || sym.StartLine <= 0 || subjectIDs[sym.SymbolID] || !callerIDs[sym.SymbolID] {
+					continue
+				}
+				appendSymbol("Direct caller "+sym.Name, sym, 66)
+				added++
+			}
+			// Pass B: direct callees strictly by resolved SymbolID.
+			for _, sym := range facts.Symbols {
+				if added >= 5 || out.Len() >= maxExtraBytes {
+					break
+				}
+				if sym.File == "" || sym.StartLine <= 0 || subjectIDs[sym.SymbolID] || callerIDs[sym.SymbolID] || !calleeIDs[sym.SymbolID] {
+					continue
+				}
+				appendSymbol("Related callee "+sym.Name, sym, 66)
+				added++
+			}
+
+			// 3. Exact SymbolID-based struct-field bridge consumers/producers from BoundaryTopology.
+			var topo artifacts.BoundaryTopology
+			if out.Len() < maxExtraBytes && runfs.ReadJSON(runfs.BoundaryTopologyPath(binding.RunDir), &topo) == nil &&
+				topo.SchemaVersion == artifacts.SchemaVersionBoundaryTopologyV1 && topo.RunID == facts.RunID && topo.Scope == facts.Scope {
+				bridgeAdded := 0
+				seenPartner := map[artifacts.SymbolID]bool{}
+				for _, br := range topo.StructFieldBridges {
+					if bridgeAdded >= 4 || out.Len() >= maxExtraBytes {
+						break
+					}
+					if strings.HasPrefix(br.Field, "(unnamed ") {
+						continue
+					}
+					isWriter, isAccessor := false, false
+					for _, w := range br.DirectWriters {
+						if subjectIDs[w] {
+							isWriter = true
+							break
+						}
+					}
+					if !isWriter {
+						for _, a := range br.NonWriteAccessors {
+							if subjectIDs[a] {
+								isAccessor = true
+								break
+							}
+						}
+					}
+					if !isWriter && !isAccessor {
+						continue
+					}
+					partners := br.NonWriteAccessors
+					roleLabel := "Struct-field consumer"
+					if !isWriter {
+						partners = br.DirectWriters
+						roleLabel = "Struct-field writer"
+					}
+					for _, pid := range partners {
+						if bridgeAdded >= 4 || out.Len() >= maxExtraBytes {
+							break
+						}
+						if seenPartner[pid] || subjectIDs[pid] {
+							continue
+						}
+						sym, ok := symByID[pid]
+						if !ok || sym.File == "" || sym.StartLine <= 0 {
+							continue
+						}
+						seenPartner[pid] = true
+						appendSymbol(fmt.Sprintf("%s (%s): %s", roleLabel, br.Field, sym.Name), sym, 76)
+						bridgeAdded++
+					}
+				}
+			}
+		}
+	}
+	return out.String()
+}
+
+// resolveContractSubjectSymbolIDs uses the source-bound identity when present.
+// A partial source window may start after its definition's first line; that does
+// not justify picking an arbitrary preceding same-name definition or overload.
+func resolveContractSubjectSymbolIDs(subjects []artifacts.ContractSubject, symbols []artifacts.Symbol) map[artifacts.SymbolID]bool {
+	out := map[artifacts.SymbolID]bool{}
+	for _, subject := range subjects {
+		sPath := filepath.ToSlash(filepath.Clean(subject.Path))
+		if sPath == "." || subject.Symbol == "" {
+			continue
+		}
+		var candidates []artifacts.Symbol
+		for _, sym := range symbols {
+			if filepath.ToSlash(filepath.Clean(sym.File)) != sPath ||
+				(sym.Name != subject.Symbol && sym.QualifiedName != subject.Symbol) || sym.SymbolID == "" || sym.StartLine < 1 {
+				continue
+			}
+			if subject.SymbolID != "" && sym.SymbolID != subject.SymbolID {
+				continue
+			}
+			if subject.EndLine > 0 && sym.StartLine > subject.EndLine {
+				continue
+			}
+			candidates = append(candidates, sym)
+		}
+		if len(candidates) == 1 {
+			out[candidates[0].SymbolID] = true
+			continue
+		}
+		// Without an exact ID, a whole-definition window can disambiguate a
+		// single declaration start. Ambiguous partial windows stay unresolved.
+		if subject.SymbolID == "" && subject.StartLine > 0 && subject.EndLine >= subject.StartLine {
+			var inRange []artifacts.Symbol
+			for _, sym := range candidates {
+				if sym.StartLine >= subject.StartLine && sym.StartLine <= subject.EndLine {
+					inRange = append(inRange, sym)
+				}
+			}
+			if len(inRange) == 1 {
+				out[inRange[0].SymbolID] = true
+			}
+		}
+	}
+	return out
+}
+
+// Additional context is subject to the same root and symlink restrictions as
+// contract evidence, even when its path came from an on-disk program index.
+func contextSourcePath(root, relative string) (string, error) {
+	if root == "" || relative == "" || filepath.IsAbs(relative) || strings.ContainsRune(relative, 0) {
+		return "", fmt.Errorf("context requires a relative source path")
+	}
+	clean := filepath.Clean(relative)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("context source escapes repository")
+	}
+	current, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(current)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("invalid or symlinked context root")
+	}
+	for _, part := range strings.Split(clean, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err = os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("invalid or symlinked context path")
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("context source is not a regular file")
+	}
+	return current, nil
 }

@@ -133,6 +133,12 @@ func (h GetRepositoryCardHandler) Run(_ context.Context, req ActionRequest) Acti
 		fmt.Fprintf(&out, "index note: %s\n", b.facts.IndexNote)
 	}
 	writeEntrySurfacePreview(&out, b.m)
+	if len(b.m.SurfacePartitions) > 0 {
+		out.WriteString("\nboundary topology buckets (use list_boundary_closures / get_struct_flows):\n")
+		for _, part := range b.m.SurfacePartitions {
+			fmt.Fprintf(&out, "  - %s: %d closure(s) across %d module(s)\n", part.Bucket, part.ClosureCount, part.ModuleCount)
+		}
+	}
 	if card.DocumentedPurpose != "" {
 		// Quoted from the repository's own README, not summarised.
 		fmt.Fprintf(&out, "\ndocumented purpose (quoted from the README):\n%s\n", card.DocumentedPurpose)

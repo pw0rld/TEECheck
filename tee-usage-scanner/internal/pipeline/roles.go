@@ -14,6 +14,7 @@ import (
 type RoleClients struct {
 	Default    llm.Client
 	Planner    llm.Client
+	Scout      llm.Client
 	Expert     llm.Client
 	Challenger llm.Client
 	Verifier   llm.Client
@@ -23,6 +24,11 @@ type RoleClients struct {
 func (clients RoleClients) forRole(role string) llm.Client {
 	var client llm.Client
 	switch role {
+	case "scout":
+		client = clients.Scout
+		if client == nil {
+			client = clients.Planner
+		}
 	case "expert":
 		client = clients.Expert
 	case "challenger":

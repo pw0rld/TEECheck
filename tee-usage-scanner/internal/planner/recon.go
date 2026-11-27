@@ -389,7 +389,7 @@ func (r *ReconState) unmet() []string {
 				want-len(r.symbolSpread), len(r.symbolSpread), want))
 		}
 		if r.relationQueries == 0 {
-			missing = append(missing, "ask how something connects at least once (get_callers)")
+			missing = append(missing, "ask how something connects at least once (list_boundary_closures, get_struct_flows, or get_callers)")
 		}
 	case ReconModeTreeOnly:
 		if !r.rootListed {

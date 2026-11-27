@@ -69,9 +69,9 @@ func Run(cfg config.Config) (string, error) {
 		return "", err
 	}
 	clients := RoleClients{
-		Planner: llm.NewClient(settings["planner"]), Expert: llm.NewClient(settings["expert"]),
-		Challenger: llm.NewClient(settings["challenger"]), Verifier: llm.NewClient(settings["verifier"]),
-		Arbiter: llm.NewClient(settings["arbiter"]),
+		Planner: llm.NewClient(settings["planner"]), Scout: llm.NewClient(settings["scout"]),
+		Expert: llm.NewClient(settings["expert"]), Challenger: llm.NewClient(settings["challenger"]),
+		Verifier: llm.NewClient(settings["verifier"]), Arbiter: llm.NewClient(settings["arbiter"]),
 	}
 	return runWithRoleClients(cfg, clients, settings)
 }
@@ -484,7 +484,7 @@ func runWithRoleClients(cfg config.Config, clients RoleClients, roleSettings map
 	// number the decorator cannot know. Wrapping it would duplicate
 	// every planner event and every planner blob reference.
 	if err := stage("l3_planner", func() error {
-		return runL3Planner(forRoleConfig(planner.DefaultPlannerAgentID), clients.forRole("planner"), codeDB, srcRoot, runDir, rec, blobs, exec, prescan)
+		return runL3PlannerWithScout(forRoleConfig(planner.DefaultPlannerAgentID), clients.forRole("planner"), clients.forRole("scout"), roleSettings["scout"], codeDB, srcRoot, runDir, rec, blobs, exec, prescan)
 	}); err != nil {
 		return runDir, fmt.Errorf("L3 planner: %w", err)
 	}
@@ -673,6 +673,10 @@ func truncate(s string, n int) string {
 // default L3 entry point). The old hotspot-via-prompt interim solution
 // (formerly runLLMHotspotPipeline) is superseded and deleted.
 func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor, prescans ...*planner.PreScannedTaint) error {
+	return runL3PlannerWithScout(cfg, client, client, cfg, db, srcRoot, runDir, rec, blobs, exec, prescans...)
+}
+
+func runL3PlannerWithScout(cfg config.Config, client, scoutClient llm.Client, scoutCfg config.Config, db codedb.DatabaseProvider, srcRoot, runDir string, rec events.Recorder, blobs *events.BlobStore, exec executor.Executor, prescans ...*planner.PreScannedTaint) error {
 	manifest, err := runfs.LoadManifest(runDir)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -826,43 +830,47 @@ func runL3Planner(cfg config.Config, client llm.Client, db codedb.DatabaseProvid
 				return fmt.Errorf("resume earlier pass: %w", err)
 			}
 		} else {
-			result = planner.Run(context.Background(), planner.RunConfig{
-				Resume:         cfg.Resume && resumeCP != nil && pass-1 == resumeCP.SampleIndex,
-				ResumePrepared: cfg.Resume,
-				RunID:          manifest.RunID,
-				RepoRoot:       srcRoot,
-				RunDir:         runDir,
-				// Every pass restarts at round 1, so without this each one's
-				// observation refs would collide with the last's — and a lead
-				// raised in pass 2 would cite pass 1's evidence, from a pass
-				// deliberately pointed at different code.
-				SampleIndex:        pass - 1,
-				Profile:            promptProfile,
-				Client:             client,
-				Registry:           registry,
-				Budget:             configuredPlannerBudget(cfg),
-				Temperature:        cfg.LLMTemp,
-				KnowledgeRoot:      cfg.KnowledgeRoot,
-				AvoidPaths:         avoid,
-				Events:             rec,
-				Blobs:              blobs,
-				Model:              cfg.LLMModel,
-				PreScannedTaint:    prescan,
-				StrictContractExit: !cfg.AllowUncontractedCases,
-				MaxOutputTokens:    cfg.LLMMaxTokens,
-				ReasoningEffort:    cfg.LLMReasoningEffort,
-				Executor:           exec,
-				// Project Understanding prior knowledge (§7.5): the planner
-				// investigates against these, and reaches the fact layer via
-				// the fact_layer_query action registered above.
-				TWEContext:   string(tweText),
-				Architecture: archPtr,
-				Invariants:   invs,
-				// §24 Case Pack: common_defenses / common_false_positives per
-				// TWE, consumed when a done.investigations entry builds a Case
-				// Pack for the Challenger (internal/challenger/phase1.go).
-				TWEPlaybooks: twePlaybooks,
-			})
+			runCfg := planner.RunConfig{
+				Resume:               cfg.Resume && resumeCP != nil && pass-1 == resumeCP.SampleIndex,
+				ResumePrepared:       cfg.Resume,
+				RunID:                manifest.RunID,
+				RepoRoot:             srcRoot,
+				RunDir:               runDir,
+				SampleIndex:          pass - 1,
+				Profile:              promptProfile,
+				Client:               client,
+				ScoutClient:          scoutClient,
+				ScoutModel:           scoutCfg.LLMModel,
+				ScoutMaxOutputTokens: scoutCfg.LLMMaxTokens,
+				ScoutTemperature:     scoutCfg.LLMTemp,
+				Workers:              cfg.PlannerWorkers,
+				Registry:             registry,
+				Budget:               configuredPlannerBudget(cfg),
+				Temperature:          cfg.LLMTemp,
+				KnowledgeRoot:        cfg.KnowledgeRoot,
+				AvoidPaths:           avoid,
+				Events:               rec,
+				Blobs:                blobs,
+				Model:                cfg.LLMModel,
+				PreScannedTaint:      prescan,
+				StrictContractExit:   !cfg.AllowUncontractedCases,
+				MaxOutputTokens:      cfg.LLMMaxTokens,
+				ReasoningEffort:      cfg.LLMReasoningEffort,
+				Executor:             exec,
+				TWEContext:           string(tweText),
+				Architecture:         archPtr,
+				Invariants:           invs,
+				TWEPlaybooks:         twePlaybooks,
+			}
+			useSharded := !cfg.UseMonolithicPlanner && (planner.HasBoundaryTopology(runDir) || (cfg.PlannerWorkers > 0 && planner.HasCoreEntrySurfaces(runCfg.RepoRoot)))
+			if runCfg.Resume && resumeCP != nil {
+				useSharded = resumeCP.Sharded != nil
+			}
+			if useSharded {
+				result = planner.RunSharded(context.Background(), runCfg)
+			} else {
+				result = planner.Run(context.Background(), runCfg)
+			}
 		}
 
 		if result.Bundle != nil {

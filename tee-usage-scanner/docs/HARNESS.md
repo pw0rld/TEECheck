@@ -48,6 +48,13 @@ CasePack 或 Finding；模型仍须读入口及汇点源码，再开 Lead、挂�
 
 ## Planner 的两个 pass
 
+具备非空边界拓扑或可识别源码入口时，默认使用分片 Planner：BoundaryScout 按闭包与
+源码窗口提出线索，LeadInvestigator 逐条调查；缺少这些条件时使用原单体循环。
+`--planner-workers` 控制并发数（默认 4），`--monolithic-planner` 显式选择单体模式。
+Scout 可使用 `scout` 角色配置；未指定或局部指定时继承解析后的 Planner 配置。
+源码入口预分流带有明确披露的 OP-TEE 路径/函数名前缀优先规则，并非跨项目效果证明。
+预算不足、失败分片、未解决 Lead 和未执行的批次保留覆盖缺口，不能记成完整覆盖。
+
 Pass A 先理解项目，浏览入口和源码并打开 `AuditLead`；Pass B 注入紧凑 TWE 契约索引，
 补充调查并输出 `CaseInvariantV2`。完整 TWE 细节通过 `twe_playbook_detail` 按需读取。
 默认关闭的 legacy architecture/invariants 阶段不参与这条主线。
@@ -79,6 +86,12 @@ PRE-SCANNED TAINT CANDIDATES / list_entry_surfaces / 函数卡片
 有限 pass 墙钟预算的 65% 为软收敛水位线：已有未决 Lead 时冻结广度探索，保留源码核查、
 Lead 更新、形式化和关闭动作。显式关闭 pass 墙钟时也关闭这个时间水位线。
 
+可选 `--enable-formal-verify` 会将局部算术/边界契约翻译为有界 C 模型并落盘为
+`cpp.contract.formal_property` ToolFact。当前没有配置 OS 隔离执行后端，产物明确记录
+`sandbox_unavailable`，不会在宿主机编译或执行生成的 C。翻译内容属于模型输出；即使
+包含自述的反例或验证成功文字，也不证明原程序满足或违反契约。该可选路径的覆盖缺口
+写入 Verifier notes，并保持独立源码复核与 Arbiter 门控。
+
 ## 污点查询与负面证据
 
 `trace_taint` 由白名单参数填充固定的 `TaintTracking::Global<Config>` 模板。
@@ -103,6 +116,7 @@ scope、内容哈希和 coverage gaps。引擎每个 alert 的路径数有上限
 | `--planner-max-investigation-tokens` | 140,000 | Pass B 输入和输出合计，内含 20,000 收口预留；0 关闭本阶段上限 |
 | 侦察 / 调查轮数 | 10 / 8 | 侦察额度追加于调查额度 |
 | `--planner-wall-clock` | 10m | 每个 pass 的上限；显式 0 关闭总墙钟限制 |
+| `--planner-workers` | 4 | 分片 Scout / Investigator 最大并发数；0 使用默认值 |
 | 普通工具超时 | 30s | 不适用于独立污点查询 |
 | `--taint-query-timeout` | 5m | 同时受剩余墙钟预算约束 |
 | `--max-taint-queries` | 8 | 未缓存调用；0 表示无单独限次 |
@@ -176,6 +190,8 @@ teecheck run --resume --run-dir /tmp/scan-001 \
 上例中的配置必须与该 run 的首次调用相同。也可写 `teecheck run /tmp/scan-001 --resume`。
 恢复要求同一 scanner 可执行文件、CodeQL 版本、解析后的角色配置、知识库内容和完整源码
 内容；任何已观察文件或源码树变化都拒绝恢复，`scope_hash` 本身不足以通过校验。
+Planner 模式、worker 数量、Scout 路由和可选验证开关也参与一致性检查。分片 checkpoint
+同时保留已完成 Scout 的提案，以及已发出但尚未结算的请求预算预留。
 凭证不写入 checkpoint。策略拒绝属于终止状态，不能用 resume 重放。
 
 只支持已生成本版 checkpoint 的 Planner 阶段：复用已完成 pass，恢复当前 pass，再重跑

@@ -91,10 +91,16 @@ func tryOpenAuditLeadWithPrescan(recon *ReconState, observations ObservationSet,
 				"is not a weaker citation, it is not a citation")
 	}
 	var ungrounded []string
+	resolvedRefs := make([]string, 0, len(payload.ReasonFactRefs))
 	for _, ref := range payload.ReasonFactRefs {
-		if !observations.Observed(ref) {
+		if full, ok := observations.Resolve(ref); ok {
+			resolvedRefs = append(resolvedRefs, full)
+		} else {
 			ungrounded = append(ungrounded, ref)
 		}
+	}
+	if len(ungrounded) == 0 && len(resolvedRefs) > 0 {
+		payload.ReasonFactRefs = resolvedRefs
 	}
 	if len(ungrounded) > 0 {
 		problems = append(problems, fmt.Sprintf(

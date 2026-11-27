@@ -380,9 +380,9 @@ func DiversifyClosures(in []artifacts.EntryClosure, maxPerFile int) []artifacts.
 
 	sorted := append([]artifacts.EntryClosure(nil), in...)
 	sort.Slice(sorted, func(i, j int) bool {
-		vi, vj := isUtilityModulePath(sorted[i].RootModule), isUtilityModulePath(sorted[j].RootModule)
-		if vi != vj {
-			return !vi
+		ti, tj := modulePriorityTier(sorted[i].RootModule), modulePriorityTier(sorted[j].RootModule)
+		if ti != tj {
+			return ti < tj
 		}
 		si, sj := structuralRichness(sorted[i]), structuralRichness(sorted[j])
 		if si != sj {
@@ -467,13 +467,52 @@ func structuralRichness(c artifacts.EntryClosure) int {
 	if len(c.Members) > 1 {
 		score += 2
 	}
+	if len(c.Members) >= 4 {
+		score += 1
+	}
+	if hasCrossModuleMember(c) {
+		score += 3
+	}
 	if len(c.DirectFieldWrites) > 0 {
 		score += 2
+	}
+	if len(c.DirectFieldWrites) >= 3 {
+		score += 1
 	}
 	if hasSignal(c.Signals, artifacts.EntrySignalBufferLengthParameters) {
 		score += 1
 	}
 	return score
+}
+
+func hasCrossModuleMember(c artifacts.EntryClosure) bool {
+	for _, m := range c.Members {
+		if m.Module != "" && c.RootModule != "" && m.Module != c.RootModule {
+			return true
+		}
+	}
+	return false
+}
+
+// modulePriorityTier orders modules neutrally without dropping any closures:
+//
+//	0: first-party core runtime / kernel / boundary modules
+//	1: peripheral drivers, platform/board ports, low-level crypto primitives, tests
+//	2: vendored and utility library trees (lib, third_party, vendor, external)
+func modulePriorityTier(mod string) int {
+	if isUtilityModulePath(mod) {
+		return 2
+	}
+	for _, segment := range strings.Split(mod, "/") {
+		if strings.HasPrefix(segment, "plat-") || strings.HasPrefix(segment, "plat_") {
+			return 1
+		}
+		switch segment {
+		case "drivers", "driver", "board", "boards", "crypto", "test", "tests", "examples":
+			return 1
+		}
+	}
+	return 0
 }
 
 func isUtilityModulePath(mod string) bool {
@@ -487,6 +526,137 @@ func isUtilityModulePath(mod string) bool {
 		}
 	}
 	return false
+}
+
+// FormatTopologyOverview builds a compact, neutral Round-1 orientation summary
+// of the repository's 4 structural buckets and top cross-module struct bridges.
+func FormatTopologyOverview(topo artifacts.BoundaryTopology, maxBytes int) string {
+	if len(topo.EntryClosures) == 0 {
+		return ""
+	}
+	if maxBytes <= 0 {
+		maxBytes = 2800
+	}
+	byRoot := make(map[artifacts.SymbolID]artifacts.EntryClosure, len(topo.EntryClosures))
+	for _, c := range topo.EntryClosures {
+		byRoot[c.RootSymbolID] = c
+	}
+	const heading = "=== BOUNDARY TOPOLOGY OVERVIEW (3-hop resolved entry closures; use list_boundary_closures / get_struct_flows to browse) ===\n"
+	if len(heading)+1 > maxBytes {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(heading)
+	shownGlobally := map[artifacts.SymbolID]bool{}
+	for _, part := range topo.SurfacePartitions {
+		if part.ClosureCount == 0 {
+			continue
+		}
+		line := strings.Builder{}
+		line.WriteString("  bucket=")
+		line.WriteString(part.Bucket)
+		line.WriteString(" (")
+		line.WriteString(itoa(part.ClosureCount))
+		line.WriteString(" closures / ")
+		line.WriteString(itoa(part.ModuleCount))
+		line.WriteString(" modules): ")
+		shown := 0
+		for _, id := range part.RootSymbolIDs {
+			if shownGlobally[id] {
+				continue
+			}
+			c, ok := byRoot[id]
+			if !ok {
+				continue
+			}
+			shownGlobally[id] = true
+			if shown > 0 {
+				line.WriteString("; ")
+			}
+			line.WriteString(c.RootName)
+			line.WriteString(" [")
+			line.WriteString(c.RootPath)
+			line.WriteString(":")
+			line.WriteString(itoa(c.RootStartLine))
+			line.WriteString(", hops=")
+			line.WriteString(itoa(c.MaxDepth))
+			line.WriteString(", members=")
+			line.WriteString(itoa(len(c.Members)))
+			if len(c.DirectFieldWrites) > 0 {
+				w := c.DirectFieldWrites
+				if len(w) > 3 {
+					w = w[:3]
+				}
+				line.WriteString(", writes=")
+				line.WriteString(strings.Join(w, ","))
+			}
+			line.WriteString("]")
+			shown++
+			if shown >= 3 {
+				break
+			}
+		}
+		line.WriteByte('\n')
+		if b.Len()+line.Len()+1 > maxBytes {
+			break
+		}
+		b.WriteString(line.String())
+	}
+	cross := make([]artifacts.StructFieldBridge, 0)
+	for _, br := range topo.StructFieldBridges {
+		if br.CrossModule && len(br.NonWriteAccessors) > 0 && !strings.HasPrefix(br.Field, "(unnamed ") {
+			cross = append(cross, br)
+		}
+	}
+	sort.Slice(cross, func(i, j int) bool {
+		si := len(cross[i].DirectWriters) + len(cross[i].NonWriteAccessors)
+		sj := len(cross[j].DirectWriters) + len(cross[j].NonWriteAccessors)
+		if si != sj {
+			return si > sj
+		}
+		return cross[i].Field < cross[j].Field
+	})
+	if len(cross) > 0 && b.Len()+120 < maxBytes {
+		b.WriteString("  top cross-module struct bridges (get_struct_flows): ")
+		for i, br := range cross {
+			if i >= 6 {
+				break
+			}
+			item := br.Field + "(w=" + itoa(len(br.DirectWriters)) + ",nwa=" + itoa(len(br.NonWriteAccessors)) + ")"
+			if i > 0 {
+				item = ", " + item
+			}
+			if b.Len()+len(item)+2 > maxBytes {
+				break
+			}
+			b.WriteString(item)
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
 
 func hasSignal(signals []string, want string) bool {

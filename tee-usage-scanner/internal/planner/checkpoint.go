@@ -52,9 +52,58 @@ type Checkpoint struct {
 	EventOffset          int64                               `json:"event_offset"`
 	InFlight             *pendingLLM                         `json:"in_flight,omitempty"`
 	InterruptedRound     bool                                `json:"interrupted_round,omitempty"`
+	Sharded              *ShardedCheckpoint                  `json:"sharded,omitempty"`
 	Completed            bool                                `json:"completed"`
 	CachedResult         *CheckpointResult                   `json:"cached_result,omitempty"`
 	runDir               string
+}
+
+type TriageGroundedCandidate struct {
+	File             string             `json:"file"`
+	Symbol           string             `json:"symbol"`
+	SymbolID         artifacts.SymbolID `json:"symbol_id"`
+	StartLine        int                `json:"start_line"`
+	EndLine          int                `json:"end_line"`
+	Score            int                `json:"score"`
+	Severity         string             `json:"severity"`
+	SecurityQuestion string             `json:"security_question"`
+	Reason           []string           `json:"reason"`
+	RelatedTWEs      []string           `json:"related_twes,omitempty"`
+	ObsRef           string             `json:"obs_ref"`
+}
+
+type TriageBatchRecord struct {
+	BatchIndex int                       `json:"batch_index"`
+	Status     string                    `json:"status"` // succeeded | failed | skipped_unrun
+	Reason     string                    `json:"reason,omitempty"`
+	Round      int                       `json:"round,omitempty"`
+	Candidates []TriageGroundedCandidate `json:"candidates,omitempty"`
+}
+
+type TriageSummary struct {
+	Mode               string         `json:"mode"`
+	CandidateTotal     int            `json:"candidate_total"`
+	SelectedTotal      int            `json:"selected_total"`
+	BatchTotal         int            `json:"batch_total"`
+	SucceededBatches   int            `json:"succeeded_batches"`
+	FailedBatches      int            `json:"failed_batches"`
+	UnrunBatches       int            `json:"unrun_batches"`
+	FailureReasons     map[string]int `json:"failure_reasons,omitempty"`
+	PromotedLeads      int            `json:"promoted_leads"`
+	OrderingDisclosure string         `json:"ordering_disclosure"`
+}
+
+type ShardedCheckpoint struct {
+	CompletedScouts  []string                  `json:"completed_scouts,omitempty"`
+	CompletedLeads   []string                  `json:"completed_leads,omitempty"`
+	FailedShards     []string                  `json:"failed_shards,omitempty"`
+	TriageBatches    map[int]TriageBatchRecord `json:"triage_batches,omitempty"`
+	TriageSummary    *TriageSummary            `json:"triage_summary,omitempty"`
+	NextRound        int                       `json:"next_round,omitempty"`
+	ScoutProposals   []scoutLeadProposal       `json:"scout_proposals,omitempty"`
+	ReservedRecon    int                       `json:"reserved_recon_tokens,omitempty"`
+	ReservedInvest   int                       `json:"reserved_investigation_tokens,omitempty"`
+	TopologyRequired bool                      `json:"topology_required,omitempty"`
 }
 
 type JournalBoundary struct {
@@ -306,18 +355,22 @@ func checkpointConfigHash(cfg RunConfig) string {
 	b.InvestigationTokensUsed = 0
 	b.TaintQueriesUsed = 0
 	data, _ := json.Marshal(struct {
-		Profile            PromptProfile
-		Budget             Budget
-		Model              string
-		MaxOutputTokens    int
-		ReasoningEffort    string
-		Temperature        float64
-		MaxActions         int
-		AvoidPaths         []string
-		TWE                string
-		PreScannedTaint    *PreScannedTaint
-		StrictContractExit bool `json:"StrictContractExit,omitempty"`
-	}{cfg.Profile, b, cfg.Model, cfg.MaxOutputTokens, cfg.ReasoningEffort, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext, cfg.PreScannedTaint, cfg.StrictContractExit})
+		Profile              PromptProfile
+		Budget               Budget
+		Model                string
+		MaxOutputTokens      int
+		ReasoningEffort      string
+		Temperature          float64
+		MaxActions           int
+		AvoidPaths           []string
+		TWE                  string
+		PreScannedTaint      *PreScannedTaint
+		StrictContractExit   bool    `json:"StrictContractExit,omitempty"`
+		ScoutModel           string  `json:"scout_model,omitempty"`
+		ScoutMaxOutputTokens int     `json:"scout_max_output_tokens,omitempty"`
+		ScoutTemperature     float64 `json:"scout_temperature,omitempty"`
+		Workers              int     `json:"workers,omitempty"`
+	}{cfg.Profile, b, cfg.Model, cfg.MaxOutputTokens, cfg.ReasoningEffort, cfg.Temperature, cfg.MaxActionsPerRound, cfg.AvoidPaths, cfg.TWEContext, cfg.PreScannedTaint, cfg.StrictContractExit, cfg.ScoutModel, cfg.ScoutMaxOutputTokens, cfg.ScoutTemperature, cfg.Workers})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

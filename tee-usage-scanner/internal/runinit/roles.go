@@ -46,8 +46,7 @@ func RecordRoleConfigurations(runDir string, settings map[string]config.Config) 
 		metadata = map[string]any{}
 	}
 	snapshots := map[string]RoleLLMSnapshot{}
-	for _, role := range config.LLMRoles {
-		cfg := settings[role]
+	for role, cfg := range settings {
 		snapshots[role] = RoleLLMSnapshot{Provider: cfg.LLMProvider, BaseURL: config.RedactedEndpoint(cfg.LLMBaseURL), Model: cfg.LLMModel, Transport: cfg.LLMTransport, ReasoningEffort: cfg.LLMReasoningEffort, TimeoutSeconds: cfg.LLMTimeoutSec, MaxOutputTokens: cfg.LLMMaxTokens, Temperature: cfg.LLMTemp, Stream: cfg.LLMStream, APIKeyPresent: cfg.LLMAPIKey != "", APIKeyEnv: cfg.LLMAPIKeyEnv}
 	}
 	metadata["role_llm"] = snapshots

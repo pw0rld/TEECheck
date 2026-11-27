@@ -6,8 +6,11 @@ lifecycle and [CONTRACTS.md](CONTRACTS.md) for evidence and decision rules.
 `teecheck run` and its `plan` alias accept `--role-config path/to/roles.json`.
 `TEECHECK_ROLE_CONFIG` provides the same file path through the environment.
 The file is read at startup. Unspecified values inherit the global `--llm-*`
-settings. The five roles are `planner`, `expert`, `challenger`, `verifier`,
-and `arbiter`; an unknown role or field is rejected.
+settings. The five primary roles are `planner`, `expert`, `challenger`,
+`verifier`, and `arbiter`. The optional `scout` role inherits the resolved
+planner settings before applying its own overrides; an unknown role or field
+is rejected. All resolved routes, including scout, are recorded and checked
+when resuming a run.
 
 Example overrides:
 
@@ -23,6 +26,7 @@ Example overrides:
     "timeout_seconds": 300,
     "max_output_tokens": 32768
   },
+  "scout": { "model": "scout-model" },
   "expert": { "model": "review-model" },
   "challenger": { "model": "review-model", "temperature": 0 },
   "verifier": { "model": "verification-model" },

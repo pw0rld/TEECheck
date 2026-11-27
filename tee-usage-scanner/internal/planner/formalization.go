@@ -72,9 +72,12 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 
 	sources := formalizationSources(state, observed)
 	input := formalizationInput{}
-	const maxBytes = 14000
+	const maxBytes = 32000
+	fitsBudget := func(data []byte) bool {
+		return requestOutputBudget(cfg, estimateRequestInputTokens(formalizationSystem, string(data)), false, true) >= minimumRequestOutput(cfg)
+	}
 	fits := func(data []byte) bool {
-		return len(data) <= maxBytes && requestOutputBudget(cfg, estimateRequestInputTokens(formalizationSystem, string(data)), false, true) >= minimumRequestOutput(cfg)
+		return len(data) <= maxBytes && fitsBudget(data)
 	}
 	for i, c := range candidates {
 		if len(out[i]) > 0 {
@@ -103,13 +106,34 @@ func formalizeCandidates(ctx context.Context, cfg RunConfig, done *actions.DoneP
 			gaps = append(gaps, fmt.Sprintf("Candidate %s remains unformalized: missing a matching current-sample audit lead or source observation.", c.ID))
 			continue
 		}
-		trial := formalizationInput{Candidates: append(append([]formalizationCandidate(nil), input.Candidates...), formalizationCandidate{Index: i, Candidate: c, Leads: leads}), Sources: appendFormalizationSources(input.Sources, windows...)}
-		data, _ := json.Marshal(trial)
-		if !fits(data) {
-			gaps = append(gaps, fmt.Sprintf("Candidate %s remains unformalized: closing request cannot fit the remaining token budget.", c.ID))
+		// Add matching source windows incrementally so a file read many times
+		// does not blow past maxBytes and skip closing formalization altogether.
+		base := formalizationInput{
+			Candidates: append(append([]formalizationCandidate(nil), input.Candidates...), formalizationCandidate{Index: i, Candidate: c, Leads: leads}),
+			Sources:    append([]formalizationSource(nil), input.Sources...),
+		}
+		addedWindows := 0
+		for _, w := range windows {
+			trial := base
+			trial.Sources = appendFormalizationSources(base.Sources, w)
+			data, _ := json.Marshal(trial)
+			if fits(data) {
+				base = trial
+				addedWindows++
+			}
+		}
+		if addedWindows == 0 {
+			sampleTrial := base
+			sampleTrial.Sources = appendFormalizationSources(base.Sources, windows[0])
+			sampleData, _ := json.Marshal(sampleTrial)
+			if !fitsBudget(sampleData) {
+				gaps = append(gaps, fmt.Sprintf("Candidate %s remains unformalized: closing request cannot fit the remaining token budget.", c.ID))
+			} else {
+				gaps = append(gaps, fmt.Sprintf("Candidate %s remains unformalized: closing payload exceeds %d-byte cap.", c.ID, maxBytes))
+			}
 			continue
 		}
-		input = trial
+		input = base
 	}
 	if len(input.Candidates) == 0 {
 		return out, problems, gaps, nil

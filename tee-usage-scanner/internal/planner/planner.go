@@ -20,6 +20,7 @@ import (
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/planner/actions"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/runfs"
 	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/sourcehash"
+	"github.com/pw0rld/TEECheck/tee-usage-scanner/internal/topology"
 )
 
 // DefaultPlannerAgentID is used in events when RunConfig.AgentID is
@@ -100,6 +101,14 @@ type RunConfig struct {
 	// StrictContractExit refuses premature done while leads remain open/expanded,
 	// freezes exploration in the convergence window, and drops uncontracted thin CasePacks.
 	StrictContractExit bool
+	// Optional fast/cheap client and overrides for L2 BoundaryScout shards.
+	// Falls back to Client/Model/MaxOutputTokens/Temperature when unset.
+	ScoutClient          llm.Client
+	ScoutModel           string
+	ScoutMaxOutputTokens int
+	ScoutTemperature     float64
+	// Workers caps concurrent Scout / LeadInvestigator goroutines (default 4).
+	Workers int
 	// PreScannedTaint is validated neutral L2 evidence, not source-read credit.
 	PreScannedTaint *PreScannedTaint
 
@@ -265,6 +274,13 @@ func Run(ctx context.Context, cfg RunConfig) RunResult {
 	// the phase — reconnaissance costs rounds, and this is what those rounds
 	// buy.
 	projectMap, mapped := loadProjectMap(cfg.RunDir)
+	var topologyOverview string
+	if cfg.RunDir != "" {
+		var topo artifacts.BoundaryTopology
+		if err := runfs.ReadJSON(runfs.BoundaryTopologyPath(cfg.RunDir), &topo); err == nil {
+			topologyOverview = topology.FormatTopologyOverview(topo, 2800)
+		}
+	}
 	recon := NewReconState(ReconModeFor(projectMap)).WithTotals(
 		len(projectMap.Modules), totalFunctions(projectMap), projectMap.Repository.FileCount).
 		WithEntrySurfaces(projectMap.Capabilities.EntrySurfaces, projectMap.EntrySurfaces)
@@ -446,6 +462,9 @@ loop:
 			advertisedActions(registry), obligations, knowledge, recon.Phase())
 
 		roundPrompt := BuildRoundPrompt(state, cfg.Profile, cfg.Budget, cfg.AvoidPaths, recon)
+		if len(state.Rounds) == 0 && topologyOverview != "" {
+			roundPrompt = topologyOverview + roundPrompt
+		}
 		roundPrompt += reconStatusBlock(recon)
 
 		isFinalRound := cfg.Budget.IsFinalRound()

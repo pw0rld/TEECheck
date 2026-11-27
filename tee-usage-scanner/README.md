@@ -36,6 +36,20 @@ are documented in [ROLE_MODELS.md](docs/ROLE_MODELS.md).
 A Git URL may replace the local path. `teecheck plan` is an alias for `run`.
 All audit runs use the LLM pipeline; the old heuristic scanner was retired.
 
+When boundary topology or supported source entry slices are available, the
+planner can partition work between BoundaryScouts and lead investigators.
+`--planner-workers` limits concurrent workers (default 4); use
+`--monolithic-planner` for the previous planner loop. Scout model overrides use
+the optional `scout` role, which inherits the resolved planner configuration.
+Entry triage includes disclosed OP-TEE-oriented ordering heuristics; its
+cross-project effectiveness has not been measured.
+
+`--enable-formal-verify` optionally records a bounded C property translation
+for source review. No isolated execution backend is configured in this release:
+the generated C is neither compiled nor executed and its ToolFact records
+`sandbox_unavailable`. A model translation is not a proof or counterexample
+against the source program and never supplies an automatic verdict.
+
 Planner cumulative token limits can be configured independently with
 `--planner-max-tokens`, `--planner-max-recon-tokens`, and
 `--planner-max-investigation-tokens`. Set all three to `0` to disable those
@@ -65,7 +79,8 @@ source acquisition and common revision/root
   -> optional batch entry-to-sink taint prescan (--enable-taint-prescan)
   -> optional legacy architecture/invariant stages
   -> deterministic supported fact queries
-  -> planner reconnaissance -> source-grounded investigation
+  -> boundary scouts / entry triage -> source-grounded lead investigation
+     (or monolithic reconnaissance -> investigation)
   -> merge and enrich CasePacks
   -> Expert -> Challenger -> Verifier -> Arbiter
   -> findings.json and review packets
